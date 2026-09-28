@@ -4,16 +4,17 @@
 
 (1) نموذج الـ Inversion Gap - فريم 4 ساعات
     الأسهم: كل أسهم ناسداك اللي قيمتها السوقية 2 مليار دولار وفوق (ميد كاب وأعلى)
+    ⚠️ لون الشموع الثلاث ما يهم - المهم إن ذيل الشمعة الأولى والثالثة ما يلتقون
 
-    🟢 صعودي:
-      - ثلاث شموع حمراء (C1, C2, C3)
-      - قمة الشمعة الثالثة ما وصلت قاع الشمعة الأولى (جاب)
-      - شمعة رابعة خضراء تطلع وتلمس أعلى الجاب (قاع C1)  =>  تنبيه
+    🟢 صعودي (جاب تحت):
+      - ثلاث شموع (أي لون)، وقاع الشمعة الأولى أعلى من قمة الشمعة الثالثة
+      - الجاب = من قمة الشمعة الثالثة (تحت) إلى قاع الشمعة الأولى (فوق)
+      - الشمعة الرابعة تجي من تحت وتطلع لين تلمس أعلى الجاب (قاع C1)  =>  تنبيه فوراً
 
-    🔴 هبوطي (العكس):
-      - ثلاث شموع خضراء (C1, C2, C3)
-      - قاع الشمعة الثالثة ما نزل لقمة الشمعة الأولى (جاب)
-      - شمعة رابعة حمراء تنزل وتلمس أسفل الجاب (قمة C1)  =>  تنبيه
+    🔴 هبوطي (جاب فوق):
+      - ثلاث شموع (أي لون)، وقمة الشمعة الأولى أقل من قاع الشمعة الثالثة
+      - الجاب = من قمة الشمعة الأولى (تحت) إلى قاع الشمعة الثالثة (فوق)
+      - الشمعة الرابعة تجي من فوق وتنزل لين تلمس أسفل الجاب (قمة C1)  =>  تنبيه فوراً
 
 (2) فلتر الأخبار
     - كل الأسهم الأمريكية (ناسداك + نيويورك) اللي سعرها من 1 إلى 10 دولار
@@ -48,8 +49,10 @@ LOCAL_TZ = "Asia/Riyadh"     # توقيتك المحلي
 # ---- (1) نموذج الجاب ----
 ENABLE_GAP = True
 MIN_MARKET_CAP = 2_000_000_000   # 2 مليار دولار = ميد كاب وفوق
-ENABLE_BULLISH = True            # 3 حمراء + خضراء تلمس أعلى الجاب
-ENABLE_BEARISH = True            # 3 خضراء + حمراء تلمس أسفل الجاب
+ENABLE_BULLISH = True            # جاب تحت + شمعة تطلع وتلمس أعلى الجاب
+ENABLE_BEARISH = True            # جاب فوق + شمعة تنزل وتلمس أسفل الجاب
+REQUIRE_FOURTH_COLOR = False     # True = الرابعة لازم خضراء بالصعودي وحمراء بالهبوطي
+                                 # False = ينبه أول ما تلمس الخط حتى لو الشمعة ما قفلت
 TOUCH_TOLERANCE = 0.001          # 0.1% : يعتبرها لمست لو قربت من حد الجاب بهالنسبة
 GAP_EXTENDED = True              # شمعة الـ4 ساعات تشمل ما قبل الفتح وبعد الإغلاق (4-8، 8-12، 12-4، 4-8)
 
@@ -214,24 +217,31 @@ def green(x):
 
 
 def check_pattern(c):
-    """يفحص آخر 4 شموع بالاتجاهين. يرجع تفاصيل النموذج لو تحقق، وإلا None."""
+    """يفحص آخر 4 شموع بالاتجاهين. يرجع تفاصيل النموذج لو تحقق، وإلا None.
+    الشمعة الرابعة هي الشمعة الحالية (لسا ما قفلت) عشان التنبيه يطلع أول ما تلمس."""
     if len(c) < 4:
         return None
     c1, c2, c3, c4 = (c.iloc[i] for i in (-4, -3, -2, -1))
 
-    # 🟢 صعودي: 3 حمراء، جاب تحت، خضراء تلمس قاع الشمعة الأولى
-    if ENABLE_BULLISH and red(c1) and red(c2) and red(c3):
+    # 🟢 صعودي: قاع الأولى فوق قمة الثالثة (الذيول ما تلتقي) - لون الشموع ما يهم
+    if ENABLE_BULLISH and c1["Low"] > c3["High"]:
         gap_bottom = c3["High"]   # قمة الشمعة الثالثة
-        gap_top = c1["Low"]       # قاع الشمعة الأولى
-        if gap_bottom < gap_top and green(c4) and c4["High"] >= gap_top * (1 - TOUCH_TOLERANCE):
+        gap_top = c1["Low"]       # قاع الشمعة الأولى = الخط المطلوب
+        came_from_below = c4["Open"] < gap_top
+        touched = c4["High"] >= gap_top * (1 - TOUCH_TOLERANCE)
+        color_ok = green(c4) or not REQUIRE_FOURTH_COLOR
+        if came_from_below and touched and color_ok:
             return {"side": "bull", "gap_bottom": gap_bottom, "gap_top": gap_top,
                     "price": c4["Close"], "candle_time": c.index[-1]}
 
-    # 🔴 هبوطي: 3 خضراء، جاب فوق، حمراء تلمس قمة الشمعة الأولى
-    if ENABLE_BEARISH and green(c1) and green(c2) and green(c3):
-        gap_bottom = c1["High"]   # قمة الشمعة الأولى
+    # 🔴 هبوطي: قمة الأولى تحت قاع الثالثة (الذيول ما تلتقي) - لون الشموع ما يهم
+    if ENABLE_BEARISH and c1["High"] < c3["Low"]:
+        gap_bottom = c1["High"]   # قمة الشمعة الأولى = الخط المطلوب
         gap_top = c3["Low"]       # قاع الشمعة الثالثة
-        if gap_bottom < gap_top and red(c4) and c4["Low"] <= gap_bottom * (1 + TOUCH_TOLERANCE):
+        came_from_above = c4["Open"] > gap_bottom
+        touched = c4["Low"] <= gap_bottom * (1 + TOUCH_TOLERANCE)
+        color_ok = red(c4) or not REQUIRE_FOURTH_COLOR
+        if came_from_above and touched and color_ok:
             return {"side": "bear", "gap_bottom": gap_bottom, "gap_top": gap_top,
                     "price": c4["Close"], "candle_time": c.index[-1]}
 
@@ -264,7 +274,7 @@ def scan_gap(tickers, already_sent):
                     f"السهم: {t}\n"
                     f"السعر: {px}\n"
                     f"الجاب: {lo} ← {hi}\n"
-                    f"3 شموع حمراء + شمعة خضراء لمست أعلى الجاب"
+                    f"الشمعة طلعت ولمست أعلى الجاب ({hi})"
                 )
             else:
                 send_telegram(
@@ -272,7 +282,7 @@ def scan_gap(tickers, already_sent):
                     f"السهم: {t}\n"
                     f"السعر: {px}\n"
                     f"الجاب: {lo} ← {hi}\n"
-                    f"3 شموع خضراء + شمعة حمراء لمست أسفل الجاب"
+                    f"الشمعة نزلت ولمست أسفل الجاب ({lo})"
                 )
         except Exception as e:
             log(f"{t}: خطأ - {e}")
