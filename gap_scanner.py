@@ -41,6 +41,10 @@ import requests
 # على السيرفر تنحط كمتغيرات (Variables) عشان ما تنكشف في جيتهب
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "ضع_توكن_البوت_هنا")      # من @BotFather
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "ضع_رقم_المحادثة_هنا")  # من @userinfobot
+# تقدر تحط أكثر من رقم بينهم فاصلة، مثال:  123456789,-1001234567890
+# وأي قروب أو قناة تضيف لها البوت، يلقط رقمها لحاله ويرسل لها التنبيهات
+AUTO_ADD_GROUPS = True
+CHATS_FILE = "chats.txt"     # يحفظ فيه أرقام القروبات اللي لقطها
 
 CHECK_EVERY_MIN = 5          # كل كم دقيقة يفحص
 NY = "America/New_York"
@@ -89,19 +93,95 @@ def log(*a):
     print(*a, flush=True)
 
 
+TG_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+CHATS = set()          # كل المحادثات اللي يرسل لها
+_last_update_id = 0
+
+
+def _load_chats():
+    for c in TELEGRAM_CHAT_ID.split(","):
+        c = c.strip()
+        if c and "ضع_" not in c:
+            CHATS.add(c)
+    try:
+        with open(CHATS_FILE, encoding="utf-8") as f:
+            CHATS.update(line.strip() for line in f if line.strip())
+    except FileNotFoundError:
+        pass
+
+
+def _save_chat(chat_id):
+    try:
+        with open(CHATS_FILE, "a", encoding="utf-8") as f:
+            f.write(chat_id + "\n")
+    except Exception:
+        pass
+
+
+def discover_groups():
+    """يشوف لو البوت انضاف لقروب أو قناة جديدة، ويضيف رقمها لقائمة الإرسال."""
+    global _last_update_id
+    if not AUTO_ADD_GROUPS or "ضع_" in TELEGRAM_TOKEN:
+        return
+    try:
+        r = requests.get(f"{TG_API}/getUpdates",
+                         params={"offset": _last_update_id + 1, "timeout": 0,
+                                 "allowed_updates": '["message","channel_post","my_chat_member"]'},
+                         timeout=15).json()
+    except Exception as e:
+        log("ما قدرت أشيك على القروبات:", e)
+        return
+    for u in r.get("result", []):
+        _last_update_id = max(_last_update_id, u["update_id"])
+        box = u.get("my_chat_member") or u.get("message") or u.get("channel_post") or {}
+        chat = box.get("chat") or {}
+        if chat.get("type") not in ("group", "supergroup", "channel"):
+            continue
+        cid = str(chat["id"])
+        # لو البوت انطرد من القروب نشيله
+        status = ((u.get("my_chat_member") or {}).get("new_chat_member") or {}).get("status")
+        if status in ("left", "kicked"):
+            CHATS.discard(cid)
+            continue
+        # القروب ترقّى لسوبر قروب وتغيّر رقمه
+        new_id = (u.get("message") or {}).get("migrate_to_chat_id")
+        if new_id:
+            CHATS.discard(cid)
+            cid = str(new_id)
+        if cid not in CHATS:
+            CHATS.add(cid)
+            _save_chat(cid)
+            title = chat.get("title", "")
+            log(f"✅ انضاف قروب/قناة جديد: {title}  الرقم: {cid}")
+            log(f"   عشان يثبت دايم، حط هالرقم في TELEGRAM_CHAT_ID على Railway")
+            _send_one(cid, f"✅ البوت متصل هنا وبيرسل التنبيهات\nرقم المحادثة: {cid}")
+
+
+def _send_one(chat_id, text):
+    try:
+        r = requests.post(f"{TG_API}/sendMessage",
+                          data={"chat_id": chat_id, "text": text,
+                                "disable_web_page_preview": True},
+                          timeout=10).json()
+        if not r.get("ok"):
+            log(f"فشل الإرسال لـ {chat_id}: {r.get('description')}")
+            params = r.get("parameters") or {}
+            if params.get("migrate_to_chat_id"):   # القروب تغيّر رقمه
+                CHATS.discard(chat_id)
+                new_id = str(params["migrate_to_chat_id"])
+                CHATS.add(new_id)
+                _save_chat(new_id)
+                _send_one(new_id, text)
+    except Exception as e:
+        log(f"فشل إرسال التنبيه لـ {chat_id}:", e)
+
+
 def send_telegram(text):
     log(text)
     if "ضع_" in TELEGRAM_TOKEN:
         return  # ما حطيت التوكن، يطبع بالشاشة بس
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            data={"chat_id": TELEGRAM_CHAT_ID, "text": text,
-                  "disable_web_page_preview": True},
-            timeout=10,
-        )
-    except Exception as e:
-        log("فشل إرسال التنبيه:", e)
+    for chat_id in list(CHATS):
+        _send_one(chat_id, text)
 
 
 def us_market_open():
@@ -403,6 +483,9 @@ def scan_news(tickers, window, already_sent):
 # ================== التشغيل ==================
 def main():
     once = "--once" in sys.argv
+    _load_chats()
+    discover_groups()
+    log(f"التنبيهات بتروح لـ {len(CHATS)} محادثة: {', '.join(CHATS) or 'ولا وحدة'}")
 
     gap_tickers, gap_day = [], None
     gap_sent = set()
@@ -410,6 +493,7 @@ def main():
     news_sent = set()
 
     while True:
+        discover_groups()
         # (1) الجاب - وقت السوق الأمريكي
         if ENABLE_GAP and (us_market_open() or once):
             today = pd.Timestamp.now(tz=NY).date()
