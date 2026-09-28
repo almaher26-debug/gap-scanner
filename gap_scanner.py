@@ -33,6 +33,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "ضع_رقم_المحاد�
 
 CHECK_EVERY_MIN = 5          # كل كم دقيقة يفحص
 ONLY_MARKET_HOURS = True     # يفحص بس وقت السوق الأمريكي
+INCLUDE_EXTENDED = True      # يفحص كمان قبل الفتح وبعد الإغلاق (4 الصبح - 8 بالليل نيويورك)
 
 # ---- (1) نموذج الجاب ----
 ENABLE_GAP = True
@@ -40,6 +41,7 @@ MIN_PRICE = 50
 MAX_PRICE = 500
 TOUCH_TOLERANCE = 0.001      # 0.1% : يعتبرها لمست لو قربت من أعلى الجاب بهالنسبة
 REQUIRE_GREEN_FOURTH = True  # الشمعة الرابعة لازم تكون خضراء
+GAP_EXTENDED = True          # شمعة الـ4 ساعات تشمل ما قبل الفتح وبعد الإغلاق (4-8، 8-12، 12-4، 4-8)
 
 # ---- (2) سيولة الأسهم الصغيرة ----
 ENABLE_PENNY = True
@@ -87,6 +89,8 @@ def market_open():
     now = pd.Timestamp.now(tz=NY)
     if now.weekday() >= 5:
         return False
+    if INCLUDE_EXTENDED:
+        return now.replace(hour=4, minute=0) <= now <= now.replace(hour=20, minute=5)
     return now.replace(hour=9, minute=30) <= now <= now.replace(hour=16, minute=5)
 
 
@@ -137,8 +141,9 @@ def get_nasdaq100():
 
 
 def to_4h(df):
-    """يحول شموع الساعة لشموع 4 ساعات بنفس تقسيم تريدنج فيو للأسهم الأمريكية
-    (9:30 - 13:30 ثم 13:30 - 16:00 بتوقيت نيويورك)."""
+    """يحول شموع الساعة لشموع 4 ساعات بتوقيت نيويورك.
+    السوق الممتد: 4-8، 8-12، 12-16، 16-20  (نفس تريدنج فيو مع تفعيل Extended Hours)
+    السوق الرسمي: 9:30 - 13:30 ثم 13:30 - 16:00"""
     df = df.dropna(subset=["Open", "High", "Low", "Close"])
     if df.empty:
         return df
@@ -146,10 +151,11 @@ def to_4h(df):
     if idx.tz is None:
         idx = idx.tz_localize("UTC")
     df = df.set_index(idx.tz_convert(NY))
-    df = df.between_time("09:30", "15:59")
-    mins = df.index.hour * 60 + df.index.minute - 570
+    first = 240 if GAP_EXTENDED else 570          # 4:00 أو 9:30 بالدقايق
+    df = df.between_time("04:00", "19:59") if GAP_EXTENDED else df.between_time("09:30", "15:59")
+    mins = df.index.hour * 60 + df.index.minute - first
     block = mins // 240
-    start = df.index.normalize() + pd.Timedelta(minutes=570) + pd.to_timedelta(block * 240, unit="m")
+    start = df.index.normalize() + pd.Timedelta(minutes=first) + pd.to_timedelta(block * 240, unit="m")
     return df.groupby(start).agg(
         {"Open": "first", "High": "max", "Low": "min", "Close": "last"}
     )
@@ -187,7 +193,7 @@ def check_pattern(c):
 
 def scan_gap(tickers, already_sent):
     hits = 0
-    for t, df in download_batches(tickers, 100, period="30d", interval="1h", prepost=False):
+    for t, df in download_batches(tickers, 100, period="30d", interval="1h", prepost=GAP_EXTENDED):
         try:
             candles = to_4h(df)
             if candles.empty:
@@ -290,7 +296,7 @@ def check_liquidity(df):
 def scan_penny(tickers, last_alert):
     hits = 0
     now = time.time()
-    for t, df in download_batches(tickers, 200, period="1d", interval="5m", prepost=False):
+    for t, df in download_batches(tickers, 200, period="1d", interval="5m", prepost=INCLUDE_EXTENDED):
         try:
             for h in check_liquidity(df):
                 if now - last_alert.get(t, 0) < PENNY_COOLDOWN_MIN * 60:
