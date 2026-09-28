@@ -2,29 +2,28 @@
 بوت التنبيهات - يشتغل على Railway ويرسل على تيليجرام
 =====================================================
 
-(1) نموذج الـ Inversion Gap - فريم 4 ساعات
+(1) نموذج الـ Inversion Gap - فريمين: 4 ساعات + ساعة
     الأسهم: كل أسهم ناسداك اللي قيمتها السوقية 2 مليار دولار وفوق (ميد كاب وأعلى)
     ⚠️ لون الشموع الثلاث ما يهم - المهم إن ذيل الشمعة الأولى والثالثة ما يلتقون
 
     🟢 صعودي (جاب تحت):
-      - ثلاث شموع (أي لون)، وقاع الشمعة الأولى أعلى من قمة الشمعة الثالثة
+      - ثلاث شموع، وقاع الشمعة الأولى أعلى من قمة الشمعة الثالثة
       - الجاب = من قمة الشمعة الثالثة (تحت) إلى قاع الشمعة الأولى (فوق)
-      - الشمعة الرابعة تجي من تحت وتطلع لين تلمس أعلى الجاب (قاع C1)  =>  تنبيه فوراً
+      - الشمعة الرابعة تجي من تحت وتطلع فوق أعلى الجاب
+    🔴 هبوطي (جاب فوق): نفس الشي بالعكس، والشمعة الرابعة تنزل تحت أسفل الجاب
 
-    🔴 هبوطي (جاب فوق):
-      - ثلاث شموع (أي لون)، وقمة الشمعة الأولى أقل من قاع الشمعة الثالثة
-      - الجاب = من قمة الشمعة الأولى (تحت) إلى قاع الشمعة الثالثة (فوق)
-      - الشمعة الرابعة تجي من فوق وتنزل لين تلمس أسفل الجاب (قمة C1)  =>  تنبيه فوراً
+    ⏱️ متى يجي التنبيه:
+      - فريم 4 ساعات: الشمعة الرابعة طلعت فوق أعلى الجاب وثابتة فوقه الحين،
+        وباقي على إغلاق الشمعة ساعتين أو أقل
+      - فريم ساعة: بعد ما الشمعة الرابعة تقفل فعلياً فوق أعلى الجاب (إغلاق تام)
 
     فلتر: السهم سعره فوق 10$ ، وحجم الجاب (الفرق بين الحدين) أكبر من 0.50$
-    ⏱️ آخر جاب بس: الجاب لازم يكون من آخر 3 شموع قبل الشمعة الحالية مباشرة،
-       والتنبيه يطلع بس إذا اللمس صار الحين (آخر ساعة) والسعر لسا عند الجاب،
-       عشان ما يرسل جاب قديم أو لمسة صارت من ساعات (مثلاً بعد إعادة تشغيل البوت)
 
-(2) الأخبار - 24 ساعة
+(2) الأخبار - 24 ساعة - الإيجابية بس
     - كل أسهم ناسداك (عليها تداول)
-    - أي خبر جديد ينزل على أي سهم  =>  تنبيه، مع نوع الخبر:
-      🟢 إيجابي / 🔴 سلبي / ⚪ محايد  (تصنيف تقريبي من كلمات العنوان، مو دقيق 100%)
+    - يرسل الأخبار الإيجابية بس: اندماج، استحواذ، أرباح ونتائج، موافقات، عقود وشراكات...
+      والسلبي والمحايد يتجاهلهم (التصنيف تقريبي من كلمات العنوان، مو دقيق 100%)
+    - عنوان الخبر يتترجم للعربي (لو فشلت الترجمة يرسله بالإنجليزي)
     - المصدر: ياهو فاينانس
 
 (3) نماذج الفريم اليومي - كل أسهم ناسداك - التنبيه عند اكتمال النموذج (كسر خط العنق)
@@ -79,7 +78,9 @@ GAP_EXTENDED = True              # شمعة الـ4 ساعات تشمل ما ق�
 
 GAP_MIN_STOCK_PRICE = 10         # يتجاهل الأسهم اللي سعرها أقل من كذا
 GAP_MIN_SIZE = 0.50              # يتجاهل الجاب اللي حجمه أقل من كذا (دولار)
-GAP_FRESH_BARS = 2               # اللمس لازم يكون صار في آخر كم شمعة نص ساعة (2 = آخر ساعة)
+ENABLE_GAP_4H = True             # فريم 4 ساعات
+GAP_4H_ALERT_LAST_MIN = 120      # ينبه بس لما يكون باقي على إغلاق شمعة الـ4 ساعات كذا دقيقة أو أقل
+ENABLE_GAP_1H = True             # فريم ساعة (ينبه بعد إغلاق الشمعة فوق/تحت الجاب)
 GAP_SENT_FILE = "gap_sent.txt"   # عشان ما يعيد نفس التنبيه لو البوت أعاد التشغيل
 
 USE_PRICE_FILTER = False         # True = يطبق فلتر السعر تحت مع فلتر القيمة السوقية
@@ -96,6 +97,8 @@ NEWS_EVERY_MIN = 10              # كل كم دقيقة يفحص الأخبار 
 NEWS_MAX_AGE_MIN = 90            # يتجاهل الأخبار الأقدم من كذا (عشان ما يرسل أخبار قديمة أول ما يشتغل)
 NEWS_WORKERS = 8                 # عدد الطلبات المتوازية على ياهو
 NEWS_SENT_FILE = "news_sent.txt" # عشان ما يعيد نفس الخبر لو البوت أعاد التشغيل
+NEWS_ONLY_POSITIVE = True        # True = يرسل الأخبار الإيجابية بس
+NEWS_TRANSLATE = True            # True = يترجم عنوان الخبر للعربي
 
 # ---- (3) نماذج الفريم اليومي ----
 ENABLE_DAILY = True
@@ -309,44 +312,25 @@ def to_ny(df):
     return df.set_index(idx.tz_convert(NY))
 
 
-def touch_is_fresh(bars, res):
-    """يتأكد إن اللمس صار الحين مو من ساعات، وإن السعر لسا ما رجع وطلع من الجاب.
-    bars = شموع النص ساعة، res = نتيجة check_pattern"""
-    b = to_ny(bars)
-    b = b[b.index >= res["candle_time"]]            # بس شموع الشمعة الرابعة الحالية
-    if b.empty:
-        return False
-    if res["side"] == "bull":
-        hits = b.index[b["High"] >= res["gap_top"] * (1 - TOUCH_TOLERANCE)]
-        still_there = b["Close"].iloc[-1] >= res["gap_bottom"]   # ما نزل تحت الجاب مرة ثانية
-    else:
-        hits = b.index[b["Low"] <= res["gap_bottom"] * (1 + TOUCH_TOLERANCE)]
-        still_there = b["Close"].iloc[-1] <= res["gap_top"]      # ما طلع فوق الجاب مرة ثانية
-    if len(hits) == 0:
-        return False
-    recent = b.index[-GAP_FRESH_BARS:]
-    return hits[0] >= recent[0] and still_there
-
-
-def to_4h(df):
-    """يحول شموع النص ساعة لشموع 4 ساعات بتوقيت نيويورك.
-    السوق الممتد: 4-8، 8-12، 12-16، 16-20  (نفس تريدنج فيو مع تفعيل Extended Hours)
-    السوق الرسمي: 9:30 - 13:30 ثم 13:30 - 16:00"""
+def to_frame(df, minutes):
+    """يحول شموع النص ساعة لشموع أكبر (60 = ساعة، 240 = 4 ساعات) بتوقيت نيويورك.
+    السوق الممتد يبدأ 4:00 الصبح (نفس تريدنج فيو مع تفعيل Extended Hours)"""
     df = df.dropna(subset=["Open", "High", "Low", "Close"])
     if df.empty:
         return df
-    idx = df.index
-    if idx.tz is None:
-        idx = idx.tz_localize("UTC")
-    df = df.set_index(idx.tz_convert(NY))
+    df = to_ny(df)
     first = 240 if GAP_EXTENDED else 570          # 4:00 أو 9:30 بالدقايق
     df = df.between_time("04:00", "19:59") if GAP_EXTENDED else df.between_time("09:30", "15:59")
     mins = df.index.hour * 60 + df.index.minute - first
-    block = mins // 240
-    start = df.index.normalize() + pd.Timedelta(minutes=first) + pd.to_timedelta(block * 240, unit="m")
+    block = mins // minutes
+    start = df.index.normalize() + pd.Timedelta(minutes=first) + pd.to_timedelta(block * minutes, unit="m")
     return df.groupby(start).agg(
         {"Open": "first", "High": "max", "Low": "min", "Close": "last"}
     )
+
+
+def to_4h(df):
+    return to_frame(df, 240)
 
 
 def red(x):
@@ -389,49 +373,72 @@ def check_pattern(c):
     return None
 
 
+def _gap_message(t, res, frame, note):
+    lo, hi, px = (round(float(res[k]), 2) for k in ("gap_bottom", "gap_top", "price"))
+    if res["side"] == "bull":
+        head = f"🟢 Inversion Gap صعودي - {frame}"
+        line = f"فوق أعلى الجاب ({hi})"
+    else:
+        head = f"🔴 Inversion Gap هبوطي - {frame}"
+        line = f"تحت أسفل الجاب ({lo})"
+    return (f"{head}\n"
+            f"السهم: {t}\n"
+            f"السعر: {px}\n"
+            f"الجاب: {lo} ← {hi}  (حجمه {hi - lo:.2f}$)\n"
+            f"{note} {line}")
+
+
+def _beyond_gap(res, price):
+    """السعر عدّى الجاب كامل: فوق أعلاه بالصعودي، أو تحت أسفله بالهبوطي."""
+    if res["side"] == "bull":
+        return price > res["gap_top"]
+    return price < res["gap_bottom"]
+
+
 def scan_gap(tickers, already_sent):
     hits = 0
+    now = pd.Timestamp.now(tz=NY)
     for t, df in download_batches(tickers, 100, period="20d", interval="30m", prepost=GAP_EXTENDED):
         try:
-            candles = to_4h(df)
-            if candles.empty:
+            c4h = to_frame(df, 240)
+            if c4h.empty:
                 continue
-            if USE_PRICE_FILTER:
-                last = float(candles["Close"].iloc[-1])
-                if not (MIN_PRICE <= last <= MAX_PRICE):
-                    continue
-            if float(candles["Close"].iloc[-1]) < GAP_MIN_STOCK_PRICE:
+            last = float(c4h["Close"].iloc[-1])
+            if USE_PRICE_FILTER and not (MIN_PRICE <= last <= MAX_PRICE):
                 continue
-            res = check_pattern(candles)
-            if not res:
+            if last < GAP_MIN_STOCK_PRICE:
                 continue
-            if res["gap_top"] - res["gap_bottom"] < GAP_MIN_SIZE:
-                continue
-            key = f"{t}-{res['side']}-{res['candle_time']}"
-            if key in already_sent:
-                continue
-            if not touch_is_fresh(df, res):
-                continue                      # لمسة قديمة أو السعر رجع وطلع من الجاب
-            already_sent.add(key)
-            _append_line(GAP_SENT_FILE, key)
-            hits += 1
-            lo, hi, px = (round(float(res[k]), 2) for k in ("gap_bottom", "gap_top", "price"))
-            if res["side"] == "bull":
-                send_telegram(
-                    f"🟢 Inversion Gap صعودي - فريم 4 ساعات\n"
-                    f"السهم: {t}\n"
-                    f"السعر: {px}\n"
-                    f"الجاب: {lo} ← {hi}  (حجمه {hi - lo:.2f}$)\n"
-                    f"الشمعة طلعت ولمست أعلى الجاب ({hi})"
-                )
-            else:
-                send_telegram(
-                    f"🔴 Inversion Gap هبوطي - فريم 4 ساعات\n"
-                    f"السهم: {t}\n"
-                    f"السعر: {px}\n"
-                    f"الجاب: {lo} ← {hi}  (حجمه {hi - lo:.2f}$)\n"
-                    f"الشمعة نزلت ولمست أسفل الجاب ({lo})"
-                )
+
+            # ---- فريم 4 ساعات: ثابت فوق الجاب وباقي ساعتين أو أقل على الإغلاق ----
+            if ENABLE_GAP_4H:
+                res = check_pattern(c4h)
+                if res and res["gap_top"] - res["gap_bottom"] >= GAP_MIN_SIZE:
+                    end = res["candle_time"] + pd.Timedelta(minutes=240)
+                    remaining = (end - now).total_seconds() / 60
+                    key = f"{t}-4h-{res['side']}-{res['candle_time']}"
+                    if (0 < remaining <= GAP_4H_ALERT_LAST_MIN and _beyond_gap(res, res["price"])
+                            and key not in already_sent):
+                        already_sent.add(key)
+                        _append_line(GAP_SENT_FILE, key)
+                        hits += 1
+                        send_telegram(_gap_message(
+                            t, res, "فريم 4 ساعات",
+                            f"باقي {int(remaining)} دقيقة على الإغلاق، والسعر ثابت"))
+
+            # ---- فريم ساعة: بعد إغلاق الشمعة الرابعة فوق/تحت الجاب ----
+            if ENABLE_GAP_1H:
+                c1h = to_frame(df, 60)
+                # نشيل الشمعة اللي لسا ما قفلت، عشان نفحص آخر شمعة مقفلة بس
+                if len(c1h) and c1h.index[-1] + pd.Timedelta(minutes=60) > now:
+                    c1h = c1h.iloc[:-1]
+                res = check_pattern(c1h)
+                if res and res["gap_top"] - res["gap_bottom"] >= GAP_MIN_SIZE:
+                    key = f"{t}-1h-{res['side']}-{res['candle_time']}"
+                    if _beyond_gap(res, res["price"]) and key not in already_sent:
+                        already_sent.add(key)
+                        _append_line(GAP_SENT_FILE, key)
+                        hits += 1
+                        send_telegram(_gap_message(t, res, "فريم ساعة", "الشمعة قفلت"))
         except Exception as e:
             log(f"{t}: خطأ - {e}")
     log(f"[{datetime.now():%H:%M}] الجاب: خلص الفحص - {hits} تنبيه جديد")
@@ -539,17 +546,66 @@ concern concerns downbeat disappointing disappoints suspend suspended short-sell
 """.split()
 
 
-def news_sentiment(text):
-    """تصنيف تقريبي: يعد الكلمات الإيجابية والسلبية في العنوان."""
+NEWS_CATEGORIES = [
+    ("🤝 اندماج / استحواذ", "merger merge merges merging acquire acquires acquired acquisition "
+                          "acquisitions buyout takeover to-be-acquired tender"),
+    ("💰 أرباح / نتائج", "earnings profit profits profitable revenue revenues results eps quarter "
+                        "quarterly q1 q2 q3 q4 guidance record"),
+    ("💊 موافقة", "fda approval approved approves clearance cleared"),
+    ("📝 عقد / شراكة", "contract contracts partnership partners collaboration agreement awarded order orders deal"),
+    ("🔁 إعادة شراء / توزيعات", "buyback repurchase dividend"),
+]
+NEWS_CATEGORIES = [(name, set(words.split())) for name, words in NEWS_CATEGORIES]
+
+
+def news_classify(text):
+    """تصنيف تقريبي من كلمات العنوان. يرجع (النوع، التصنيف)
+    النوع: إيجابي / سلبي / محايد ، والتصنيف مثل اندماج أو أرباح."""
     import re
-    words = re.findall(r"[a-z][a-z\-]*", text.lower())
+    t = text.lower().replace("to be acquired", "to-be-acquired")
+    words = re.findall(r"[a-z0-9][a-z0-9\-]*", t)
     pos = sum(w in POSITIVE_WORDS for w in words)
     neg = sum(w in NEGATIVE_WORDS for w in words)
-    if pos > neg:
-        return "🟢 إيجابي"
+    category = next((name for name, keys in NEWS_CATEGORIES if any(w in keys for w in words)), "")
     if neg > pos:
-        return "🔴 سلبي"
-    return "⚪ محايد"
+        return "negative", category
+    if pos > neg or (category and neg == 0):
+        return "positive", category
+    return "neutral", category
+
+
+def news_sentiment(text):
+    kind, _ = news_classify(text)
+    return {"positive": "🟢 إيجابي", "negative": "🔴 سلبي"}.get(kind, "⚪ محايد")
+
+
+_translations = {}
+
+
+def translate_ar(text):
+    """يترجم العنوان للعربي. يجرب قوقل وبعدين MyMemory، ولو فشلوا يرجع None."""
+    if text in _translations:
+        return _translations[text]
+    result = None
+    try:
+        r = requests.get("https://translate.googleapis.com/translate_a/single",
+                         params={"client": "gtx", "sl": "en", "tl": "ar", "dt": "t", "q": text},
+                         headers=HEADERS, timeout=8)
+        data = r.json()
+        result = "".join(seg[0] for seg in data[0] if seg and seg[0])
+    except Exception:
+        pass
+    if not result or not any("\u0600" <= ch <= "\u06ff" for ch in result):
+        try:
+            r = requests.get("https://api.mymemory.translated.net/get",
+                             params={"q": text[:480], "langpair": "en|ar"}, timeout=8)
+            result = r.json()["responseData"]["translatedText"]
+        except Exception:
+            result = None
+    if result and not any("\u0600" <= ch <= "\u06ff" for ch in result):
+        result = None                     # ما طلع عربي = الترجمة فشلت
+    _translations[text] = result
+    return result
 
 
 def fetch_news(t):
@@ -574,12 +630,17 @@ def scan_news(tickers, already_sent):
                     continue
                 already_sent.add(key)
                 _append_line(NEWS_SENT_FILE, key)
+                kind, category = news_classify(n["title"])
+                if NEWS_ONLY_POSITIVE and kind != "positive":
+                    continue                  # سلبي أو محايد = نتجاهله
                 hits += 1
+                title = (translate_ar(n["title"]) if NEWS_TRANSLATE else None) or n["title"]
+                label = {"positive": "🟢 إيجابي", "negative": "🔴 سلبي"}.get(kind, "⚪ محايد")
                 local_time = n["time"].tz_convert(LOCAL_TZ)
                 send_telegram(
-                    f"📰 خبر جديد - {news_sentiment(n['title'])}\n"
+                    f"📰 خبر {label}" + (f" - {category}" if category else "") + "\n"
                     f"السهم: {t}\n"
-                    f"الخبر: {n['title']}\n"
+                    f"الخبر: {title}\n"
                     f"المصدر: {n['source']}\n"
                     f"الوقت: {local_time:%H:%M} (توقيتك)\n"
                     f"{n['link']}"
