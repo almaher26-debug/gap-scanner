@@ -17,10 +17,14 @@
       - الشمعة الرابعة تجي من فوق وتنزل لين تلمس أسفل الجاب (قمة C1)  =>  تنبيه فوراً
 
     فلتر: السهم سعره فوق 10$ ، وحجم الجاب (الفرق بين الحدين) أكبر من 0.50$
+    ⏱️ آخر جاب بس: الجاب لازم يكون من آخر 3 شموع قبل الشمعة الحالية مباشرة،
+       والتنبيه يطلع بس إذا اللمس صار الحين (آخر ساعة) والسعر لسا عند الجاب،
+       عشان ما يرسل جاب قديم أو لمسة صارت من ساعات (مثلاً بعد إعادة تشغيل البوت)
 
-(2) فلتر الأخبار
-    - كل الأسهم الأمريكية (ناسداك + نيويورك) اللي سعرها من 1 إلى 10 دولار
-    - أي خبر ينزل من 11:00 الصبح إلى 4:30 العصر (توقيتك المحلي - الرياض)  =>  تنبيه
+(2) الأخبار - 24 ساعة
+    - كل أسهم ناسداك (عليها تداول)
+    - أي خبر جديد ينزل على أي سهم  =>  تنبيه، مع نوع الخبر:
+      🟢 إيجابي / 🔴 سلبي / ⚪ محايد  (تصنيف تقريبي من كلمات العنوان، مو دقيق 100%)
     - المصدر: ياهو فاينانس
 
 (3) نماذج الفريم اليومي - كل أسهم ناسداك - التنبيه عند اكتمال النموذج (كسر خط العنق)
@@ -75,20 +79,23 @@ GAP_EXTENDED = True              # شمعة الـ4 ساعات تشمل ما ق�
 
 GAP_MIN_STOCK_PRICE = 10         # يتجاهل الأسهم اللي سعرها أقل من كذا
 GAP_MIN_SIZE = 0.50              # يتجاهل الجاب اللي حجمه أقل من كذا (دولار)
+GAP_FRESH_BARS = 2               # اللمس لازم يكون صار في آخر كم شمعة نص ساعة (2 = آخر ساعة)
+GAP_SENT_FILE = "gap_sent.txt"   # عشان ما يعيد نفس التنبيه لو البوت أعاد التشغيل
 
 USE_PRICE_FILTER = False         # True = يطبق فلتر السعر تحت مع فلتر القيمة السوقية
 MIN_PRICE = 50
 MAX_PRICE = 500
 
-# ---- (2) فلتر الأخبار ----
+# ---- (2) الأخبار - 24 ساعة ----
 ENABLE_NEWS = True
-NEWS_MIN_PRICE = 1
-NEWS_MAX_PRICE = 10
-NEWS_START = "11:00"             # بداية الوقت (توقيتك المحلي)
-NEWS_END = "16:30"               # نهاية الوقت (توقيتك المحلي)
+NEWS_MIN_PRICE = 0               # 0 = كل الأسعار
+NEWS_MAX_PRICE = 1_000_000
 NEWS_MIN_AVG_VOLUME = 100_000    # يشيل الأسهم الميتة اللي ما عليها تداول (عدد أسهم يومي)
-NEWS_INCLUDE_NYSE = True         # يضيف أسهم بورصة نيويورك مع ناسداك
+NEWS_INCLUDE_NYSE = False        # False = ناسداك بس
+NEWS_EVERY_MIN = 10              # كل كم دقيقة يفحص الأخبار (الأسهم كثيرة، أقل من كذا ياهو ممكن يحظر)
+NEWS_MAX_AGE_MIN = 90            # يتجاهل الأخبار الأقدم من كذا (عشان ما يرسل أخبار قديمة أول ما يشتغل)
 NEWS_WORKERS = 8                 # عدد الطلبات المتوازية على ياهو
+NEWS_SENT_FILE = "news_sent.txt" # عشان ما يعيد نفس الخبر لو البوت أعاد التشغيل
 
 # ---- (3) نماذج الفريم اليومي ----
 ENABLE_DAILY = True
@@ -235,20 +242,6 @@ def us_market_open():
     return now.replace(hour=9, minute=30) <= now <= now.replace(hour=16, minute=5)
 
 
-def news_window():
-    """يرجع (بداية، نهاية) نافذة الأخبار لليوم بتوقيتك، أو None لو برا الوقت."""
-    now = pd.Timestamp.now(tz=LOCAL_TZ)
-    if now.weekday() in (5, 6):  # السبت والأحد السوق الأمريكي مسكر
-        return None
-    h1, m1 = map(int, NEWS_START.split(":"))
-    h2, m2 = map(int, NEWS_END.split(":"))
-    start = now.replace(hour=h1, minute=m1, second=0, microsecond=0)
-    end = now.replace(hour=h2, minute=m2, second=0, microsecond=0)
-    if start <= now <= end:
-        return start, end
-    return None
-
-
 def download_batches(tickers, batch_size, **kw):
     """يحمّل بيانات ياهو على دفعات، ويرجع (الرمز، البيانات) لكل سهم."""
     import yfinance as yf
@@ -306,6 +299,33 @@ def get_nasdaq_midcap_plus():
     except Exception as e:
         log("ما قدرت أجيب القيم السوقية من ناسداك، أستخدم الاحتياطية:", e)
     return FALLBACK_TICKERS
+
+
+def to_ny(df):
+    df = df.dropna(subset=["Open", "High", "Low", "Close"])
+    idx = df.index
+    if idx.tz is None:
+        idx = idx.tz_localize("UTC")
+    return df.set_index(idx.tz_convert(NY))
+
+
+def touch_is_fresh(bars, res):
+    """يتأكد إن اللمس صار الحين مو من ساعات، وإن السعر لسا ما رجع وطلع من الجاب.
+    bars = شموع النص ساعة، res = نتيجة check_pattern"""
+    b = to_ny(bars)
+    b = b[b.index >= res["candle_time"]]            # بس شموع الشمعة الرابعة الحالية
+    if b.empty:
+        return False
+    if res["side"] == "bull":
+        hits = b.index[b["High"] >= res["gap_top"] * (1 - TOUCH_TOLERANCE)]
+        still_there = b["Close"].iloc[-1] >= res["gap_bottom"]   # ما نزل تحت الجاب مرة ثانية
+    else:
+        hits = b.index[b["Low"] <= res["gap_bottom"] * (1 + TOUCH_TOLERANCE)]
+        still_there = b["Close"].iloc[-1] <= res["gap_top"]      # ما طلع فوق الجاب مرة ثانية
+    if len(hits) == 0:
+        return False
+    recent = b.index[-GAP_FRESH_BARS:]
+    return hits[0] >= recent[0] and still_there
 
 
 def to_4h(df):
@@ -390,7 +410,10 @@ def scan_gap(tickers, already_sent):
             key = f"{t}-{res['side']}-{res['candle_time']}"
             if key in already_sent:
                 continue
+            if not touch_is_fresh(df, res):
+                continue                      # لمسة قديمة أو السعر رجع وطلع من الجاب
             already_sent.add(key)
+            _append_line(GAP_SENT_FILE, key)
             hits += 1
             lo, hi, px = (round(float(res[k]), 2) for k in ("gap_bottom", "gap_top", "price"))
             if res["side"] == "bull":
@@ -491,8 +514,42 @@ def _parse_news_item(item):
     link = link or c.get("link") or ""
     provider = c.get("provider")
     source = provider.get("displayName") if isinstance(provider, dict) else (c.get("publisher") or "")
+    summary = c.get("summary") or c.get("description") or ""
     return {"id": news_id or f"{title}-{ts}", "title": title, "time": ts,
-            "link": link, "source": source}
+            "link": link, "source": source, "summary": summary}
+
+
+POSITIVE_WORDS = """
+beat beats surpass surpasses exceeded tops record soar soars soared surge surges surged jump jumps
+jumped rally rallies rallied gain gains climb climbs rise rises rose upgrade upgraded upgrades
+outperform buy raises raised raise boost boosts boosted strong stronger growth profit profitable
+approval approved approves fda-approved clearance cleared breakthrough partnership partners
+collaboration agreement contract awarded wins win won acquire acquisition acquires merger buyback
+repurchase dividend expands expansion launch launches launched positive success successful
+milestone higher bullish upbeat optimistic tops beat-and-raise guidance-raise order orders deal
+""".split()
+NEGATIVE_WORDS = """
+miss misses missed plunge plunges plunged plummet plummets sink sinks sank drop drops dropped fall
+falls fell slump slumps tumble tumbles tumbled decline declines declined downgrade downgraded
+downgrades underperform sell cut cuts lowers lowered weak weaker loss losses lawsuit sued sues
+probe investigation subpoena sec fraud recall recalls halt halted delisting delist delisted
+bankruptcy bankrupt chapter default offering dilution dilutive reverse-split warning warns layoffs
+layoff resign resigns resigned rejected rejects rejection fails failed failure crl negative bearish
+concern concerns downbeat disappointing disappoints suspend suspended short-seller shortfall lower
+""".split()
+
+
+def news_sentiment(text):
+    """تصنيف تقريبي: يعد الكلمات الإيجابية والسلبية في العنوان."""
+    import re
+    words = re.findall(r"[a-z][a-z\-]*", text.lower())
+    pos = sum(w in POSITIVE_WORDS for w in words)
+    neg = sum(w in NEGATIVE_WORDS for w in words)
+    if pos > neg:
+        return "🟢 إيجابي"
+    if neg > pos:
+        return "🔴 سلبي"
+    return "⚪ محايد"
 
 
 def fetch_news(t):
@@ -503,24 +560,24 @@ def fetch_news(t):
         return t, []
 
 
-def scan_news(tickers, window, already_sent):
-    start, end = window
+def scan_news(tickers, already_sent):
     hits = 0
+    now = pd.Timestamp.now(tz="UTC")
+    oldest = now - pd.Timedelta(minutes=NEWS_MAX_AGE_MIN)
     with ThreadPoolExecutor(max_workers=NEWS_WORKERS) as pool:
         for t, items in pool.map(fetch_news, tickers):
             for n in items:
-                if not n["title"] or n["time"] is None:
-                    continue
-                local_time = n["time"].tz_convert(LOCAL_TZ)
-                if not (start <= local_time <= end):
+                if not n["title"] or n["time"] is None or n["time"] < oldest:
                     continue
                 key = f"{t}-{n['id']}"
                 if key in already_sent:
                     continue
                 already_sent.add(key)
+                _append_line(NEWS_SENT_FILE, key)
                 hits += 1
+                local_time = n["time"].tz_convert(LOCAL_TZ)
                 send_telegram(
-                    f"📰 خبر جديد - سهم صغير\n"
+                    f"📰 خبر جديد - {news_sentiment(n['title'])}\n"
                     f"السهم: {t}\n"
                     f"الخبر: {n['title']}\n"
                     f"المصدر: {n['source']}\n"
@@ -733,9 +790,9 @@ def main():
     log(f"التنبيهات بتروح لـ {len(CHATS)} محادثة: {', '.join(CHATS) or 'ولا وحدة'}")
 
     gap_tickers, gap_day = [], None
-    gap_sent = set()
-    news_tickers, news_day = [], None
-    news_sent = set()
+    gap_sent = _load_set(GAP_SENT_FILE)
+    news_tickers, news_day, news_last = [], None, 0.0
+    news_sent = _load_set(NEWS_SENT_FILE)
     daily_tickers, daily_day, daily_last = [], None, 0.0
     daily_sent = set()
     short_day = None
@@ -752,15 +809,14 @@ def main():
                 log(f"الجاب: {len(gap_tickers)} سهم ناسداك قيمتها السوقية {MIN_MARKET_CAP/1e9:.0f} مليار وفوق")
             scan_gap(gap_tickers, gap_sent)
 
-        # (2) الأخبار - من 11 الصبح إلى 4:30 العصر بتوقيتك
-        window = news_window()
-        if ENABLE_NEWS and window:
-            today = pd.Timestamp.now(tz=LOCAL_TZ).date()
+        # (2) الأخبار - 24 ساعة
+        if ENABLE_NEWS and time.time() - news_last >= NEWS_EVERY_MIN * 60:
+            today = pd.Timestamp.now(tz=NY).date()
             if news_day != today or not news_tickers:
                 news_tickers = build_news_universe()
                 news_day = today
-                news_sent.clear()
-            scan_news(news_tickers, window, news_sent)
+            scan_news(news_tickers, news_sent)
+            news_last = time.time()
 
         # (3) النماذج اليومية - وقت السوق الرسمي، كل نص ساعة
         if ENABLE_DAILY and (regular_session_open() or once) \
@@ -783,8 +839,8 @@ def main():
                 scan_short(short_tickers, short_sent)
                 short_day = today
 
-        if not us_market_open() and not window:
-            log(f"[{datetime.now():%H:%M}] برا وقت الفحص، أنتظر...")
+        if not us_market_open():
+            log(f"[{datetime.now():%H:%M}] السوق مسكر (الأخبار شغالة)، أنتظر...")
 
         if once:
             break
