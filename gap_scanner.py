@@ -57,7 +57,7 @@ ENABLE_BULLISH = True            # جاب تحت + شمعة تطلع وتلمس 
 ENABLE_BEARISH = True            # جاب فوق + شمعة تنزل وتلمس أسفل الجاب
 REQUIRE_FOURTH_COLOR = False     # True = الرابعة لازم خضراء بالصعودي وحمراء بالهبوطي
                                  # False = ينبه أول ما تلمس الخط حتى لو الشمعة ما قفلت
-TOUCH_TOLERANCE = 0.001          # 0.1% : يعتبرها لمست لو قربت من حد الجاب بهالنسبة
+TOUCH_TOLERANCE = 0.0            # 0 = لازم تلمس الخط نفسه (كانت 0.1% وتنبه قبل ما توصل)
 GAP_EXTENDED = True              # شمعة الـ4 ساعات تشمل ما قبل الفتح وبعد الإغلاق (4-8، 8-12، 12-4، 4-8)
 
 USE_PRICE_FILTER = False         # True = يطبق فلتر السعر تحت مع فلتر القيمة السوقية
@@ -268,7 +268,7 @@ def get_nasdaq_midcap_plus():
 
 
 def to_4h(df):
-    """يحول شموع الساعة لشموع 4 ساعات بتوقيت نيويورك.
+    """يحول شموع النص ساعة لشموع 4 ساعات بتوقيت نيويورك.
     السوق الممتد: 4-8، 8-12، 12-16، 16-20  (نفس تريدنج فيو مع تفعيل Extended Hours)
     السوق الرسمي: 9:30 - 13:30 ثم 13:30 - 16:00"""
     df = df.dropna(subset=["Open", "High", "Low", "Close"])
@@ -330,7 +330,7 @@ def check_pattern(c):
 
 def scan_gap(tickers, already_sent):
     hits = 0
-    for t, df in download_batches(tickers, 100, period="30d", interval="1h", prepost=GAP_EXTENDED):
+    for t, df in download_batches(tickers, 100, period="20d", interval="30m", prepost=GAP_EXTENDED):
         try:
             candles = to_4h(df)
             if candles.empty:
