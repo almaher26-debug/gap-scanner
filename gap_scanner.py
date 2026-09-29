@@ -99,7 +99,10 @@ GAP_MIN_STOCK_PRICE = 10         # يتجاهل الأسهم اللي سعرها
 GAP_MIN_SIZE = 0.50              # يتجاهل الجاب اللي حجمه أقل من كذا (دولار)
 ENABLE_GAP_4H = True             # فريم 4 ساعات - ينبه عند إغلاق الشمعة
 ENABLE_GAP_1H = True             # فريم ساعة - ينبه عند إغلاق الشمعة
-GAP_SCAN_AFTER_CLOSE_MIN = (1, 5, 16)   # يفحص بعد الإغلاق بكذا دقيقة (الأولى هي الأساسية)
+ENABLE_GAP_15M = True            # فريم 15 دقيقة - ينبه عند إغلاق الشمعة
+GAP_REQUIRE_MIDDLE_COVER = True  # الشمعة الثانية لازم تغطي الجاب كامل (من قمة الثالثة لقاع الأولى)
+GAP_BASE_MIN = 15                # البيانات تنحمّل بشموع 15 دقيقة، وكل الفريمات تنبني منها
+GAP_SCAN_AFTER_CLOSE_MIN = (1, 5, 12)   # يفحص بعد الإغلاق بكذا دقيقة (الأولى هي الأساسية)
 GAP_MAX_ALERT_DELAY_MIN = 30     # ما ينبه على شمعة قفلت من أكثر من كذا دقيقة (عشان ما يرسل قديم أول ما يشتغل)
 GAP_SENT_FILE = "gap_sent.txt"   # عشان ما يعيد نفس التنبيه لو البوت أعاد التشغيل
 
@@ -139,7 +142,10 @@ HEAD_MIN_DIFF = 0.02             # الرأس لازم يزيد عن الكتف�
 PIVOT_BARS = 5                   # القمة/القاع لازم تكون أعلى/أنزل من 5 شموع قبلها و5 بعدها
 PATTERN_MIN_BARS = 10            # أقل مسافة بين القاعين/القمتين (أيام تداول)
 PATTERN_MAX_BARS = 120           # أقصى طول للنموذج (تقريباً 6 شهور)
-DAILY_LOOKBACK_DAYS = 22         # يرسل النماذج اللي اخترقت خلال آخر كذا يوم تداول (22 = شهر تقريباً)
+DAILY_LOOKBACK_DAYS = 15         # اليومي: يرسل النماذج اللي اخترقت خلال آخر كذا يوم تداول
+ENABLE_WEEKLY = True             # نفس النماذج على الفريم الأسبوعي
+WEEKLY_LOOKBACK_WEEKS = 3        # الأسبوعي: اخترق خلال آخر كذا أسبوع (3 أسابيع = 15 يوم تداول)
+DAILY_MIN_MARKET_CAP = 2_000_000_000   # النماذج (W, M, رأس وكتفين) على الأسهم اللي قيمتها 2 مليار وفوق بس
 DAILY_SENT_FILE = "daily_sent.txt"   # عشان ما يعيد نفس النموذج كل يوم
 
 # ---- (4) الشورت صفر ----
@@ -149,6 +155,20 @@ SHORT_MAX_PRICE = 6
 SHORT_MIN_AVG_VOLUME = 50_000
 SHORT_WORKERS = 3
 SHORT_SENT_FILE = "short_sent.txt"   # عشان ما يعيد نفس التنبيه لو البوت أعاد التشغيل
+
+# ---- (4ب) تجزئة عكسية + شورت صفر (أسهم البني ستوك) ----
+ENABLE_RSPLIT_SHORT = True
+RSPLIT_MAX_PRICE = 5                 # بني ستوك = سعره 5$ أو أقل
+RSPLIT_DAYS = 30                     # سوى تجزئة عكسية خلال آخر كذا يوم
+RSPLIT_WORKERS = 3
+RSPLIT_SENT_FILE = "rsplit_sent.txt"
+
+# ---- (5ب) سيولة عالية - الأسهم من 1 إلى 10 دولار ----
+ENABLE_VOLUME = True
+VOLUME_MIN_PRICE = 1
+VOLUME_MAX_PRICE = 10
+VOLUME_MIN_DAY = 1_000_000           # حجم التداول اليوم (من 4 الفجر نيويورك) مليون سهم وفوق
+VOLUME_SENT_FILE = "volume_sent.txt" # كل سهم ينبه عليه مرة وحدة باليوم
 
 # ---- (5) الزخم ----
 ENABLE_MOMENTUM = True
@@ -443,7 +463,7 @@ def only_closed(c, last_bar, now):
     if c.empty:
         return c
     starts = pd.Series(c.index, index=c.index)
-    expected = ((c["end"] - starts).dt.total_seconds() / 1800).round()
+    expected = ((c["end"] - starts).dt.total_seconds() / (GAP_BASE_MIN * 60)).round()
     done = (c["end"] <= now) & ((c["n"] >= expected) | (last_bar >= c["end"])
                                 | (now >= c["end"] + pd.Timedelta(minutes=15)))
     return c[done.values]
@@ -451,7 +471,8 @@ def only_closed(c, last_bar, now):
 
 def check_pattern(c):
     """يفحص آخر 4 شموع مقفلة بالاتجاهين. يرجع تفاصيل النموذج لو تحقق، وإلا None.
-    لون الشموع ما يهم - المهم الجاب بين ذيل الأولى والثالثة، والرابعة تقفل وراه."""
+    لون الشموع ما يهم - المهم الجاب بين ذيل الأولى والثالثة، والثانية تغطي الجاب كامل
+    (من قمة الثالثة لقاع الأولى)، والرابعة تقفل وراه."""
     if len(c) < 4:
         return None
     c1, c2, c3, c4 = (c.iloc[i] for i in (-4, -3, -2, -1))
@@ -462,14 +483,16 @@ def check_pattern(c):
     if ENABLE_BULLISH and c1["Low"] > c3["High"]:
         gap_bottom = c3["High"]   # قمة الشمعة الثالثة
         gap_top = c1["Low"]       # قاع الشمعة الأولى = الخط المطلوب
-        if c4["Open"] < gap_top and c4["Close"] > gap_top:
+        covered = c2["High"] >= gap_top and c2["Low"] <= gap_bottom   # الثانية تغطي الجاب كامل
+        if (covered or not GAP_REQUIRE_MIDDLE_COVER) and c4["Open"] < gap_top and c4["Close"] > gap_top:
             return {"side": "bull", "gap_bottom": gap_bottom, "gap_top": gap_top, **info}
 
     # 🔴 هبوطي: قمة الأولى تحت قاع الثالثة، والرابعة تفتح فوق أسفل الجاب وتقفل تحته
     if ENABLE_BEARISH and c1["High"] < c3["Low"]:
         gap_bottom = c1["High"]   # قمة الشمعة الأولى = الخط المطلوب
         gap_top = c3["Low"]       # قاع الشمعة الثالثة
-        if c4["Open"] > gap_bottom and c4["Close"] < gap_bottom:
+        covered = c2["High"] >= gap_top and c2["Low"] <= gap_bottom   # الثانية تغطي الجاب كامل
+        if (covered or not GAP_REQUIRE_MIDDLE_COVER) and c4["Open"] > gap_bottom and c4["Close"] < gap_bottom:
             return {"side": "bear", "gap_bottom": gap_bottom, "gap_top": gap_top, **info}
 
     return None
@@ -509,7 +532,7 @@ def fetch_boats(t, now):
     try:
         r = requests.get(f"https://api.tiingo.com/boats/{t.lower()}/prices",
                          params={"startDate": (now - pd.Timedelta(days=7)).strftime("%Y-%m-%d"),
-                                 "resampleFreq": "30min", "token": TIINGO_TOKEN},
+                                 "resampleFreq": f"{GAP_BASE_MIN}min", "token": TIINGO_TOKEN},
                          headers={**HEADERS, "Content-Type": "application/json"}, timeout=20)
         data = r.json()
         if not isinstance(data, list) or not data:
@@ -543,8 +566,9 @@ def scan_gap(tickers, already_sent):
     hits = 0
     now = pd.Timestamp.now(tz=NY)
     boats = load_boats(tickers, now) if GAP_OVERNIGHT else {}
-    frames = [(ENABLE_GAP_4H, 240, "4h", "فريم 4 ساعات"), (ENABLE_GAP_1H, 60, "1h", "فريم ساعة")]
-    for t, df in download_batches(tickers, 100, period="7d", interval="30m",
+    frames = [(ENABLE_GAP_4H, 240, "4h", "فريم 4 ساعات"), (ENABLE_GAP_1H, 60, "1h", "فريم ساعة"),
+              (ENABLE_GAP_15M, 15, "15m", "فريم 15 دقيقة")]
+    for t, df in download_batches(tickers, 100, period="7d", interval=f"{GAP_BASE_MIN}m",
                                   prepost=GAP_EXTENDED or GAP_OVERNIGHT):
         try:
             df = to_ny(df)[OHLC]
@@ -584,7 +608,7 @@ def scan_gap(tickers, already_sent):
 
 def gap_scan_due(now, last_run):
     """بعد إغلاق كل شمعة بدقيقة (وإعادة بعد 5 و16 دقيقة). يرجع وقت الجولة لو جا وقتها."""
-    step = "30min" if not (GAP_EXTENDED or GAP_OVERNIGHT) else "h"   # الجلسة الرسمية تقفل على :30
+    step = f"{GAP_BASE_MIN}min"          # كل ربع ساعة تقفل شمعة (15 دقيقة)
     boundary = now.floor(step)
     for off in sorted(GAP_SCAN_AFTER_CLOSE_MIN, reverse=True):
         slot = boundary + pd.Timedelta(minutes=off)
@@ -615,18 +639,18 @@ def _self_test_run(times):
     rows = []
     for s, o, h, l, c in candles:
         s = pd.Timestamp(s, tz=NY)
-        path = [o + (c - o) * k / 7 for k in range(8)]
-        for k in range(8):                                     # 8 شموع نص ساعة لكل 4 ساعات
+        path = [o + (c - o) * k / 15 for k in range(16)]
+        for k in range(16):                                    # 16 شمعة ربع ساعة لكل 4 ساعات
             op = path[k - 1] if k else o
-            rows.append((s + pd.Timedelta(minutes=30 * k), op,
-                         h if k == 3 else max(op, path[k]),
-                         l if k == 5 else min(op, path[k]), path[k]))
+            rows.append((s + pd.Timedelta(minutes=15 * k), op,
+                         h if k == 6 else max(op, path[k]),
+                         l if k == 10 else min(op, path[k]), path[k]))
     df = pd.DataFrame(rows, columns=["t"] + OHLC).set_index("t")
 
     for label, now in (("قبل إغلاق الرابعة (7:59 نيويورك)", "2026-09-28 07:59"),
                        ("بعد الإغلاق بدقيقة (8:01 نيويورك)", "2026-09-28 08:01")):
         now = pd.Timestamp(now, tz=NY)
-        part = df[df.index <= now - pd.Timedelta(minutes=30)]
+        part = df[df.index <= now - pd.Timedelta(minutes=15)]
         c = only_closed(to_frame(part, 240), part.index.max(), now)
         res = check_pattern(c)
         print(f"--- {label} ---")
@@ -1021,15 +1045,19 @@ def check_daily_patterns(df, lookback=None):
     return found
 
 
-def scan_daily(tickers, already_sent):
-    """يفحص النماذج ويجمع الجديد منها في رسايل (بدل رسالة لكل سهم)."""
-    new = {}   # الاسم -> [سطور]
-    for t, df in download_batches(tickers, 200, period="1y", interval="1d", prepost=False):
+def _scan_patterns_frame(tickers, already_sent, weekly):
+    """يفحص النماذج على فريم واحد (يومي أو أسبوعي) ويرجع {الاسم: [سطور]}."""
+    new = {}
+    if weekly:
+        kw, lookback, tag = dict(period="5y", interval="1wk"), WEEKLY_LOOKBACK_WEEKS, "W-"
+    else:
+        kw, lookback, tag = dict(period="1y", interval="1d"), DAILY_LOOKBACK_DAYS, ""
+    for t, df in download_batches(tickers, 200, prepost=False, **kw):
         try:
             last = float(df["Close"].iloc[-1])
-            for code, name, i, neck in check_daily_patterns(df):
+            for code, name, i, neck in check_daily_patterns(df, lookback):
                 day = pd.Timestamp(df.index[i]).strftime("%Y-%m-%d")
-                key = f"{t}-{code}-{day}"
+                key = f"{t}-{code}-{tag}{day}"     # اليومي نفس المفتاح القديم عشان ما يعيد
                 if key in already_sent:
                     continue
                 already_sent.add(key)
@@ -1039,18 +1067,38 @@ def scan_daily(tickers, already_sent):
                     (day, f"• {t} | الاختراق: {day} | خط العنق: {neck:.2f} | "
                           f"السعر الحين: {last:.2f} ({chg:+.1f}%)"))
         except Exception as e:
-            log(f"{t}: خطأ يومي - {e}")
+            log(f"{t}: خطأ {'أسبوعي' if weekly else 'يومي'} - {e}")
+    return new
+
+
+def scan_daily(tickers, already_sent):
+    """يفحص النماذج على اليومي والأسبوعي ويجمع الجديد منها في رسايل (بدل رسالة لكل سهم)."""
     hits = 0
-    for name, rows in new.items():
-        rows.sort(reverse=True)                   # الأحدث فوق
-        hits += len(rows)
-        for i in range(0, len(rows), 25):         # كل رسالة 25 سهم بالكثير
-            part = rows[i:i + 25]
-            send_telegram(f"{name} - فريم يومي (آخر {DAILY_LOOKBACK_DAYS} يوم تداول)\n"
-                          + "\n".join(r[1] for r in part))
-            time.sleep(3)
-    free_memory()
-    log(f"[{datetime.now():%H:%M}] اليومي: خلص الفحص - {hits} تنبيه جديد")
+    frames = [(False, f"فريم يومي (آخر {DAILY_LOOKBACK_DAYS} يوم تداول)")]
+    if ENABLE_WEEKLY:
+        frames.append((True, f"فريم أسبوعي (آخر {WEEKLY_LOOKBACK_WEEKS} أسابيع)"))
+    for weekly, label in frames:
+        new = _scan_patterns_frame(tickers, already_sent, weekly)
+        for name, rows in new.items():
+            rows.sort(reverse=True)                   # الأحدث فوق
+            hits += len(rows)
+            for i in range(0, len(rows), 25):         # كل رسالة 25 سهم بالكثير
+                part = rows[i:i + 25]
+                send_telegram(f"{name} - {label}\n" + "\n".join(r[1] for r in part))
+                time.sleep(3)
+        free_memory()
+    log(f"[{datetime.now():%H:%M}] النماذج (يومي + أسبوعي): خلص الفحص - {hits} تنبيه جديد")
+
+
+def nasdaq_above_cap(min_cap):
+    """رموز ناسداك اللي قيمتها السوقية فوق الحد (نفس مصدر الجاب)."""
+    global MIN_MARKET_CAP
+    old = MIN_MARKET_CAP
+    MIN_MARKET_CAP = min_cap
+    try:
+        return set(get_nasdaq_midcap_plus())
+    finally:
+        MIN_MARKET_CAP = old
 
 
 def regular_session_open():
@@ -1159,15 +1207,25 @@ def _fmt_shares(x):
     return f"{x / 1e6:.2f} مليون" if x >= 1e6 else f"{x / 1e3:.0f} ألف"
 
 
-def scan_momentum(tickers, last_alert):
+def scan_momentum(tickers, last_alert, volume_sent=None):
     hits = 0
+    vol_hits = []   # (الحجم، السطر) للسيولة العالية
     now = pd.Timestamp.now(tz=NY)
     since = now - pd.Timedelta(minutes=MOMENTUM_WINDOW_MIN)
     for t, df in download_batches(tickers, 200, period="1d", interval="5m", prepost=True):
         try:
             df = to_ny(df)
             price = float(df["Close"].iloc[-1])
-            if not (MOMENTUM_MIN_PRICE <= price <= MOMENTUM_MAX_PRICE):
+            # (5ب) سيولة عالية: السعر 1-10$ وحجم اليوم مليون وفوق - مرة وحدة باليوم
+            if ENABLE_VOLUME and volume_sent is not None \
+                    and VOLUME_MIN_PRICE <= price <= VOLUME_MAX_PRICE:
+                today_vol = float(df[df.index.date == now.date()]["Volume"].sum())
+                vkey = f"{t}-{now.date()}"
+                if today_vol >= VOLUME_MIN_DAY and vkey not in volume_sent:
+                    volume_sent.add(vkey)
+                    _append_line(VOLUME_SENT_FILE, vkey)
+                    vol_hits.append((today_vol, f"• {t} | السعر: {price:.2f} | الحجم: {_fmt_shares(today_vol)}"))
+            if not ENABLE_MOMENTUM or not (MOMENTUM_MIN_PRICE <= price <= MOMENTUM_MAX_PRICE):
                 continue
             recent = df[df.index >= since]
             vol = float(recent["Volume"].sum()) if not recent.empty else 0.0
@@ -1197,8 +1255,62 @@ def scan_momentum(tickers, last_alert):
             )
         except Exception as e:
             log(f"{t}: خطأ زخم - {e}")
+    if vol_hits:
+        vol_hits.sort(reverse=True)                   # الأعلى حجم فوق
+        for i in range(0, len(vol_hits), 30):
+            send_telegram(f"💧 سيولة عالية - أسهم {VOLUME_MIN_PRICE}-{VOLUME_MAX_PRICE}$ "
+                          f"حجمها اليوم {_fmt_shares(VOLUME_MIN_DAY)} سهم وفوق\n"
+                          + "\n".join(r[1] for r in vol_hits[i:i + 30])
+                          + f"\nالوقت: {now.tz_convert(LOCAL_TZ):%H:%M} (توقيتك)")
+            time.sleep(2)
     free_memory()
-    log(f"[{datetime.now():%H:%M}] الزخم: خلص الفحص - {hits} تنبيه جديد")
+    log(f"[{datetime.now():%H:%M}] الزخم: خلص الفحص - {hits} تنبيه جديد"
+        + (f" | السيولة: {len(vol_hits)} سهم" if ENABLE_VOLUME else ""))
+
+
+# ================== (4ب) تجزئة عكسية + شورت صفر ==================
+def scan_rsplit_short(tickers, already_sent):
+    """أسهم البني ستوك اللي سوت تجزئة عكسية خلال آخر RSPLIT_DAYS يوم، والشورت عندها صفر."""
+    since = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=RSPLIT_DAYS)
+    cands = {}   # الرمز -> (التاريخ، النسبة، آخر سعر)
+    for t, df in download_batches(tickers, UNIVERSE_BATCH, period="3mo", interval="1d",
+                                  prepost=False, actions=True):
+        try:
+            if "Stock Splits" not in df:
+                continue
+            sp = df["Stock Splits"].fillna(0)
+            idx = sp.index if sp.index.tz is not None else sp.index.tz_localize("UTC")
+            sp.index = idx
+            rev = sp[(sp > 0) & (sp < 1) & (sp.index >= since)]
+            if not rev.empty:
+                cands[t] = (rev.index[-1], float(rev.iloc[-1]), float(df["Close"].iloc[-1]))
+        except Exception:
+            continue
+    log(f"التجزئة العكسية: {len(cands)} سهم سوى تجزئة عكسية آخر {RSPLIT_DAYS} يوم، أشيك على الشورت ...")
+    hits = 0
+    if cands:
+        with ThreadPoolExecutor(max_workers=RSPLIT_WORKERS) as pool:
+            for t, short, prior, date, price in pool.map(fetch_short, list(cands)):
+                if short is None or short != 0:
+                    continue                      # لازم الشورت صفر بالضبط (مو ناقص بيانات)
+                sdate, ratio, last = cands[t]
+                key = f"{t}-{sdate:%Y-%m-%d}"
+                if key in already_sent:
+                    continue
+                already_sent.add(key)
+                _append_line(RSPLIT_SENT_FILE, key)
+                hits += 1
+                d = pd.Timestamp(int(date), unit="s").strftime("%Y-%m-%d") if date else "غير معروف"
+                send_telegram(
+                    f"🔻 تجزئة عكسية + شورت صفر\n"
+                    f"السهم: {t}\n"
+                    f"السعر: {price or last:.2f}\n"
+                    f"التجزئة العكسية: {sdate:%Y-%m-%d} (1 مقابل {1 / ratio:g})\n"
+                    f"الشورت الحالي: 0\n"
+                    f"تاريخ بيانات الشورت: {d}"
+                )
+    free_memory()
+    log(f"[{datetime.now():%H:%M}] التجزئة العكسية: خلص الفحص - {hits} تنبيه جديد")
 
 
 # ================== التشغيل ==================
@@ -1225,6 +1337,9 @@ def main():
     momentum_alerts = {}
     short_day = None
     short_sent = _load_set(SHORT_SENT_FILE)
+    rsplit_day = None
+    rsplit_sent = _load_set(RSPLIT_SENT_FILE)
+    volume_sent = _load_set(VOLUME_SENT_FILE)
 
     while True:
         discover_groups()
@@ -1256,21 +1371,35 @@ def main():
             if daily_day != today or not daily_tickers:
                 daily_tickers = build_universe("اليومي", DAILY_MIN_PRICE, 100_000,
                                                DAILY_MIN_AVG_VOLUME, include_nyse=False)
+                big = nasdaq_above_cap(DAILY_MIN_MARKET_CAP)
+                daily_tickers = [t for t in daily_tickers if t in big]
+                log(f"النماذج: {len(daily_tickers)} سهم قيمتها السوقية "
+                    f"{DAILY_MIN_MARKET_CAP / 1e9:.0f} مليار وفوق")
                 daily_day = today
             scan_daily(daily_tickers, daily_sent)
             daily_last = time.time()
 
         # (5) الزخم - كل 5 دقايق وقت التداول (مع ما قبل الفتح وبعد الإغلاق)
-        if ENABLE_MOMENTUM and (momentum_hours() or once) \
+        if (ENABLE_MOMENTUM or ENABLE_VOLUME) and (momentum_hours() or once) \
                 and time.time() - momentum_last >= MOMENTUM_EVERY_MIN * 60:
             today = pd.Timestamp.now(tz=NY).date()
             if momentum_day != today or not momentum_tickers:
                 # نطاق أوسع شوي من 1-5$ لأن السعر يتحرك خلال اليوم، والفلتر الدقيق وقت الفحص
-                momentum_tickers = build_universe("الزخم", MOMENTUM_MIN_PRICE * 0.5,
-                                                  MOMENTUM_MAX_PRICE * 1.5, 0, include_nyse=False)
+                top = max(MOMENTUM_MAX_PRICE, VOLUME_MAX_PRICE if ENABLE_VOLUME else 0)
+                momentum_tickers = build_universe("الزخم والسيولة", MOMENTUM_MIN_PRICE * 0.5,
+                                                  top * 1.5, 0, include_nyse=False)
                 momentum_day = today
-            scan_momentum(momentum_tickers, momentum_alerts)
+            scan_momentum(momentum_tickers, momentum_alerts if ENABLE_MOMENTUM else {}, volume_sent)
             momentum_last = time.time()
+
+        # (4ب) تجزئة عكسية + شورت صفر - مرة باليوم
+        if ENABLE_RSPLIT_SHORT:
+            today = pd.Timestamp.now(tz=LOCAL_TZ).date()
+            if rsplit_day != today:
+                rs_tickers = build_universe("التجزئة العكسية", 0.01, RSPLIT_MAX_PRICE,
+                                            0, include_nyse=False)
+                scan_rsplit_short(rs_tickers, rsplit_sent)
+                rsplit_day = today
 
         # (4) الشورت صفر - مرة باليوم
         if ENABLE_SHORT:
