@@ -49,7 +49,9 @@
   python gap_scanner.py --test   # يجرب نموذج الجاب على مثال NVDA (بدون نت)
 """
 
+import gc
 import io
+import logging
 import os
 import sys
 import time
@@ -105,7 +107,10 @@ NEWS_MIN_AVG_VOLUME = 100_000    # يشيل الأسهم الميتة اللي �
 NEWS_INCLUDE_NYSE = False        # False = ناسداك بس
 NEWS_EVERY_MIN = 10              # كل كم دقيقة يفحص الأخبار (الأسهم كثيرة، أقل من كذا ياهو ممكن يحظر)
 NEWS_MAX_AGE_MIN = 90            # يتجاهل الأخبار الأقدم من كذا (عشان ما يرسل أخبار قديمة أول ما يشتغل)
-NEWS_WORKERS = 8                 # عدد الطلبات المتوازية على ياهو
+NEWS_WORKERS = 3                 # عدد الطلبات المتوازية على ياهو (كثرتها تخلي ياهو يحظر)
+NEWS_CHUNK = 100                 # يفحص الأسهم على دفعات، وبين كل دفعة يشيك هل ياهو حاظره
+NEWS_CHUNK_PAUSE_SEC = 2         # استراحة بين الدفعات
+NEWS_MAX_BACKOFF_MIN = 60        # لو ياهو حظر، يوقف ويرجع بعد وقت يزيد لين هالحد
 NEWS_SENT_FILE = "news_sent.txt" # عشان ما يعيد نفس الخبر لو البوت أعاد التشغيل
 NEWS_ONLY_POSITIVE = True        # True = يرسل الأخبار الإيجابية بس
 NEWS_TRANSLATE = True            # True = يترجم عنوان الخبر للعربي
@@ -132,8 +137,10 @@ ENABLE_SHORT = True
 SHORT_MIN_PRICE = 1
 SHORT_MAX_PRICE = 6
 SHORT_MIN_AVG_VOLUME = 50_000
-SHORT_WORKERS = 6
+SHORT_WORKERS = 3
 SHORT_SENT_FILE = "short_sent.txt"   # عشان ما يعيد نفس التنبيه لو البوت أعاد التشغيل
+SENT_KEEP_LINES = 20000             # ملفات "المرسل" تنقص لآخر كذا سطر عشان ما تكبر للأبد
+UNIVERSE_BATCH = 200                # حجم دفعة التحميل لما يفلتر كل الأسهم (أصغر = ذاكرة أقل)
 # ===============================================
 
 HEADERS = {"User-Agent": "Mozilla/5.0"}
@@ -152,6 +159,31 @@ BIIB CDW MDB GFS WBD ARM DASH PLTR APP MSTR AZN LIN TRI SHOP AXON
 # ================== أدوات عامة ==================
 def log(*a):
     print(*a, flush=True)
+
+
+class _YFNoise(logging.Filter):
+    """يخفي رسائل ياهو المزعجة (مئات الأسطر كل فحص) ويعدّها بدالها."""
+    news_fail = 0
+    other = 0
+
+    def filter(self, rec):
+        try:
+            msg = rec.getMessage()
+        except Exception:
+            msg = ""
+        if "Failed to retrieve the news" in msg:
+            _YFNoise.news_fail += 1
+        else:
+            _YFNoise.other += 1
+        return False
+
+
+logging.getLogger("yfinance").addFilter(_YFNoise())
+
+
+def free_memory():
+    """يرجّع الذاكرة بعد كل فحص كبير."""
+    gc.collect()
 
 
 TG_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
@@ -300,6 +332,8 @@ def download_batches(tickers, batch_size, **kw):
                     yield t, df
             except Exception:
                 continue
+        del data
+        free_memory()
         time.sleep(1)
 
 
@@ -521,6 +555,7 @@ def scan_gap(tickers, already_sent):
                 send_telegram(_gap_message(t, res, label))
         except Exception as e:
             log(f"{t}: خطأ - {e}")
+    free_memory()
     log(f"[{datetime.now():%H:%M}] الجاب: خلص الفحص - {hits} تنبيه جديد")
 
 
@@ -610,20 +645,35 @@ def get_all_us_symbols(include_nyse=True):
     return sorted(s for s in symbols if s.isalpha() and len(s) <= 5)
 
 
-def build_universe(label, min_price, max_price, min_vol, include_nyse):
-    """مرة باليوم: الأسهم اللي آخر سعر لها داخل النطاق وعليها تداول."""
+_universe_cache = {}   # (اليوم، مع نيويورك؟) -> {الرمز: (آخر سعر، متوسط الحجم)}
+
+
+def _universe_stats(include_nyse):
+    """آخر سعر ومتوسط الحجم لكل الأسهم. ينحمّل مرة وحدة باليوم ويستخدمه
+    الأخبار واليومي والشورت كلهم (بدل ما كل واحد يحمّل 3000 سهم لحاله)."""
+    key = (pd.Timestamp.now(tz=NY).date(), bool(include_nyse))
+    if key in _universe_cache:
+        return _universe_cache[key]
+    _universe_cache.clear()
     all_syms = get_all_us_symbols(include_nyse)
-    log(f"{label}: أفحص {len(all_syms)} سهم عشان أطلع اللي سعرها {min_price}-{max_price}$ ...")
-    keep = []
-    for t, df in download_batches(all_syms, 400, period="5d", interval="1d", prepost=False):
+    log(f"الفلتر: أحمّل أسعار {len(all_syms)} سهم (مرة وحدة باليوم) ...")
+    stats = {}
+    for t, df in download_batches(all_syms, UNIVERSE_BATCH, period="5d", interval="1d", prepost=False):
         try:
-            last = float(df["Close"].iloc[-1])
-            avg_vol = float(df["Volume"].mean())
-            if min_price <= last <= max_price and avg_vol >= min_vol:
-                keep.append(t)
+            stats[t] = (float(df["Close"].iloc[-1]), float(df["Volume"].mean()))
         except Exception:
             continue
-    log(f"{label}: {len(keep)} سهم داخل الفلتر")
+    _universe_cache[key] = stats
+    free_memory()
+    return stats
+
+
+def build_universe(label, min_price, max_price, min_vol, include_nyse):
+    """الأسهم اللي آخر سعر لها داخل النطاق وعليها تداول."""
+    stats = _universe_stats(include_nyse)
+    keep = [t for t, (last, avg_vol) in stats.items()
+            if min_price <= last <= max_price and avg_vol >= min_vol]
+    log(f"{label}: {len(keep)} سهم سعرها {min_price}-{max_price}$ وعليها تداول")
     return keep
 
 
@@ -749,36 +799,64 @@ def fetch_news(t):
         return t, []
 
 
+_news_state = {"cursor": 0, "backoff": 0}   # وين وقف الفحص لو ياهو حظر، وكم يستنى
+
+
 def scan_news(tickers, already_sent):
-    hits = 0
+    hits, done, blocked = 0, 0, False
+    if not tickers:
+        return
     now = pd.Timestamp.now(tz="UTC")
     oldest = now - pd.Timedelta(minutes=NEWS_MAX_AGE_MIN)
+    start = _news_state["cursor"] % len(tickers)
+    order = tickers[start:] + tickers[:start]     # يكمل من حيث وقف آخر مرة
+    fails_total = _YFNoise.news_fail
     with ThreadPoolExecutor(max_workers=NEWS_WORKERS) as pool:
-        for t, items in pool.map(fetch_news, tickers):
-            for n in items:
-                if not n["title"] or n["time"] is None or n["time"] < oldest:
-                    continue
-                key = f"{t}-{n['id']}"
-                if key in already_sent:
-                    continue
-                already_sent.add(key)
-                _append_line(NEWS_SENT_FILE, key)
-                kind, category = news_classify(n["title"])
-                if NEWS_ONLY_POSITIVE and kind != "positive":
-                    continue                  # سلبي أو محايد = نتجاهله
-                hits += 1
-                title = (translate_ar(n["title"]) if NEWS_TRANSLATE else None) or n["title"]
-                label = {"positive": "🟢 إيجابي", "negative": "🔴 سلبي"}.get(kind, "⚪ محايد")
-                local_time = n["time"].tz_convert(LOCAL_TZ)
-                send_telegram(
-                    f"📰 خبر {label}" + (f" - {category}" if category else "") + "\n"
-                    f"السهم: {t}\n"
-                    f"الخبر: {title}\n"
-                    f"المصدر: {n['source']}\n"
-                    f"الوقت: {local_time:%H:%M} (توقيتك)\n"
-                    f"{n['link']}"
-                )
-    log(f"[{datetime.now():%H:%M}] الأخبار: خلص الفحص - {hits} خبر جديد")
+        for i in range(0, len(order), NEWS_CHUNK):
+            chunk = order[i:i + NEWS_CHUNK]
+            fails_before = _YFNoise.news_fail
+            for t, items in pool.map(fetch_news, chunk):
+                for n in items:
+                    if not n["title"] or n["time"] is None or n["time"] < oldest:
+                        continue
+                    key = f"{t}-{n['id']}"
+                    if key in already_sent:
+                        continue
+                    already_sent.add(key)
+                    _append_line(NEWS_SENT_FILE, key)
+                    kind, category = news_classify(n["title"])
+                    if NEWS_ONLY_POSITIVE and kind != "positive":
+                        continue                  # سلبي أو محايد = نتجاهله
+                    hits += 1
+                    title = (translate_ar(n["title"]) if NEWS_TRANSLATE else None) or n["title"]
+                    label = {"positive": "🟢 إيجابي", "negative": "🔴 سلبي"}.get(kind, "⚪ محايد")
+                    local_time = n["time"].tz_convert(LOCAL_TZ)
+                    send_telegram(
+                        f"📰 خبر {label}" + (f" - {category}" if category else "") + "\n"
+                        f"السهم: {t}\n"
+                        f"الخبر: {title}\n"
+                        f"المصدر: {n['source']}\n"
+                        f"الوقت: {local_time:%H:%M} (توقيتك)\n"
+                        f"{n['link']}"
+                    )
+            if _YFNoise.news_fail - fails_before > len(chunk) // 2:
+                blocked = True                    # أكثر من نص الدفعة فشل = ياهو حاظرنا
+                break
+            done += len(chunk)
+            time.sleep(NEWS_CHUNK_PAUSE_SEC)
+    failed = _YFNoise.news_fail - fails_total
+    if blocked:
+        _news_state["cursor"] = (start + done) % len(tickers)
+        _news_state["backoff"] = min(max(_news_state["backoff"] * 2, NEWS_EVERY_MIN),
+                                     NEWS_MAX_BACKOFF_MIN)
+        log(f"[{datetime.now():%H:%M}] الأخبار: ياهو حاظر مؤقتاً - فحصت {done} من {len(tickers)}، "
+            f"أرجع بعد {NEWS_EVERY_MIN + _news_state['backoff']} دقيقة وأكمل من حيث وقفت")
+    else:
+        _news_state["cursor"] = 0
+        _news_state["backoff"] = 0
+    free_memory()
+    log(f"[{datetime.now():%H:%M}] الأخبار: خلص الفحص - {hits} خبر جديد"
+        + (f" ({failed} سهم ما رجع أخباره)" if failed else ""))
 
 
 # ================== (3) نماذج الفريم اليومي ==================
@@ -913,6 +991,7 @@ def scan_daily(tickers, already_sent):
                 send_telegram(f"{title}\nالسهم: {t}\nالسعر: {float(df['Close'].iloc[-1]):.2f}\n{details}")
         except Exception as e:
             log(f"{t}: خطأ يومي - {e}")
+    free_memory()
     log(f"[{datetime.now():%H:%M}] اليومي: خلص الفحص - {hits} تنبيه جديد")
 
 
@@ -925,11 +1004,20 @@ def regular_session_open():
 
 # ================== (4) الشورت صفر ==================
 def _load_set(path):
+    """يقرا ملف المرسل، ويخليه آخر SENT_KEEP_LINES سطر بس عشان ما يكبر للأبد."""
     try:
         with open(path, encoding="utf-8") as f:
-            return set(line.strip() for line in f if line.strip())
+            lines = [line.strip() for line in f if line.strip()]
     except FileNotFoundError:
         return set()
+    if len(lines) > SENT_KEEP_LINES:
+        lines = lines[-SENT_KEEP_LINES:]
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+        except Exception:
+            pass
+    return set(lines)
 
 
 def _append_line(path, line):
@@ -973,6 +1061,7 @@ def scan_short(tickers, already_sent):
                 f"الشورت الشهر اللي قبله: {prior_txt}\n"
                 f"تاريخ البيانات: {d}"
             )
+    free_memory()
     log(f"[{datetime.now():%H:%M}] الشورت: خلص الفحص - {hits} تنبيه جديد")
 
 
@@ -1014,7 +1103,7 @@ def main():
             scan_gap(gap_tickers, gap_sent)
 
         # (2) الأخبار - 24 ساعة
-        if ENABLE_NEWS and time.time() - news_last >= NEWS_EVERY_MIN * 60:
+        if ENABLE_NEWS and time.time() - news_last >= (NEWS_EVERY_MIN + _news_state["backoff"]) * 60:
             today = pd.Timestamp.now(tz=NY).date()
             if news_day != today or not news_tickers:
                 news_tickers = build_news_universe()
