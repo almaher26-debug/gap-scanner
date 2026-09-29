@@ -1,1 +1,1 @@
-worker: python -u gap_scanner.py
+worker: python stock_info_bot.py
