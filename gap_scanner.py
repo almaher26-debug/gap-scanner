@@ -181,6 +181,12 @@ MOMENTUM_MAX_FLOAT = 8_000_000       # إلى كذا
 MOMENTUM_SEND_UNKNOWN_FLOAT = True   # True = لو ياهو ما عنده الفري فلوت يرسله ويكتب "غير معروف"
 MOMENTUM_EVERY_MIN = 5               # كل كم دقيقة يفحص
 MOMENTUM_REALERT_MIN = 120           # ما يعيد تنبيه نفس السهم قبل كذا دقيقة
+# شروط استراتيجية الزخم القوية
+MOMENTUM_MIN_MOVE_PCT = 3.0          # صعود آخر 15 دقيقة 3% على الأقل
+MOMENTUM_MIN_RVOL = 2.0              # حجم آخر 15 دقيقة >= ضعفي الـ15 دقيقة السابقة
+MOMENTUM_BREAKOUT_LOOKBACK = 12      # اختراق أعلى سعر آخر 12 شمعة 5 دقائق (ساعة)
+MOMENTUM_BREAKOUT_BUFFER_PCT = 0.0   # يكفي تجاوز القمة السابقة
+MOMENTUM_MIN_CLOSE_POS = 0.70        # الإغلاق في أعلى 30% من مدى شمعة التأكيد
 
 SENT_KEEP_LINES = 20000             # ملفات "المرسل" تنقص لآخر كذا سطر عشان ما تكبر للأبد
 UNIVERSE_BATCH = 200                # حجم دفعة التحميل لما يفلتر كل الأسهم (أصغر = ذاكرة أقل)
@@ -1208,15 +1214,21 @@ def _fmt_shares(x):
 
 
 def scan_momentum(tickers, last_alert, volume_sent=None):
+    """استراتيجية زخم: سيولة + تسارع + RVOL + اختراق + إغلاق قوي + فلتر Float."""
     hits = 0
-    vol_hits = []   # (الحجم، السطر) للسيولة العالية
+    vol_hits = []
     now = pd.Timestamp.now(tz=NY)
     since = now - pd.Timedelta(minutes=MOMENTUM_WINDOW_MIN)
+
     for t, df in download_batches(tickers, 200, period="1d", interval="5m", prepost=True):
         try:
-            df = to_ny(df)
+            df = to_ny(df).dropna(subset=["Open", "High", "Low", "Close", "Volume"])
+            if len(df) < max(MOMENTUM_BREAKOUT_LOOKBACK + 1, 7):
+                continue
+
             price = float(df["Close"].iloc[-1])
-            # (5ب) سيولة عالية: السعر 1-10$ وحجم اليوم مليون وفوق - مرة وحدة باليوم
+
+            # (5ب) سيولة عالية - يبقى كما هو
             if ENABLE_VOLUME and volume_sent is not None \
                     and VOLUME_MIN_PRICE <= price <= VOLUME_MAX_PRICE:
                 today_vol = float(df[df.index.date == now.date()]["Volume"].sum())
@@ -1225,44 +1237,93 @@ def scan_momentum(tickers, last_alert, volume_sent=None):
                     volume_sent.add(vkey)
                     _append_line(VOLUME_SENT_FILE, vkey)
                     vol_hits.append((today_vol, f"• {t} | السعر: {price:.2f} | الحجم: {_fmt_shares(today_vol)}"))
+
             if not ENABLE_MOMENTUM or not (MOMENTUM_MIN_PRICE <= price <= MOMENTUM_MAX_PRICE):
                 continue
+
+            # 1) حجم آخر 30 دقيقة
             recent = df[df.index >= since]
             vol = float(recent["Volume"].sum()) if not recent.empty else 0.0
             if vol < MOMENTUM_MIN_VOLUME:
                 continue
+
+            # قيمة التداول بالدولار آخر 30 دقيقة = مجموع (السعر × الحجم) لكل شمعة
+            dollar_volume = float((recent["Close"] * recent["Volume"]).sum()) if not recent.empty else 0.0
+            if dollar_volume < MOMENTUM_MIN_DOLLAR_VOLUME:
+                continue
+
+            # 2) تسارع سعري آخر 15 دقيقة
+            base_price = float(df["Close"].iloc[-4])
+            move_pct = (price / base_price - 1.0) * 100 if base_price > 0 else 0.0
+            if move_pct < MOMENTUM_MIN_MOVE_PCT:
+                continue
+
+            # 3) Relative Volume: آخر 15 دقيقة مقابل الـ15 دقيقة السابقة
+            vol_now_15 = float(df["Volume"].iloc[-3:].sum())
+            vol_prev_15 = float(df["Volume"].iloc[-6:-3].sum())
+            rvol = vol_now_15 / max(vol_prev_15, 1.0)
+            if rvol < MOMENTUM_MIN_RVOL:
+                continue
+
+            # 4) اختراق أعلى قمة سابقة خلال الساعة الماضية
+            prior = df.iloc[-(MOMENTUM_BREAKOUT_LOOKBACK + 1):-1]
+            prior_high = float(prior["High"].max())
+            breakout_level = prior_high * (1 + MOMENTUM_BREAKOUT_BUFFER_PCT / 100.0)
+            if price <= breakout_level:
+                continue
+
+            # 5) شمعة التأكيد تقفل قرب الهاي
+            last = df.iloc[-1]
+            candle_range = float(last["High"] - last["Low"])
+            close_pos = ((price - float(last["Low"])) / candle_range) if candle_range > 0 else 0.0
+            if close_pos < MOMENTUM_MIN_CLOSE_POS:
+                continue
+
+            # 6) منع تكرار التنبيه
             prev_alert = last_alert.get(t)
             if prev_alert is not None and now - prev_alert < pd.Timedelta(minutes=MOMENTUM_REALERT_MIN):
                 continue
+
+            # 7) Float
             fl, prev_close = fetch_float(t)
             if fl is None:
                 if not MOMENTUM_SEND_UNKNOWN_FLOAT:
                     continue
             elif not (MOMENTUM_MIN_FLOAT <= fl <= MOMENTUM_MAX_FLOAT):
                 continue
+
             last_alert[t] = now
             hits += 1
             day_vol = float(df[df.index.date == now.date()]["Volume"].sum())
-            chg = f" ({(price / prev_close - 1) * 100:+.1f}% عن إغلاق أمس)" if prev_close else ""
+            day_chg = ((price / prev_close - 1) * 100) if prev_close else None
+            chg = f" ({day_chg:+.1f}% عن إغلاق أمس)" if day_chg is not None else ""
+
             send_telegram(
-                f"🚀 زخم - حجم تداول مفاجئ\n"
+                f"🚀 زخم قوي - اختراق مؤكد\n"
                 f"السهم: {t}\n"
                 f"السعر: {price:.2f}{chg}\n"
+                f"تسارع 15 دقيقة: +{move_pct:.1f}%\n"
+                f"RVOL 15 دقيقة: {rvol:.1f}x\n"
+                f"اختراق قمة الساعة: {prior_high:.2f}\n"
                 f"الحجم آخر نص ساعة: {_fmt_shares(vol)} سهم\n"
+                f"قيمة التداول آخر نص ساعة: ${dollar_volume:,.0f}\n"
                 f"الحجم اليوم كله: {_fmt_shares(day_vol)} سهم\n"
                 f"الفري فلوت: {_fmt_shares(fl)}\n"
                 f"الوقت: {now.tz_convert(LOCAL_TZ):%H:%M} (توقيتك)"
             )
+
         except Exception as e:
             log(f"{t}: خطأ زخم - {e}")
+
     if vol_hits:
-        vol_hits.sort(reverse=True)                   # الأعلى حجم فوق
+        vol_hits.sort(reverse=True)
         for i in range(0, len(vol_hits), 30):
             send_telegram(f"💧 سيولة عالية - أسهم {VOLUME_MIN_PRICE}-{VOLUME_MAX_PRICE}$ "
                           f"حجمها اليوم {_fmt_shares(VOLUME_MIN_DAY)} سهم وفوق\n"
                           + "\n".join(r[1] for r in vol_hits[i:i + 30])
                           + f"\nالوقت: {now.tz_convert(LOCAL_TZ):%H:%M} (توقيتك)")
             time.sleep(2)
+
     free_memory()
     log(f"[{datetime.now():%H:%M}] الزخم: خلص الفحص - {hits} تنبيه جديد"
         + (f" | السيولة: {len(vol_hits)} سهم" if ENABLE_VOLUME else ""))
