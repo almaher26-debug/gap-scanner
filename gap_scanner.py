@@ -12,12 +12,17 @@
       - الشمعة الرابعة تجي من تحت وتطلع فوق أعلى الجاب
     🔴 هبوطي (جاب فوق): نفس الشي بالعكس، والشمعة الرابعة تنزل تحت أسفل الجاب
 
-    ⏱️ متى يجي التنبيه:
-      - فريم 4 ساعات: الشمعة الرابعة طلعت فوق أعلى الجاب وثابتة فوقه الحين،
-        وباقي على إغلاق الشمعة ساعتين أو أقل
-      - فريم ساعة: بعد ما الشمعة الرابعة تقفل فعلياً فوق أعلى الجاب (إغلاق تام)
+    ⏱️ متى يجي التنبيه (الفريمين نفس الشي):
+      - أول ما تقفل الشمعة الرابعة فوق أعلى الجاب (صعودي) أو تحت أسفله (هبوطي)
+      - البوت يفحص بعد إغلاق كل شمعة بدقيقة، ويعيد الفحص بعد 5 و16 دقيقة لو البيانات تأخرت
 
-    فلتر: السهم سعره فوق 10$ ، وحجم الجاب (الفرق بين الحدين) أكبر من 0.50$
+    🕐 تقسيم الشموع نفس تريدنج فيو:
+      - 24 ساعة (مع الجلسة الليلية): شموع الـ4 ساعات تبدأ 8 بالليل نيويورك
+        (8-12، 12-4، 4-8، 8-12، 12-4، 4-8) = بتوقيتك 3، 7، 11، 15، 19، 23
+      - ⚠️ ياهو ما عنده بيانات الجلسة الليلية (8 بالليل - 4 الفجر)، فعشان الـ24 ساعة
+        تحتاج مفتاح Tiingo (باقة Power + إضافة BOATS). بدونه يشتغل على 4 الفجر - 8 بالليل بس
+
+    فلتر: السهم سعره فوق 10$ ، وحجم الجاب (الفرق بين الحدين) 0.50$ أو أكثر
 
 (2) الأخبار - 24 ساعة - الإيجابية بس
     - كل أسهم ناسداك (عليها تداول)
@@ -41,6 +46,7 @@
   pip install yfinance pandas requests lxml
   python gap_scanner.py          # يشتغل باستمرار ويفحص كل 5 دقايق
   python gap_scanner.py --once   # فحص مرة وحدة بس
+  python gap_scanner.py --test   # يجرب نموذج الجاب على مثال NVDA (بدون نت)
 """
 
 import io
@@ -62,25 +68,29 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "ضع_رقم_المحاد�
 AUTO_ADD_GROUPS = True
 CHATS_FILE = "chats.txt"     # يحفظ فيه أرقام القروبات اللي لقطها
 
-CHECK_EVERY_MIN = 5          # كل كم دقيقة يفحص
+LOOP_SLEEP_SEC = 20          # كل كم ثانية يشيك هل جا وقت فحص
 NY = "America/New_York"
 LOCAL_TZ = "Asia/Riyadh"     # توقيتك المحلي
 
 # ---- (1) نموذج الجاب ----
 ENABLE_GAP = True
 MIN_MARKET_CAP = 2_000_000_000   # 2 مليار دولار = ميد كاب وفوق
-ENABLE_BULLISH = True            # جاب تحت + شمعة تطلع وتلمس أعلى الجاب
-ENABLE_BEARISH = True            # جاب فوق + شمعة تنزل وتلمس أسفل الجاب
-REQUIRE_FOURTH_COLOR = False     # True = الرابعة لازم خضراء بالصعودي وحمراء بالهبوطي
-                                 # False = ينبه أول ما تلمس الخط حتى لو الشمعة ما قفلت
-TOUCH_TOLERANCE = 0.0            # 0 = لازم تلمس الخط نفسه (كانت 0.1% وتنبه قبل ما توصل)
-GAP_EXTENDED = True              # شمعة الـ4 ساعات تشمل ما قبل الفتح وبعد الإغلاق (4-8، 8-12، 12-4، 4-8)
+ENABLE_BULLISH = True            # جاب تحت + الرابعة تقفل فوق أعلى الجاب
+ENABLE_BEARISH = True            # جاب فوق + الرابعة تقفل تحت أسفل الجاب
+GAP_EXTENDED = True              # يشمل ما قبل الفتح وبعد الإغلاق (4 الفجر - 8 بالليل نيويورك)
+
+# الجلسة الليلية (8 بالليل - 4 الفجر نيويورك) = إعداد الـ24 ساعة في تريدنج فيو
+# ياهو ما يعطيها، فتجي من Tiingo: حط المفتاح كمتغير TIINGO_TOKEN على Railway
+TIINGO_TOKEN = os.environ.get("TIINGO_TOKEN", "")
+GAP_OVERNIGHT = bool(TIINGO_TOKEN)   # يتفعل لحاله لو حطيت المفتاح
+TIINGO_WORKERS = 8
 
 GAP_MIN_STOCK_PRICE = 10         # يتجاهل الأسهم اللي سعرها أقل من كذا
 GAP_MIN_SIZE = 0.50              # يتجاهل الجاب اللي حجمه أقل من كذا (دولار)
-ENABLE_GAP_4H = True             # فريم 4 ساعات
-GAP_4H_ALERT_LAST_MIN = 120      # ينبه بس لما يكون باقي على إغلاق شمعة الـ4 ساعات كذا دقيقة أو أقل
-ENABLE_GAP_1H = True             # فريم ساعة (ينبه بعد إغلاق الشمعة فوق/تحت الجاب)
+ENABLE_GAP_4H = True             # فريم 4 ساعات - ينبه عند إغلاق الشمعة
+ENABLE_GAP_1H = True             # فريم ساعة - ينبه عند إغلاق الشمعة
+GAP_SCAN_AFTER_CLOSE_MIN = (1, 5, 16)   # يفحص بعد الإغلاق بكذا دقيقة (الأولى هي الأساسية)
+GAP_MAX_ALERT_DELAY_MIN = 30     # ما ينبه على شمعة قفلت من أكثر من كذا دقيقة (عشان ما يرسل قديم أول ما يشتغل)
 GAP_SENT_FILE = "gap_sent.txt"   # عشان ما يعيد نفس التنبيه لو البوت أعاد التشغيل
 
 USE_PRICE_FILTER = False         # True = يطبق فلتر السعر تحت مع فلتر القيمة السوقية
@@ -235,14 +245,33 @@ def send_telegram(text):
         _send_one(chat_id, text)
 
 
-def us_market_open():
-    """السوق الأمريكي شامل ما قبل الفتح وبعد الإغلاق (4 الصبح - 8 بالليل نيويورك)."""
-    now = pd.Timestamp.now(tz=NY)
-    if now.weekday() >= 5:
-        return False
+def _session():
+    """(بداية تقسيم الشموع، نهاية الجلسة) بالدقايق من منتصف الليل بتوقيت نيويورك.
+    نهاية None = 24 ساعة."""
+    if GAP_OVERNIGHT:
+        return 20 * 60, None          # 24 ساعة، اليوم يبدأ 8 بالليل (نفس تريدنج فيو)
     if GAP_EXTENDED:
-        return now.replace(hour=4, minute=0) <= now <= now.replace(hour=20, minute=5)
-    return now.replace(hour=9, minute=30) <= now <= now.replace(hour=16, minute=5)
+        return 4 * 60, 20 * 60
+    return 9 * 60 + 30, 16 * 60
+
+
+def us_market_open(now=None):
+    """السوق مفتوح حسب الجلسة المختارة (+ دقايق بعد الإغلاق عشان نلحق نفحص آخر شمعة)."""
+    now = now or pd.Timestamp.now(tz=NY)
+    wd, m = now.weekday(), now.hour * 60 + now.minute
+    buf = max(GAP_SCAN_AFTER_CLOSE_MIN) + 2
+    if GAP_OVERNIGHT:                 # من الأحد 8 بالليل إلى الجمعة 8 بالليل
+        if wd == 5:
+            return False
+        if wd == 6:
+            return m >= 20 * 60
+        if wd == 4:
+            return m <= 20 * 60 + buf
+        return True
+    if wd >= 5:
+        return False
+    start, end = _session()
+    return start <= m <= end + buf
 
 
 def download_batches(tickers, batch_size, **kw):
@@ -304,144 +333,248 @@ def get_nasdaq_midcap_plus():
     return FALLBACK_TICKERS
 
 
+OHLC = ["Open", "High", "Low", "Close"]
+
+
 def to_ny(df):
-    df = df.dropna(subset=["Open", "High", "Low", "Close"])
+    df = df.dropna(subset=OHLC)
     idx = df.index
     if idx.tz is None:
         idx = idx.tz_localize("UTC")
     return df.set_index(idx.tz_convert(NY))
 
 
+def _hhmm(m):
+    return f"{m // 60:02d}:{m % 60:02d}"
+
+
 def to_frame(df, minutes):
-    """يحول شموع النص ساعة لشموع أكبر (60 = ساعة، 240 = 4 ساعات) بتوقيت نيويورك.
-    السوق الممتد يبدأ 4:00 الصبح (نفس تريدنج فيو مع تفعيل Extended Hours)"""
-    df = df.dropna(subset=["Open", "High", "Low", "Close"])
+    """يحول شموع النص ساعة لشموع أكبر (60 = ساعة، 240 = 4 ساعات) بتوقيت نيويورك،
+    بنفس تقسيم تريدنج فيو. كل شمعة معها وقت إغلاقها (end) وعدد الشموع الصغيرة اللي فيها (n)."""
+    df = df.dropna(subset=OHLC)
     if df.empty:
         return df
     df = to_ny(df)
-    first = 240 if GAP_EXTENDED else 570          # 4:00 أو 9:30 بالدقايق
-    df = df.between_time("04:00", "19:59") if GAP_EXTENDED else df.between_time("09:30", "15:59")
-    mins = df.index.hour * 60 + df.index.minute - first
-    block = mins // minutes
-    start = df.index.normalize() + pd.Timedelta(minutes=first) + pd.to_timedelta(block * minutes, unit="m")
-    return df.groupby(start).agg(
-        {"Open": "first", "High": "max", "Low": "min", "Close": "last"}
-    )
+    anchor, end_min = _session()
+    if end_min is not None:                    # مو 24 ساعة: نشيل اللي برا الجلسة
+        df = df.between_time(_hhmm(anchor), _hhmm(end_min - 1))
+        if df.empty:
+            return df
+    m = df.index.hour * 60 + df.index.minute
+    offset = ((m - anchor) % 1440) % minutes   # كم دقيقة من بداية شمعتها
+    start = df.index.floor("min") - pd.to_timedelta(offset, unit="m")
+    out = df.groupby(start).agg(Open=("Open", "first"), High=("High", "max"),
+                                Low=("Low", "min"), Close=("Close", "last"),
+                                n=("Close", "size"))
+    ends = []
+    for s in out.index:
+        e = s + pd.Timedelta(minutes=minutes)
+        if end_min is not None:                # آخر شمعة باليوم تقفل مع إغلاق الجلسة
+            e = min(e, s.normalize() + pd.Timedelta(minutes=end_min))
+        ends.append(e)
+    out["end"] = ends
+    return out
 
 
 def to_4h(df):
     return to_frame(df, 240)
 
 
-def red(x):
-    return x["Close"] < x["Open"]
-
-
-def green(x):
-    return x["Close"] > x["Open"]
+def only_closed(c, last_bar, now):
+    """يخلي الشموع المقفلة بس. الشمعة تعتبر مقفلة لو وقتها خلص، وبياناتها كاملة
+    (أو جات بيانات بعدها، أو مر ربع ساعة على إغلاقها)."""
+    if c.empty:
+        return c
+    starts = pd.Series(c.index, index=c.index)
+    expected = ((c["end"] - starts).dt.total_seconds() / 1800).round()
+    done = (c["end"] <= now) & ((c["n"] >= expected) | (last_bar >= c["end"])
+                                | (now >= c["end"] + pd.Timedelta(minutes=15)))
+    return c[done.values]
 
 
 def check_pattern(c):
-    """يفحص آخر 4 شموع بالاتجاهين. يرجع تفاصيل النموذج لو تحقق، وإلا None.
-    الشمعة الرابعة هي الشمعة الحالية (لسا ما قفلت) عشان التنبيه يطلع أول ما تلمس."""
+    """يفحص آخر 4 شموع مقفلة بالاتجاهين. يرجع تفاصيل النموذج لو تحقق، وإلا None.
+    لون الشموع ما يهم - المهم الجاب بين ذيل الأولى والثالثة، والرابعة تقفل وراه."""
     if len(c) < 4:
         return None
     c1, c2, c3, c4 = (c.iloc[i] for i in (-4, -3, -2, -1))
+    info = {"price": c4["Close"], "open": c4["Open"], "candle_time": c.index[-1],
+            "end": c4["end"] if "end" in c else c.index[-1]}
 
-    # 🟢 صعودي: قاع الأولى فوق قمة الثالثة (الذيول ما تلتقي) - لون الشموع ما يهم
+    # 🟢 صعودي: قاع الأولى فوق قمة الثالثة، والرابعة تفتح تحت أعلى الجاب وتقفل فوقه
     if ENABLE_BULLISH and c1["Low"] > c3["High"]:
         gap_bottom = c3["High"]   # قمة الشمعة الثالثة
         gap_top = c1["Low"]       # قاع الشمعة الأولى = الخط المطلوب
-        came_from_below = c4["Open"] < gap_top
-        touched = c4["High"] >= gap_top * (1 - TOUCH_TOLERANCE)
-        color_ok = green(c4) or not REQUIRE_FOURTH_COLOR
-        if came_from_below and touched and color_ok:
-            return {"side": "bull", "gap_bottom": gap_bottom, "gap_top": gap_top,
-                    "price": c4["Close"], "candle_time": c.index[-1]}
+        if c4["Open"] < gap_top and c4["Close"] > gap_top:
+            return {"side": "bull", "gap_bottom": gap_bottom, "gap_top": gap_top, **info}
 
-    # 🔴 هبوطي: قمة الأولى تحت قاع الثالثة (الذيول ما تلتقي) - لون الشموع ما يهم
+    # 🔴 هبوطي: قمة الأولى تحت قاع الثالثة، والرابعة تفتح فوق أسفل الجاب وتقفل تحته
     if ENABLE_BEARISH and c1["High"] < c3["Low"]:
         gap_bottom = c1["High"]   # قمة الشمعة الأولى = الخط المطلوب
         gap_top = c3["Low"]       # قاع الشمعة الثالثة
-        came_from_above = c4["Open"] > gap_bottom
-        touched = c4["Low"] <= gap_bottom * (1 + TOUCH_TOLERANCE)
-        color_ok = red(c4) or not REQUIRE_FOURTH_COLOR
-        if came_from_above and touched and color_ok:
-            return {"side": "bear", "gap_bottom": gap_bottom, "gap_top": gap_top,
-                    "price": c4["Close"], "candle_time": c.index[-1]}
+        if c4["Open"] > gap_bottom and c4["Close"] < gap_bottom:
+            return {"side": "bear", "gap_bottom": gap_bottom, "gap_top": gap_top, **info}
 
     return None
 
 
-def _gap_message(t, res, frame, note):
+def _gap_message(t, res, frame):
     lo, hi, px = (round(float(res[k]), 2) for k in ("gap_bottom", "gap_top", "price"))
     if res["side"] == "bull":
         head = f"🟢 Inversion Gap صعودي - {frame}"
-        line = f"فوق أعلى الجاب ({hi})"
+        line = f"الشمعة قفلت فوق أعلى الجاب ({hi})"
     else:
         head = f"🔴 Inversion Gap هبوطي - {frame}"
-        line = f"تحت أسفل الجاب ({lo})"
+        line = f"الشمعة قفلت تحت أسفل الجاب ({lo})"
+    closed_at = pd.Timestamp(res["end"]).tz_convert(LOCAL_TZ)
     return (f"{head}\n"
             f"السهم: {t}\n"
-            f"السعر: {px}\n"
             f"الجاب: {lo} ← {hi}  (حجمه {hi - lo:.2f}$)\n"
-            f"{note} {line}")
+            f"{line}\n"
+            f"سعر الإغلاق: {px}\n"
+            f"وقت الإغلاق: {closed_at:%H:%M} (توقيتك)")
 
 
-def _beyond_gap(res, price):
-    """السعر عدّى الجاب كامل: فوق أعلاه بالصعودي، أو تحت أسفله بالهبوطي."""
-    if res["side"] == "bull":
-        return price > res["gap_top"]
-    return price < res["gap_bottom"]
+# ---------- الجلسة الليلية من Tiingo (8 بالليل - 4 الفجر نيويورك) ----------
+_boats_cache = {}   # الرمز -> (وقت الجلب، البيانات)
+
+
+def _boats_stale(fetched, now):
+    if fetched is None:
+        return True
+    if now.hour >= 20 or now.hour * 60 + now.minute < 4 * 60 + 20:
+        return fetched < now.floor("h")        # وقت الليل: نجدد كل ساعة
+    return fetched < now.normalize() + pd.Timedelta(hours=4)   # بعد الليل: نسخة وحدة تكفي
+
+
+def fetch_boats(t, now):
+    """شموع نص ساعة للجلسة الليلية لسهم واحد من Tiingo (BOATS)."""
+    try:
+        r = requests.get(f"https://api.tiingo.com/boats/{t.lower()}/prices",
+                         params={"startDate": (now - pd.Timedelta(days=7)).strftime("%Y-%m-%d"),
+                                 "resampleFreq": "30min", "token": TIINGO_TOKEN},
+                         headers={**HEADERS, "Content-Type": "application/json"}, timeout=20)
+        data = r.json()
+        if not isinstance(data, list) or not data:
+            if isinstance(data, dict) and data.get("detail"):
+                log(f"Tiingo {t}: {data['detail']}")
+            return pd.DataFrame(columns=OHLC)
+        df = pd.DataFrame(data)
+        idx = pd.to_datetime(df["date"])
+        idx = idx.dt.tz_localize(NY) if idx.dt.tz is None else idx.dt.tz_convert(NY)
+        df = df.rename(columns=str.capitalize).set_index(pd.DatetimeIndex(idx))[OHLC]
+        df = df.astype(float).dropna()
+        h = df.index.hour
+        return df[(h >= 20) | (h < 4)]         # الليل بس، الباقي من ياهو
+    except Exception as e:
+        log(f"Tiingo {t}: خطأ - {e}")
+        return None
+
+
+def load_boats(tickers, now):
+    need = [t for t in tickers if _boats_stale((_boats_cache.get(t) or (None,))[0], now)]
+    if need:
+        with ThreadPoolExecutor(max_workers=TIINGO_WORKERS) as pool:
+            for t, df in zip(need, pool.map(lambda s: fetch_boats(s, now), need)):
+                if df is not None:
+                    _boats_cache[t] = (now, df)
+        log(f"الجلسة الليلية: جددت {len(need)} سهم من Tiingo")
+    return {t: v[1] for t, v in _boats_cache.items()}
 
 
 def scan_gap(tickers, already_sent):
     hits = 0
     now = pd.Timestamp.now(tz=NY)
-    for t, df in download_batches(tickers, 100, period="20d", interval="30m", prepost=GAP_EXTENDED):
+    boats = load_boats(tickers, now) if GAP_OVERNIGHT else {}
+    frames = [(ENABLE_GAP_4H, 240, "4h", "فريم 4 ساعات"), (ENABLE_GAP_1H, 60, "1h", "فريم ساعة")]
+    for t, df in download_batches(tickers, 100, period="7d", interval="30m",
+                                  prepost=GAP_EXTENDED or GAP_OVERNIGHT):
         try:
-            c4h = to_frame(df, 240)
-            if c4h.empty:
+            df = to_ny(df)[OHLC]
+            night = boats.get(t)
+            if night is not None and not night.empty:
+                df = pd.concat([df, night])
+                df = df[~df.index.duplicated(keep="first")].sort_index()
+            if df.empty:
                 continue
-            last = float(c4h["Close"].iloc[-1])
+            last = float(df["Close"].iloc[-1])
             if USE_PRICE_FILTER and not (MIN_PRICE <= last <= MAX_PRICE):
                 continue
             if last < GAP_MIN_STOCK_PRICE:
                 continue
+            last_bar = df.index.max()
 
-            # ---- فريم 4 ساعات: ثابت فوق الجاب وباقي ساعتين أو أقل على الإغلاق ----
-            if ENABLE_GAP_4H:
-                res = check_pattern(c4h)
-                if res and res["gap_top"] - res["gap_bottom"] >= GAP_MIN_SIZE:
-                    end = res["candle_time"] + pd.Timedelta(minutes=240)
-                    remaining = (end - now).total_seconds() / 60
-                    key = f"{t}-4h-{res['side']}-{res['candle_time']}"
-                    if (0 < remaining <= GAP_4H_ALERT_LAST_MIN and _beyond_gap(res, res["price"])
-                            and key not in already_sent):
-                        already_sent.add(key)
-                        _append_line(GAP_SENT_FILE, key)
-                        hits += 1
-                        send_telegram(_gap_message(
-                            t, res, "فريم 4 ساعات",
-                            f"باقي {int(remaining)} دقيقة على الإغلاق، والسعر ثابت"))
-
-            # ---- فريم ساعة: بعد إغلاق الشمعة الرابعة فوق/تحت الجاب ----
-            if ENABLE_GAP_1H:
-                c1h = to_frame(df, 60)
-                # نشيل الشمعة اللي لسا ما قفلت، عشان نفحص آخر شمعة مقفلة بس
-                if len(c1h) and c1h.index[-1] + pd.Timedelta(minutes=60) > now:
-                    c1h = c1h.iloc[:-1]
-                res = check_pattern(c1h)
-                if res and res["gap_top"] - res["gap_bottom"] >= GAP_MIN_SIZE:
-                    key = f"{t}-1h-{res['side']}-{res['candle_time']}"
-                    if _beyond_gap(res, res["price"]) and key not in already_sent:
-                        already_sent.add(key)
-                        _append_line(GAP_SENT_FILE, key)
-                        hits += 1
-                        send_telegram(_gap_message(t, res, "فريم ساعة", "الشمعة قفلت"))
+            for enabled, minutes, tag, label in frames:
+                if not enabled:
+                    continue
+                res = check_pattern(only_closed(to_frame(df, minutes), last_bar, now))
+                if not res or res["gap_top"] - res["gap_bottom"] < GAP_MIN_SIZE:
+                    continue
+                if (now - res["end"]).total_seconds() / 60 > GAP_MAX_ALERT_DELAY_MIN:
+                    continue                    # شمعة قديمة، مو إغلاق جديد
+                key = f"{t}-{tag}-{res['side']}-{res['candle_time']}"
+                if key in already_sent:
+                    continue
+                already_sent.add(key)
+                _append_line(GAP_SENT_FILE, key)
+                hits += 1
+                send_telegram(_gap_message(t, res, label))
         except Exception as e:
             log(f"{t}: خطأ - {e}")
     log(f"[{datetime.now():%H:%M}] الجاب: خلص الفحص - {hits} تنبيه جديد")
+
+
+def gap_scan_due(now, last_run):
+    """بعد إغلاق كل شمعة بدقيقة (وإعادة بعد 5 و16 دقيقة). يرجع وقت الجولة لو جا وقتها."""
+    step = "30min" if not (GAP_EXTENDED or GAP_OVERNIGHT) else "h"   # الجلسة الرسمية تقفل على :30
+    boundary = now.floor(step)
+    for off in sorted(GAP_SCAN_AFTER_CLOSE_MIN, reverse=True):
+        slot = boundary + pd.Timedelta(minutes=off)
+        if now >= slot:
+            return slot if (last_run is None or last_run < slot) else None
+    return None
+
+
+def self_test():
+    """يجرب النموذج على مثال NVDA اللي بالصورة (فريم 4 ساعات، 24 ساعة) بدون نت."""
+    global GAP_OVERNIGHT
+    for overnight, times in ((True, ("2026-09-25 16:00", "2026-09-27 20:00",
+                                     "2026-09-28 00:00", "2026-09-28 04:00")),
+                             (False, ("2026-09-25 08:00", "2026-09-25 12:00",
+                                      "2026-09-25 16:00", "2026-09-28 04:00"))):
+        GAP_OVERNIGHT = overnight
+        print("=========", "24 ساعة" if overnight else "ممتد بدون ليل (ياهو)", "=========")
+        _self_test_run(times)
+
+
+def _self_test_run(times):
+    # نفس أسعار الصورة: (فتح، أعلى، أقل، إغلاق) لكل شمعة 4 ساعات
+    prices = [(225.00, 225.40, 224.87, 224.95),   # الأولى - قاعها 224.87
+              (225.05, 225.80, 223.75, 223.80),   # الثانية
+              (223.80, 224.33, 223.00, 223.10),   # الثالثة - قمتها 224.33
+              (223.50, 228.30, 222.90, 228.08)]   # الرابعة - تقفل فوق 224.87
+    candles = [(t, *p) for t, p in zip(times, prices)]
+    rows = []
+    for s, o, h, l, c in candles:
+        s = pd.Timestamp(s, tz=NY)
+        path = [o + (c - o) * k / 7 for k in range(8)]
+        for k in range(8):                                     # 8 شموع نص ساعة لكل 4 ساعات
+            op = path[k - 1] if k else o
+            rows.append((s + pd.Timedelta(minutes=30 * k), op,
+                         h if k == 3 else max(op, path[k]),
+                         l if k == 5 else min(op, path[k]), path[k]))
+    df = pd.DataFrame(rows, columns=["t"] + OHLC).set_index("t")
+
+    for label, now in (("قبل إغلاق الرابعة (7:59 نيويورك)", "2026-09-28 07:59"),
+                       ("بعد الإغلاق بدقيقة (8:01 نيويورك)", "2026-09-28 08:01")):
+        now = pd.Timestamp(now, tz=NY)
+        part = df[df.index <= now - pd.Timedelta(minutes=30)]
+        c = only_closed(to_frame(part, 240), part.index.max(), now)
+        res = check_pattern(c)
+        print(f"--- {label} ---")
+        print(c[OHLC + ["n"]].tail(4).to_string())
+        print(_gap_message("NVDA", res, "فريم 4 ساعات") if res else "ما فيه تنبيه")
+        print()
 
 
 # ================== (2) فلتر الأخبار ==================
@@ -845,12 +978,19 @@ def scan_short(tickers, already_sent):
 
 # ================== التشغيل ==================
 def main():
+    if "--test" in sys.argv:
+        self_test()
+        return
     once = "--once" in sys.argv
     _load_chats()
     discover_groups()
     log(f"التنبيهات بتروح لـ {len(CHATS)} محادثة: {', '.join(CHATS) or 'ولا وحدة'}")
 
-    gap_tickers, gap_day = [], None
+    gap_tickers, gap_day, gap_last = [], None, None
+    log("الجاب: " + ("24 ساعة (مع الجلسة الليلية من Tiingo)" if GAP_OVERNIGHT else
+                     "الجلسة الممتدة 4 الفجر - 8 بالليل نيويورك (ياهو مجاناً)" if GAP_EXTENDED else
+                     "الجلسة الرسمية بس"))
+    was_open = None
     gap_sent = _load_set(GAP_SENT_FILE)
     news_tickers, news_day, news_last = [], None, 0.0
     news_sent = _load_set(NEWS_SENT_FILE)
@@ -861,8 +1001,11 @@ def main():
 
     while True:
         discover_groups()
-        # (1) الجاب - وقت السوق الأمريكي
-        if ENABLE_GAP and (us_market_open() or once):
+        # (1) الجاب - بعد إغلاق كل شمعة بدقيقة
+        now_ny = pd.Timestamp.now(tz=NY)
+        slot = gap_scan_due(now_ny, gap_last)
+        if ENABLE_GAP and (once or (slot is not None and us_market_open(now_ny))):
+            gap_last = slot or now_ny
             today = pd.Timestamp.now(tz=NY).date()
             if gap_day != today or not gap_tickers:
                 gap_tickers = get_nasdaq_midcap_plus()
@@ -900,12 +1043,14 @@ def main():
                 scan_short(short_tickers, short_sent)
                 short_day = today
 
-        if not us_market_open():
+        is_open = us_market_open()
+        if not is_open and was_open is not False:
             log(f"[{datetime.now():%H:%M}] السوق مسكر (الأخبار شغالة)، أنتظر...")
+        was_open = is_open
 
         if once:
             break
-        time.sleep(CHECK_EVERY_MIN * 60)
+        time.sleep(LOOP_SLEEP_SEC)
 
 
 if __name__ == "__main__":
