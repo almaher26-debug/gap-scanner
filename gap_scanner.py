@@ -87,9 +87,6 @@ ENABLE_GAP = True
 MIN_MARKET_CAP = 2_000_000_000   # 2 مليار دولار = ميد كاب وفوق
 ENABLE_BULLISH = True            # جاب تحت + الرابعة تقفل فوق أعلى الجاب
 ENABLE_BEARISH = True            # جاب فوق + الرابعة تقفل تحت أسفل الجاب
-# شروط الاتجاه (True = مفعّل ، False = يتجاهله)
-REQUIRE_3_CANDLES_DIRECTION = True   # صعودي: الثلاث الأولى كلها حمراء (هابطة) ، هبوطي: كلها خضراء (صاعدة)
-REQUIRE_4TH_CANDLE_COLOR = True      # صعودي: الرابعة خضراء ، هبوطي: الرابعة حمراء
 GAP_EXTENDED = True              # يشمل ما قبل الفتح وبعد الإغلاق (4 الفجر - 8 بالليل نيويورك)
 
 # الجلسة الليلية (8 بالليل - 4 الفجر نيويورك) = إعداد الـ24 ساعة في تريدنج فيو
@@ -146,7 +143,7 @@ DAILY_LOOKBACK_DAYS = 22         # يرسل النماذج اللي اخترقت
 DAILY_SENT_FILE = "daily_sent.txt"   # عشان ما يعيد نفس النموذج كل يوم
 
 # ---- (4) الشورت صفر ----
-ENABLE_SHORT = True
+ENABLE_SHORT = False            # البيع المكشوف مطفي (True = يرجع يشتغل)
 SHORT_MIN_PRICE = 1
 SHORT_MAX_PRICE = 6
 SHORT_MIN_AVG_VOLUME = 50_000
@@ -454,41 +451,25 @@ def only_closed(c, last_bar, now):
 
 def check_pattern(c):
     """يفحص آخر 4 شموع مقفلة بالاتجاهين. يرجع تفاصيل النموذج لو تحقق، وإلا None.
-    صعودي: الثلاث الأولى هابطة (حمراء) + جاب بين ذيل الأولى والثالثة + الرابعة خضراء تقفل فوق الجاب.
-    هبوطي: بالعكس. (شروط اللون تنطفي من REQUIRE_3_CANDLES_DIRECTION و REQUIRE_4TH_CANDLE_COLOR)"""
+    لون الشموع ما يهم - المهم الجاب بين ذيل الأولى والثالثة، والرابعة تقفل وراه."""
     if len(c) < 4:
         return None
     c1, c2, c3, c4 = (c.iloc[i] for i in (-4, -3, -2, -1))
     info = {"price": c4["Close"], "open": c4["Open"], "candle_time": c.index[-1],
             "end": c4["end"] if "end" in c else c.index[-1]}
-    first3 = (c1, c2, c3)
-    all_red = all(x["Close"] < x["Open"] for x in first3)     # الثلاث هابطة
-    all_green = all(x["Close"] > x["Open"] for x in first3)   # الثلاث صاعدة
 
-    # 🟢 صعودي: ثلاث شموع هابطة، قاع الأولى فوق قمة الثالثة،
-    #    والرابعة خضراء تفتح تحت أعلى الجاب وتقفل فوقه
+    # 🟢 صعودي: قاع الأولى فوق قمة الثالثة، والرابعة تفتح تحت أعلى الجاب وتقفل فوقه
     if ENABLE_BULLISH and c1["Low"] > c3["High"]:
         gap_bottom = c3["High"]   # قمة الشمعة الثالثة
         gap_top = c1["Low"]       # قاع الشمعة الأولى = الخط المطلوب
-        ok = c4["Open"] < gap_top and c4["Close"] > gap_top
-        if REQUIRE_3_CANDLES_DIRECTION and not all_red:
-            ok = False
-        if REQUIRE_4TH_CANDLE_COLOR and not c4["Close"] > c4["Open"]:
-            ok = False
-        if ok:
+        if c4["Open"] < gap_top and c4["Close"] > gap_top:
             return {"side": "bull", "gap_bottom": gap_bottom, "gap_top": gap_top, **info}
 
-    # 🔴 هبوطي: ثلاث شموع صاعدة، قمة الأولى تحت قاع الثالثة،
-    #    والرابعة حمراء تفتح فوق أسفل الجاب وتقفل تحته
+    # 🔴 هبوطي: قمة الأولى تحت قاع الثالثة، والرابعة تفتح فوق أسفل الجاب وتقفل تحته
     if ENABLE_BEARISH and c1["High"] < c3["Low"]:
         gap_bottom = c1["High"]   # قمة الشمعة الأولى = الخط المطلوب
         gap_top = c3["Low"]       # قاع الشمعة الثالثة
-        ok = c4["Open"] > gap_bottom and c4["Close"] < gap_bottom
-        if REQUIRE_3_CANDLES_DIRECTION and not all_green:
-            ok = False
-        if REQUIRE_4TH_CANDLE_COLOR and not c4["Close"] < c4["Open"]:
-            ok = False
-        if ok:
+        if c4["Open"] > gap_bottom and c4["Close"] < gap_bottom:
             return {"side": "bear", "gap_bottom": gap_bottom, "gap_top": gap_top, **info}
 
     return None
