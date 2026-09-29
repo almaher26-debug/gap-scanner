@@ -31,30 +31,31 @@
     - عنوان الخبر يتترجم للعربي (لو فشلت الترجمة يرسله بالإنجليزي)
     - المصدر: ياهو فاينانس
 
-(3) نماذج الفريم اليومي - كل أسهم ناسداك - التنبيه عند اكتمال النموذج (كسر خط العنق)
-    - يرسل أي سهم اخترق/كسر خط العنق خلال آخر شهر (22 يوم تداول)، مو بس اليوم
-    - كل نموذج يتنبه عليه مرة وحدة بس، والتنبيهات تنجمع في رسايل عشان ما يزحم القروب
-    🟢 القاع المزدوج (W)        : قاعين متقاربين (فرق 3% أو أقل) + اختراق خط العنق لفوق
-    🔴 القمة المزدوجة (M)       : قمتين متقاربتين (فرق 3% أو أقل) + كسر خط العنق لتحت
-    🔴 الرأس والكتفين            : كتف + رأس أعلى + كتف + كسر خط العنق لتحت
-    🟢 الرأس والكتفين المقلوب    : كتف + رأس أنزل + كتف + اختراق خط العنق لفوق
+(3) نموذج القاع المزدوج (W) - الفريم اليومي بس - أسهم ناسداك 2 مليار وفوق
+    - قاعين متقاربين (فرق 3% أو أقل) + اختراق خط العنق لفوق خلال آخر 15 يوم تداول
+    - كل نموذج يتنبه عليه مرة وحدة بس، والتنبيهات تنجمع في رسايل
 
-(4) الشورت صفر
-    - أسهم ناسداك اللي سعرها من 1 إلى 6 دولار
+(4) الشورت صفر - أسهم ناسداك من 0.10$ إلى 15$
     - إذا بيانات الشورت الرسمية (من ياهو) صارت صفر  =>  تنبيه
     - البيانات الرسمية تنزل مرتين بالشهر وبتأخير أسبوعين تقريباً، فيفحصها مرة باليوم
 
-(5) الزخم - أسهم ناسداك الرخيصة اللي دخلها حجم تداول مفاجئ
-    - السعر من 1 إلى 5 دولار
-    - حجم التداول في آخر نص ساعة 700 ألف سهم أو أكثر
-    - الفري فلوت من 700 ألف إلى 8 مليون سهم (من ياهو - لو ما عرفه يرسل ويكتب "غير معروف")
-    - يفحص كل 5 دقايق من 4 الفجر إلى 8 بالليل نيويورك (يشمل ما قبل الفتح وبعد الإغلاق)
+(4ب) التجزئة العكسية - مرة بالأسبوع
+    - قائمة بكل أسهم ناسداك اللي سوت تجزئة عكسية آخر شهر: الرمز، تاريخ التجزئة، السعر
+    - وتنبيه لو وحدة منها سعرها 5$ أو أقل والشورت عندها صفر
 
 التشغيل:
   pip install yfinance pandas requests lxml
-  python gap_scanner.py          # يشتغل باستمرار ويفحص كل 5 دقايق
+  python gap_scanner.py          # يشتغل باستمرار
   python gap_scanner.py --once   # فحص مرة وحدة بس
   python gap_scanner.py --test   # يجرب نموذج الجاب على مثال NVDA (بدون نت)
+  python gap_scanner.py --algotest   # يجرب كشف الأوامر المتكررة (بدون نت)
+
+(6) كشف خوارزميات التنفيذ - من ألباكا (بورصة IEX المجانية)
+    - يسحب الصفقات كل 15 ثانية ويدور على صفقات ورا بعض بنفس الحجم بالضبط (مثل 1،1،1،1،1،1)
+    - 6 صفقات أو أكثر متتالية بدون أي صفقة مختلفة بينها، والفرق بين كل صفقة والثانية 10 ثواني أو أقل
+    - لو أغلبها على نفس السعر يكتب "آيس بيرغ"، وإلا "خوارزمية تقسيم"
+    - يحتاج المتغيرين ALPACAAPIKEY و ALPACASECRETKEY في Railway
+    - الأسهم: قائمة ثابتة (تتغير بمتغير ALGO_SYMBOLS في Railway)
 """
 
 import gc
@@ -129,29 +130,22 @@ NEWS_TRANSLATE = True            # True = يترجم عنوان الخبر لل�
 # ---- (3) نماذج الفريم اليومي ----
 ENABLE_DAILY = True
 ENABLE_DOUBLE_BOTTOM = True      # W
-ENABLE_DOUBLE_TOP = True         # M
-ENABLE_HS = True                 # الرأس والكتفين (هبوطي)
-ENABLE_INV_HS = True             # الرأس والكتفين المقلوب (صعودي)
 DAILY_MIN_PRICE = 1              # أقل سعر سهم
 DAILY_MIN_AVG_VOLUME = 300_000   # يشيل الأسهم الميتة (عدد أسهم يومي)
 DAILY_EVERY_MIN = 30             # كل كم دقيقة يفحص اليومي (وقت السوق الرسمي)
 DOUBLE_TOLERANCE = 0.03          # 3% أقصى فرق بين القاعين أو القمتين
 PATTERN_MIN_DEPTH = 0.04         # خط العنق لازم يبعد عن القاع/القمة 4% على الأقل (عشان يشيل النماذج الصغيرة)
-SHOULDER_TOLERANCE = 0.05        # 5% أقصى فرق بين الكتفين
-HEAD_MIN_DIFF = 0.02             # الرأس لازم يزيد عن الكتفين 2% على الأقل
 PIVOT_BARS = 5                   # القمة/القاع لازم تكون أعلى/أنزل من 5 شموع قبلها و5 بعدها
 PATTERN_MIN_BARS = 10            # أقل مسافة بين القاعين/القمتين (أيام تداول)
 PATTERN_MAX_BARS = 120           # أقصى طول للنموذج (تقريباً 6 شهور)
 DAILY_LOOKBACK_DAYS = 15         # اليومي: يرسل النماذج اللي اخترقت خلال آخر كذا يوم تداول
-ENABLE_WEEKLY = True             # نفس النماذج على الفريم الأسبوعي
-WEEKLY_LOOKBACK_WEEKS = 3        # الأسبوعي: اخترق خلال آخر كذا أسبوع (3 أسابيع = 15 يوم تداول)
-DAILY_MIN_MARKET_CAP = 2_000_000_000   # النماذج (W, M, رأس وكتفين) على الأسهم اللي قيمتها 2 مليار وفوق بس
+DAILY_MIN_MARKET_CAP = 2_000_000_000   # نموذج W على الأسهم اللي قيمتها 2 مليار وفوق بس
 DAILY_SENT_FILE = "daily_sent.txt"   # عشان ما يعيد نفس النموذج كل يوم
 
 # ---- (4) الشورت صفر ----
-ENABLE_SHORT = False            # البيع المكشوف مطفي (True = يرجع يشتغل)
-SHORT_MIN_PRICE = 1
-SHORT_MAX_PRICE = 6
+ENABLE_SHORT = True             # الشورت صفر شغال
+SHORT_MIN_PRICE = 0.10
+SHORT_MAX_PRICE = 15
 SHORT_MIN_AVG_VOLUME = 50_000
 SHORT_WORKERS = 3
 SHORT_SENT_FILE = "short_sent.txt"   # عشان ما يعيد نفس التنبيه لو البوت أعاد التشغيل
@@ -162,31 +156,29 @@ RSPLIT_MAX_PRICE = 5                 # بني ستوك = سعره 5$ أو أقل
 RSPLIT_DAYS = 30                     # سوى تجزئة عكسية خلال آخر كذا يوم
 RSPLIT_WORKERS = 3
 RSPLIT_SENT_FILE = "rsplit_sent.txt"
+RSPLIT_LIST = True                   # يرسل قائمة بكل أسهم التجزئة العكسية آخر شهر (الرمز، التاريخ، السعر)
+RSPLIT_WEEK_FILE = "rsplit_week.txt" # عشان القائمة تنرسل مرة وحدة بالأسبوع حتى لو البوت أعاد التشغيل
 
-# ---- (5ب) سيولة عالية - الأسهم من 1 إلى 10 دولار ----
-ENABLE_VOLUME = True
-VOLUME_MIN_PRICE = 1
-VOLUME_MAX_PRICE = 10
-VOLUME_MIN_DAY = 1_000_000           # حجم التداول اليوم (من 4 الفجر نيويورك) مليون سهم وفوق
-VOLUME_SENT_FILE = "volume_sent.txt" # كل سهم ينبه عليه مرة وحدة باليوم
-
-# ---- (5) الزخم ----
-ENABLE_MOMENTUM = True
-MOMENTUM_MIN_PRICE = 1
-MOMENTUM_MAX_PRICE = 5
-MOMENTUM_MIN_VOLUME = 700_000        # حجم التداول في آخر نص ساعة (عدد أسهم)
-MOMENTUM_WINDOW_MIN = 30             # نص ساعة
-MOMENTUM_MIN_FLOAT = 700_000         # الفري فلوت من كذا
-MOMENTUM_MAX_FLOAT = 8_000_000       # إلى كذا
-MOMENTUM_SEND_UNKNOWN_FLOAT = True   # True = لو ياهو ما عنده الفري فلوت يرسله ويكتب "غير معروف"
-MOMENTUM_EVERY_MIN = 5               # كل كم دقيقة يفحص
-MOMENTUM_REALERT_MIN = 120           # ما يعيد تنبيه نفس السهم قبل كذا دقيقة
-# شروط استراتيجية الزخم القوية
-MOMENTUM_MIN_MOVE_PCT = 3.0          # صعود آخر 15 دقيقة 3% على الأقل
-MOMENTUM_MIN_RVOL = 2.0              # حجم آخر 15 دقيقة >= ضعفي الـ15 دقيقة السابقة
-MOMENTUM_BREAKOUT_LOOKBACK = 12      # اختراق أعلى سعر آخر 12 شمعة 5 دقائق (ساعة)
-MOMENTUM_BREAKOUT_BUFFER_PCT = 0.0   # يكفي تجاوز القمة السابقة
-MOMENTUM_MIN_CLOSE_POS = 0.70        # الإغلاق في أعلى 30% من مدى شمعة التأكيد
+# ---- (6) كشف خوارزميات التنفيذ (أوامر متكررة بنفس الحجم) - من ألباكا ----
+# يراقب الصفقات لحظياً (بورصة IEX المجانية) ويدور على صفقات ورا بعض بنفس الحجم بالضبط
+# مثال: 1، 1، 1، 1، 1، 1 أو 4، 4، 4، 4، 4، 4 = غالباً خوارزمية تقسيم أو آيس بيرغ
+ALPACA_KEY = (os.environ.get("ALPACAAPIKEY") or os.environ.get("ALPACA_API_KEY")
+              or os.environ.get("APCA_API_KEY_ID", ""))
+ALPACA_SECRET = (os.environ.get("ALPACASECRETKEY") or os.environ.get("ALPACA_SECRET_KEY")
+                 or os.environ.get("APCA_API_SECRET_KEY", ""))
+ENABLE_ALGO = bool(ALPACA_KEY and ALPACA_SECRET)   # يتفعل لحاله لو المفاتيح موجودة
+ALGO_FEED = "iex"                    # البورصة المجانية
+# الأسهم اللي يراقبها (تقدر تغيرها من Railway بمتغير ALGO_SYMBOLS، بينها فاصلة)
+ALGO_SYMBOLS = [s.strip().upper() for s in os.environ.get(
+    "ALGO_SYMBOLS",
+    "NVDA,TSLA,AAPL,AMD,PLTR,SOFI,MARA,RIOT,AMZN,META,MSFT,GOOGL,SMCI,COIN,MSTR,NIO,LCID,INTC,HOOD,RIVN"
+).split(",") if s.strip()]
+ALGO_MAX_SYMBOLS = 60                # أقصى عدد أسهم يراقبها بنفس الوقت
+ALGO_POLL_SEC = 15                   # كل كم ثانية يسحب الصفقات الجديدة
+ALGO_MIN_STREAK = 6                  # أقل عدد صفقات ورا بعض بنفس الحجم بالضبط (مثل 1،1،1،1،1،1)
+ALGO_MAX_GAP_SEC = 10                # أقصى وقت بين صفقة والثانية داخل السلسلة (ثانية)
+ALGO_IGNORE_SIZES = ()               # أحجام يتجاهلها، مثال: (100,) لو صارت 100 تزعج
+ALGO_REALERT_MIN = 15                # ما يعيد تنبيه نفس السهم ونفس الحجم قبل كذا دقيقة
 
 SENT_KEEP_LINES = 20000             # ملفات "المرسل" تنقص لآخر كذا سطر عشان ما تكبر للأبد
 UNIVERSE_BATCH = 200                # حجم دفعة التحميل لما يفلتر كل الأسهم (أصغر = ذاكرة أقل)
@@ -982,50 +974,14 @@ def _double_bottom(hi, lo, cl, t=None, raw=None):
     return None
 
 
-def _inv_head_shoulders(hi, lo, cl, t=None, raw=None):
-    """رأس وكتفين مقلوب واخترق خط العنق في الشمعة t (الافتراضي آخر شمعة). يشتغل بالمقلوب للعادي."""
-    t = len(cl) - 1 if t is None else t
-    raw = raw_pivots(hi, lo, PIVOT_BARS) if raw is None else raw
-    piv = [p for p in pivots_until(raw, t, PIVOT_BARS) if p[0] < t]
-    for k in range(len(piv) - 4, max(len(piv) - 7, -1), -1):
-        seq = piv[k:k + 4]
-        if [p[1] for p in seq] != ["L", "H", "L", "H"]:
-            continue
-        (a, _, ls), (b, _, p1), (c, _, head), (d, _, p2) = seq
-        if d + 1 >= t or t - a > PATTERN_MAX_BARS:
-            continue
-        r = d + 1 + int(pd.Series(lo[d + 1:t]).values.argmin())
-        rs = lo[r]
-        # الرأس أنزل من الكتفين
-        if min(ls, rs) - head < HEAD_MIN_DIFF * abs(head):
-            continue
-        if abs(ls - rs) / min(abs(ls), abs(rs)) > SHOULDER_TOLERANCE:
-            continue
-
-        def neck_at(i):
-            return p1 + (p2 - p1) * (i - b) / (d - b)
-
-        if (min(p1, p2) - max(ls, rs)) / abs(min(p1, p2)) < PATTERN_MIN_DEPTH / 2:
-            continue
-        if any(cl[i] > neck_at(i) for i in range(d + 1, t)):
-            continue                          # كسر الخط قبل كذا
-        if cl[t] > neck_at(t):
-            return {"ls": ls, "head": head, "rs": rs, "neck": neck_at(t)}
-    return None
-
-
 DAILY_PATTERNS = [
     # (مفعّل، الاسم، الكاشف، بالمقلوب؟)
     ("W", "🟢 قاع مزدوج (W)", _double_bottom, False),
-    ("M", "🔴 قمة مزدوجة (M)", _double_bottom, True),
-    ("IHS", "🟢 رأس وكتفين مقلوب", _inv_head_shoulders, False),
-    ("HS", "🔴 رأس وكتفين", _inv_head_shoulders, True),
 ]
 
 
 def _pattern_enabled(code):
-    return {"W": ENABLE_DOUBLE_BOTTOM, "M": ENABLE_DOUBLE_TOP,
-            "IHS": ENABLE_INV_HS, "HS": ENABLE_HS}[code]
+    return {"W": ENABLE_DOUBLE_BOTTOM}.get(code, False)
 
 
 def check_daily_patterns(df, lookback=None):
@@ -1054,10 +1010,7 @@ def check_daily_patterns(df, lookback=None):
 def _scan_patterns_frame(tickers, already_sent, weekly):
     """يفحص النماذج على فريم واحد (يومي أو أسبوعي) ويرجع {الاسم: [سطور]}."""
     new = {}
-    if weekly:
-        kw, lookback, tag = dict(period="5y", interval="1wk"), WEEKLY_LOOKBACK_WEEKS, "W-"
-    else:
-        kw, lookback, tag = dict(period="1y", interval="1d"), DAILY_LOOKBACK_DAYS, ""
+    kw, lookback, tag = dict(period="1y", interval="1d"), DAILY_LOOKBACK_DAYS, ""
     for t, df in download_batches(tickers, 200, prepost=False, **kw):
         try:
             last = float(df["Close"].iloc[-1])
@@ -1081,8 +1034,6 @@ def scan_daily(tickers, already_sent):
     """يفحص النماذج على اليومي والأسبوعي ويجمع الجديد منها في رسايل (بدل رسالة لكل سهم)."""
     hits = 0
     frames = [(False, f"فريم يومي (آخر {DAILY_LOOKBACK_DAYS} يوم تداول)")]
-    if ENABLE_WEEKLY:
-        frames.append((True, f"فريم أسبوعي (آخر {WEEKLY_LOOKBACK_WEEKS} أسابيع)"))
     for weekly, label in frames:
         new = _scan_patterns_frame(tickers, already_sent, weekly)
         for name, rows in new.items():
@@ -1093,7 +1044,7 @@ def scan_daily(tickers, already_sent):
                 send_telegram(f"{name} - {label}\n" + "\n".join(r[1] for r in part))
                 time.sleep(3)
         free_memory()
-    log(f"[{datetime.now():%H:%M}] النماذج (يومي + أسبوعي): خلص الفحص - {hits} تنبيه جديد")
+    log(f"[{datetime.now():%H:%M}] نموذج W (يومي): خلص الفحص - {hits} تنبيه جديد")
 
 
 def nasdaq_above_cap(min_cap):
@@ -1177,158 +1128,6 @@ def scan_short(tickers, already_sent):
     log(f"[{datetime.now():%H:%M}] الشورت: خلص الفحص - {hits} تنبيه جديد")
 
 
-# ================== (5) الزخم ==================
-_float_cache = {}   # الرمز -> (اليوم، الفري فلوت، إغلاق أمس)
-
-
-def fetch_float(t):
-    """الفري فلوت وإغلاق أمس من ياهو (ينحفظ لباقي اليوم)."""
-    import yfinance as yf
-    today = pd.Timestamp.now(tz=NY).date()
-    got = _float_cache.get(t)
-    if got and got[0] == today:
-        return got[1], got[2]
-    fl, prev = None, None
-    try:
-        info = yf.Ticker(t).info or {}
-        fl = info.get("floatShares")
-        prev = info.get("regularMarketPreviousClose") or info.get("previousClose")
-    except Exception:
-        pass
-    _float_cache[t] = (today, fl, prev)
-    return fl, prev
-
-
-def momentum_hours(now=None):
-    """4 الفجر - 8 بالليل نيويورك، أيام الأسبوع."""
-    now = now or pd.Timestamp.now(tz=NY)
-    m = now.hour * 60 + now.minute
-    return now.weekday() < 5 and 4 * 60 <= m <= 20 * 60
-
-
-def _fmt_shares(x):
-    if x is None:
-        return "غير معروف"
-    x = float(x)
-    return f"{x / 1e6:.2f} مليون" if x >= 1e6 else f"{x / 1e3:.0f} ألف"
-
-
-def scan_momentum(tickers, last_alert, volume_sent=None):
-    """استراتيجية زخم: سيولة + تسارع + RVOL + اختراق + إغلاق قوي + فلتر Float."""
-    hits = 0
-    vol_hits = []
-    now = pd.Timestamp.now(tz=NY)
-    since = now - pd.Timedelta(minutes=MOMENTUM_WINDOW_MIN)
-
-    for t, df in download_batches(tickers, 200, period="1d", interval="5m", prepost=True):
-        try:
-            df = to_ny(df).dropna(subset=["Open", "High", "Low", "Close", "Volume"])
-            if len(df) < max(MOMENTUM_BREAKOUT_LOOKBACK + 1, 7):
-                continue
-
-            price = float(df["Close"].iloc[-1])
-
-            # (5ب) سيولة عالية - يبقى كما هو
-            if ENABLE_VOLUME and volume_sent is not None \
-                    and VOLUME_MIN_PRICE <= price <= VOLUME_MAX_PRICE:
-                today_vol = float(df[df.index.date == now.date()]["Volume"].sum())
-                vkey = f"{t}-{now.date()}"
-                if today_vol >= VOLUME_MIN_DAY and vkey not in volume_sent:
-                    volume_sent.add(vkey)
-                    _append_line(VOLUME_SENT_FILE, vkey)
-                    vol_hits.append((today_vol, f"• {t} | السعر: {price:.2f} | الحجم: {_fmt_shares(today_vol)}"))
-
-            if not ENABLE_MOMENTUM or not (MOMENTUM_MIN_PRICE <= price <= MOMENTUM_MAX_PRICE):
-                continue
-
-            # 1) حجم آخر 30 دقيقة
-            recent = df[df.index >= since]
-            vol = float(recent["Volume"].sum()) if not recent.empty else 0.0
-            if vol < MOMENTUM_MIN_VOLUME:
-                continue
-
-            # قيمة التداول بالدولار آخر 30 دقيقة = مجموع (السعر × الحجم) لكل شمعة
-            dollar_volume = float((recent["Close"] * recent["Volume"]).sum()) if not recent.empty else 0.0
-            if dollar_volume < MOMENTUM_MIN_DOLLAR_VOLUME:
-                continue
-
-            # 2) تسارع سعري آخر 15 دقيقة
-            base_price = float(df["Close"].iloc[-4])
-            move_pct = (price / base_price - 1.0) * 100 if base_price > 0 else 0.0
-            if move_pct < MOMENTUM_MIN_MOVE_PCT:
-                continue
-
-            # 3) Relative Volume: آخر 15 دقيقة مقابل الـ15 دقيقة السابقة
-            vol_now_15 = float(df["Volume"].iloc[-3:].sum())
-            vol_prev_15 = float(df["Volume"].iloc[-6:-3].sum())
-            rvol = vol_now_15 / max(vol_prev_15, 1.0)
-            if rvol < MOMENTUM_MIN_RVOL:
-                continue
-
-            # 4) اختراق أعلى قمة سابقة خلال الساعة الماضية
-            prior = df.iloc[-(MOMENTUM_BREAKOUT_LOOKBACK + 1):-1]
-            prior_high = float(prior["High"].max())
-            breakout_level = prior_high * (1 + MOMENTUM_BREAKOUT_BUFFER_PCT / 100.0)
-            if price <= breakout_level:
-                continue
-
-            # 5) شمعة التأكيد تقفل قرب الهاي
-            last = df.iloc[-1]
-            candle_range = float(last["High"] - last["Low"])
-            close_pos = ((price - float(last["Low"])) / candle_range) if candle_range > 0 else 0.0
-            if close_pos < MOMENTUM_MIN_CLOSE_POS:
-                continue
-
-            # 6) منع تكرار التنبيه
-            prev_alert = last_alert.get(t)
-            if prev_alert is not None and now - prev_alert < pd.Timedelta(minutes=MOMENTUM_REALERT_MIN):
-                continue
-
-            # 7) Float
-            fl, prev_close = fetch_float(t)
-            if fl is None:
-                if not MOMENTUM_SEND_UNKNOWN_FLOAT:
-                    continue
-            elif not (MOMENTUM_MIN_FLOAT <= fl <= MOMENTUM_MAX_FLOAT):
-                continue
-
-            last_alert[t] = now
-            hits += 1
-            day_vol = float(df[df.index.date == now.date()]["Volume"].sum())
-            day_chg = ((price / prev_close - 1) * 100) if prev_close else None
-            chg = f" ({day_chg:+.1f}% عن إغلاق أمس)" if day_chg is not None else ""
-
-            send_telegram(
-                f"🚀 زخم قوي - اختراق مؤكد\n"
-                f"السهم: {t}\n"
-                f"السعر: {price:.2f}{chg}\n"
-                f"تسارع 15 دقيقة: +{move_pct:.1f}%\n"
-                f"RVOL 15 دقيقة: {rvol:.1f}x\n"
-                f"اختراق قمة الساعة: {prior_high:.2f}\n"
-                f"الحجم آخر نص ساعة: {_fmt_shares(vol)} سهم\n"
-                f"قيمة التداول آخر نص ساعة: ${dollar_volume:,.0f}\n"
-                f"الحجم اليوم كله: {_fmt_shares(day_vol)} سهم\n"
-                f"الفري فلوت: {_fmt_shares(fl)}\n"
-                f"الوقت: {now.tz_convert(LOCAL_TZ):%H:%M} (توقيتك)"
-            )
-
-        except Exception as e:
-            log(f"{t}: خطأ زخم - {e}")
-
-    if vol_hits:
-        vol_hits.sort(reverse=True)
-        for i in range(0, len(vol_hits), 30):
-            send_telegram(f"💧 سيولة عالية - أسهم {VOLUME_MIN_PRICE}-{VOLUME_MAX_PRICE}$ "
-                          f"حجمها اليوم {_fmt_shares(VOLUME_MIN_DAY)} سهم وفوق\n"
-                          + "\n".join(r[1] for r in vol_hits[i:i + 30])
-                          + f"\nالوقت: {now.tz_convert(LOCAL_TZ):%H:%M} (توقيتك)")
-            time.sleep(2)
-
-    free_memory()
-    log(f"[{datetime.now():%H:%M}] الزخم: خلص الفحص - {hits} تنبيه جديد"
-        + (f" | السيولة: {len(vol_hits)} سهم" if ENABLE_VOLUME else ""))
-
-
 # ================== (4ب) تجزئة عكسية + شورت صفر ==================
 def scan_rsplit_short(tickers, already_sent):
     """أسهم البني ستوك اللي سوت تجزئة عكسية خلال آخر RSPLIT_DAYS يوم، والشورت عندها صفر."""
@@ -1347,7 +1146,18 @@ def scan_rsplit_short(tickers, already_sent):
                 cands[t] = (rev.index[-1], float(rev.iloc[-1]), float(df["Close"].iloc[-1]))
         except Exception:
             continue
-    log(f"التجزئة العكسية: {len(cands)} سهم سوى تجزئة عكسية آخر {RSPLIT_DAYS} يوم، أشيك على الشورت ...")
+    log(f"التجزئة العكسية: {len(cands)} سهم سوى تجزئة عكسية آخر {RSPLIT_DAYS} يوم")
+    if RSPLIT_LIST:
+        rows = sorted(cands.items(), key=lambda kv: kv[1][0], reverse=True)   # الأحدث فوق
+        if not rows:
+            send_telegram(f"📋 أسهم التجزئة العكسية - آخر {RSPLIT_DAYS} يوم\nما فيه ولا سهم")
+        for i in range(0, len(rows), 40):
+            send_telegram(f"📋 أسهم التجزئة العكسية - آخر {RSPLIT_DAYS} يوم\n"
+                          + "\n".join(f"• {t} | {d:%Y-%m-%d} | {last:.2f}$"
+                                      for t, (d, _, last) in rows[i:i + 40]))
+            time.sleep(2)
+    # الشورت صفر لأسهم البني ستوك منها بس
+    cands = {t: v for t, v in cands.items() if v[2] <= RSPLIT_MAX_PRICE}
     hits = 0
     if cands:
         with ThreadPoolExecutor(max_workers=RSPLIT_WORKERS) as pool:
@@ -1374,15 +1184,212 @@ def scan_rsplit_short(tickers, already_sent):
     log(f"[{datetime.now():%H:%M}] التجزئة العكسية: خلص الفحص - {hits} تنبيه جديد")
 
 
+# ================== (6) كشف خوارزميات التنفيذ - ألباكا ==================
+import threading
+from collections import deque
+
+ALGO_URL = "https://data.alpaca.markets/v2/stocks/trades"
+
+
+def trading_hours(now=None):
+    """4 الفجر - 8 بالليل نيويورك، أيام الأسبوع."""
+    now = now or pd.Timestamp.now(tz=NY)
+    m = now.hour * 60 + now.minute
+    return now.weekday() < 5 and 4 * 60 <= m <= 20 * 60
+
+
+def fetch_alpaca_trades(symbols, start):
+    """الصفقات من وقت start لين الحين لمجموعة أسهم. يرجع {الرمز: [صفقات]} أو None لو فشل."""
+    headers = {"APCA-API-KEY-ID": ALPACA_KEY, "APCA-API-SECRET-KEY": ALPACA_SECRET}
+    params = {"symbols": ",".join(symbols), "start": start.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+              "feed": ALGO_FEED, "limit": 10000, "sort": "asc"}
+    out = {}
+    for _ in range(20):                          # صفحات (لو الصفقات كثيرة)
+        try:
+            r = requests.get(ALGO_URL, headers=headers, params=params, timeout=20)
+        except Exception as e:
+            log("ألباكا: فشل الاتصال -", e)
+            return None
+        if r.status_code in (401, 403):
+            log(f"ألباكا: المفاتيح مرفوضة ({r.status_code}) - تأكد من ALPACAAPIKEY و ALPACASECRETKEY")
+            return None
+        if r.status_code == 429:
+            log("ألباكا: طلبات كثيرة، أستنى شوي")
+            time.sleep(10)
+            continue
+        if r.status_code != 200:
+            log(f"ألباكا: خطأ {r.status_code} - {r.text[:200]}")
+            return None
+        data = r.json()
+        for sym, trades in (data.get("trades") or {}).items():
+            out.setdefault(sym, []).extend(trades or [])
+        token = data.get("next_page_token")
+        if not token:
+            break
+        params["page_token"] = token
+    return out
+
+
+class AlgoDetector:
+    """يعد الصفقات المتتالية بنفس الحجم بالضبط (ورا بعض بدون أي صفقة مختلفة بينها).
+    مثال: 1، 1، 1، 1، 1، 1 = سلسلة طولها 6. أي صفقة بحجم ثاني أو سكوت طويل يكسر السلسلة."""
+
+    def __init__(self):
+        self.run = {}         # الرمز -> السلسلة الحالية
+        self.seen = {}        # الرمز -> أرقام الصفقات اللي شفناها (عشان ما نعدها مرتين)
+        self.alerted = {}     # (الرمز، الحجم) -> وقت آخر تنبيه
+
+    def add(self, sym, trade):
+        """يضيف صفقة، ويرجع تفاصيل التنبيه لو السلسلة وصلت الحد، وإلا None."""
+        tid = trade.get("i")
+        seen = self.seen.setdefault(sym, deque(maxlen=20000))
+        if tid is not None:
+            if tid in seen:
+                return None
+            seen.append(tid)
+        size = float(trade.get("s") or 0)
+        if size <= 0:
+            return None
+        ts = pd.Timestamp(trade["t"])
+        price = float(trade.get("p", 0))
+        run = self.run.get(sym)
+        if run and ts < run["last_t"]:
+            return None                                   # صفقة متأخرة قديمة، نتجاهلها
+        same = (run and run["size"] == size
+                and (ts - run["last_t"]).total_seconds() <= ALGO_MAX_GAP_SEC)
+        if same:
+            run["n"] += 1
+            run["last_t"] = ts
+            run["prices"].append(price)
+        else:                                             # حجم مختلف أو سكوت طويل = سلسلة جديدة
+            run = {"size": size, "n": 1, "first_t": ts, "last_t": ts,
+                   "prices": [price], "alerted": False}
+            self.run[sym] = run
+        if run["alerted"] or run["n"] < ALGO_MIN_STREAK or size in ALGO_IGNORE_SIZES:
+            return None
+        last = self.alerted.get((sym, size))
+        if last is not None and ts - last < pd.Timedelta(minutes=ALGO_REALERT_MIN):
+            return None
+        run["alerted"] = True                             # كل سلسلة تنبيه واحد بس
+        self.alerted[(sym, size)] = ts
+        prices = run["prices"]
+        top_price = max(set(prices), key=prices.count)
+        return {"size": size, "count": run["n"], "first_t": run["first_t"], "last_t": ts,
+                "secs": max((ts - run["first_t"]).total_seconds(), 0),
+                "low": min(prices), "high": max(prices), "last": prices[-1],
+                "top_price": top_price, "at_one_price": prices.count(top_price),
+                "dollars": sum(prices) * size}
+
+
+def _algo_message(sym, a):
+    size = f"{a['size']:g}"
+    iceberg = a["at_one_price"] >= a["count"] * 0.8
+    kind = ("🧊 غالباً آيس بيرغ (نفس الحجم على نفس السعر)" if iceberg
+            else "🤖 غالباً خوارزمية تقسيم أوامر")
+    price_line = (f"السعر: {a['top_price']:.2f}" if iceberg
+                  else f"السعر: من {a['low']:.2f} إلى {a['high']:.2f} (آخر سعر {a['last']:.2f})")
+    return (f"🔁 أوامر متتالية بنفس الحجم\n"
+            f"السهم: {sym}\n"
+            f"{kind}\n"
+            f"الحجم: {size} سهم × {a['count']} صفقة ورا بعض\n"
+            f"خلال: {a['secs']:.0f} ثانية\n"
+            f"{price_line}\n"
+            f"المبلغ: ${a['dollars']:,.0f}\n"
+            f"⚠️ المصدر بورصة IEX بس (جزء صغير من السوق)\n"
+            f"وقت آخر صفقة: {a['last_t'].tz_convert(LOCAL_TZ):%H:%M:%S} (توقيتك)")
+
+
+def algo_loop():
+    """يشتغل بخيط لحاله في الخلفية، عشان ما يتأخر بسبب الفحوصات الثانية الطويلة."""
+    det = AlgoDetector()
+    last_start = None
+    was_on = None
+    syms = ALGO_SYMBOLS[:ALGO_MAX_SYMBOLS]
+    log(f"كشف الخوارزميات: شغال على ألباكا ({ALGO_FEED}) - يراقب {len(syms)} سهم: {', '.join(syms)}")
+    while True:
+        try:
+            on = trading_hours()
+            if on != was_on:
+                log("كشف الخوارزميات: " + ("بدأ المراقبة" if on else "السوق مسكر، أنتظر"))
+                was_on = on
+            if not on:
+                last_start = None
+                time.sleep(60)
+                continue
+            now = pd.Timestamp.now(tz="UTC")
+            # نرجع شوي لورا عشان الصفقات المتأخرة، والتكرار ينشال بأرقام الصفقات
+            start = (last_start or now - pd.Timedelta(seconds=60)) - pd.Timedelta(seconds=5)
+            got = None
+            for i in range(0, len(syms), 30):
+                part = fetch_alpaca_trades(syms[i:i + 30], start)
+                if part is not None:
+                    got = got or {}
+                    got.update(part)
+            if got is not None:
+                last_start = now
+                for sym, trades in got.items():
+                    for tr in sorted(trades, key=lambda x: x.get("t", "")):
+                        res = det.add(sym, tr)
+                        if res:
+                            send_telegram(_algo_message(sym, res))
+        except Exception as e:
+            log("كشف الخوارزميات: خطأ -", e)
+        time.sleep(ALGO_POLL_SEC)
+
+
+def start_algo_thread():
+    if not ENABLE_ALGO:
+        log("كشف الخوارزميات: مطفي (حط ALPACAAPIKEY و ALPACASECRETKEY في Railway عشان يشتغل)")
+        return
+    threading.Thread(target=algo_loop, daemon=True, name="algo").start()
+
+
+def algo_self_test():
+    """يجرب الكاشف على صفقات وهمية بدون نت."""
+    t0 = pd.Timestamp("2026-09-29 14:30:00", tz="UTC")
+
+    def feed(sizes, gaps=None, price=12.50):
+        det, alerts, t = AlgoDetector(), [], t0
+        for k, s in enumerate(sizes):
+            t = t + pd.Timedelta(seconds=(gaps[k] if gaps else 2))
+            r = det.add("TEST", {"i": k, "t": str(t), "p": price, "s": s})
+            if r:
+                alerts.append(r)
+        return alerts
+
+    cases = [
+        ("1 ورا بعض 7 مرات", [1] * 7, None, 1),
+        ("4 ورا بعض 6 مرات", [4] * 6, None, 1),
+        ("1 متفرقة بينها أحجام ثانية", [1, 50, 1, 30, 1, 1, 7, 1, 1, 1], None, 0),
+        ("1 × 5 بس (أقل من الحد)", [1] * 5, None, 0),
+        ("1 × 8 بس بينها سكوت 30 ثانية", [1] * 8, [2, 2, 2, 30, 2, 2, 2, 2], 0),
+        ("سلسلة طويلة 20 = تنبيه واحد بس", [1] * 20, None, 1),
+    ]
+    ok = True
+    for name, sizes, gaps, expect in cases:
+        got = feed(sizes, gaps)
+        good = len(got) == expect
+        ok &= good
+        print(f"{'✅' if good else '❌'} {name}: {len(got)} تنبيه (المتوقع {expect})")
+    print()
+    print(_algo_message("TEST", feed([4] * 7)[0]))
+    print("\nالنتيجة:", "كله صح" if ok else "فيه خطأ")
+
+
 # ================== التشغيل ==================
 def main():
     if "--test" in sys.argv:
         self_test()
         return
+    if "--algotest" in sys.argv:
+        algo_self_test()
+        return
     once = "--once" in sys.argv
     _load_chats()
     discover_groups()
     log(f"التنبيهات بتروح لـ {len(CHATS)} محادثة: {', '.join(CHATS) or 'ولا وحدة'}")
+    if not once:
+        start_algo_thread()
 
     gap_tickers, gap_day, gap_last = [], None, None
     log("الجاب: " + ("24 ساعة (مع الجلسة الليلية من Tiingo)" if GAP_OVERNIGHT else
@@ -1394,13 +1401,10 @@ def main():
     news_sent = _load_set(NEWS_SENT_FILE)
     daily_tickers, daily_day, daily_last = [], None, 0.0
     daily_sent = _load_set(DAILY_SENT_FILE)
-    momentum_tickers, momentum_day, momentum_last = [], None, 0.0
-    momentum_alerts = {}
     short_day = None
     short_sent = _load_set(SHORT_SENT_FILE)
-    rsplit_day = None
     rsplit_sent = _load_set(RSPLIT_SENT_FILE)
-    volume_sent = _load_set(VOLUME_SENT_FILE)
+    rsplit_week = next(iter(_load_set(RSPLIT_WEEK_FILE)), None)
 
     while True:
         discover_groups()
@@ -1440,27 +1444,20 @@ def main():
             scan_daily(daily_tickers, daily_sent)
             daily_last = time.time()
 
-        # (5) الزخم - كل 5 دقايق وقت التداول (مع ما قبل الفتح وبعد الإغلاق)
-        if (ENABLE_MOMENTUM or ENABLE_VOLUME) and (momentum_hours() or once) \
-                and time.time() - momentum_last >= MOMENTUM_EVERY_MIN * 60:
-            today = pd.Timestamp.now(tz=NY).date()
-            if momentum_day != today or not momentum_tickers:
-                # نطاق أوسع شوي من 1-5$ لأن السعر يتحرك خلال اليوم، والفلتر الدقيق وقت الفحص
-                top = max(MOMENTUM_MAX_PRICE, VOLUME_MAX_PRICE if ENABLE_VOLUME else 0)
-                momentum_tickers = build_universe("الزخم والسيولة", MOMENTUM_MIN_PRICE * 0.5,
-                                                  top * 1.5, 0, include_nyse=False)
-                momentum_day = today
-            scan_momentum(momentum_tickers, momentum_alerts if ENABLE_MOMENTUM else {}, volume_sent)
-            momentum_last = time.time()
-
-        # (4ب) تجزئة عكسية + شورت صفر - مرة باليوم
+        # (4ب) قائمة التجزئة العكسية + شورت صفر - مرة بالأسبوع
         if ENABLE_RSPLIT_SHORT:
-            today = pd.Timestamp.now(tz=LOCAL_TZ).date()
-            if rsplit_day != today:
-                rs_tickers = build_universe("التجزئة العكسية", 0.01, RSPLIT_MAX_PRICE,
-                                            0, include_nyse=False)
+            iso = pd.Timestamp.now(tz=LOCAL_TZ).isocalendar()
+            week = f"{iso[0]}-W{iso[1]:02d}"
+            if rsplit_week != week:
+                top = 100_000 if RSPLIT_LIST else RSPLIT_MAX_PRICE
+                rs_tickers = build_universe("التجزئة العكسية", 0.01, top, 0, include_nyse=False)
                 scan_rsplit_short(rs_tickers, rsplit_sent)
-                rsplit_day = today
+                rsplit_week = week
+                try:
+                    with open(RSPLIT_WEEK_FILE, "w", encoding="utf-8") as f:
+                        f.write(week + "\n")
+                except Exception:
+                    pass
 
         # (4) الشورت صفر - مرة باليوم
         if ENABLE_SHORT:
