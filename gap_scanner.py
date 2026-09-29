@@ -32,6 +32,8 @@
     - المصدر: ياهو فاينانس
 
 (3) نماذج الفريم اليومي - كل أسهم ناسداك - التنبيه عند اكتمال النموذج (كسر خط العنق)
+    - يرسل أي سهم اخترق/كسر خط العنق خلال آخر شهر (22 يوم تداول)، مو بس اليوم
+    - كل نموذج يتنبه عليه مرة وحدة بس، والتنبيهات تنجمع في رسايل عشان ما يزحم القروب
     🟢 القاع المزدوج (W)        : قاعين متقاربين (فرق 3% أو أقل) + اختراق خط العنق لفوق
     🔴 القمة المزدوجة (M)       : قمتين متقاربتين (فرق 3% أو أقل) + كسر خط العنق لتحت
     🔴 الرأس والكتفين            : كتف + رأس أعلى + كتف + كسر خط العنق لتحت
@@ -41,6 +43,12 @@
     - أسهم ناسداك اللي سعرها من 1 إلى 6 دولار
     - إذا بيانات الشورت الرسمية (من ياهو) صارت صفر  =>  تنبيه
     - البيانات الرسمية تنزل مرتين بالشهر وبتأخير أسبوعين تقريباً، فيفحصها مرة باليوم
+
+(5) الزخم - أسهم ناسداك الرخيصة اللي دخلها حجم تداول مفاجئ
+    - السعر من 1 إلى 5 دولار
+    - حجم التداول في آخر نص ساعة 700 ألف سهم أو أكثر
+    - الفري فلوت من 700 ألف إلى 8 مليون سهم (من ياهو - لو ما عرفه يرسل ويكتب "غير معروف")
+    - يفحص كل 5 دقايق من 4 الفجر إلى 8 بالليل نيويورك (يشمل ما قبل الفتح وبعد الإغلاق)
 
 التشغيل:
   pip install yfinance pandas requests lxml
@@ -131,6 +139,8 @@ HEAD_MIN_DIFF = 0.02             # الرأس لازم يزيد عن الكتف�
 PIVOT_BARS = 5                   # القمة/القاع لازم تكون أعلى/أنزل من 5 شموع قبلها و5 بعدها
 PATTERN_MIN_BARS = 10            # أقل مسافة بين القاعين/القمتين (أيام تداول)
 PATTERN_MAX_BARS = 120           # أقصى طول للنموذج (تقريباً 6 شهور)
+DAILY_LOOKBACK_DAYS = 22         # يرسل النماذج اللي اخترقت خلال آخر كذا يوم تداول (22 = شهر تقريباً)
+DAILY_SENT_FILE = "daily_sent.txt"   # عشان ما يعيد نفس النموذج كل يوم
 
 # ---- (4) الشورت صفر ----
 ENABLE_SHORT = True
@@ -139,6 +149,19 @@ SHORT_MAX_PRICE = 6
 SHORT_MIN_AVG_VOLUME = 50_000
 SHORT_WORKERS = 3
 SHORT_SENT_FILE = "short_sent.txt"   # عشان ما يعيد نفس التنبيه لو البوت أعاد التشغيل
+
+# ---- (5) الزخم ----
+ENABLE_MOMENTUM = True
+MOMENTUM_MIN_PRICE = 1
+MOMENTUM_MAX_PRICE = 5
+MOMENTUM_MIN_VOLUME = 700_000        # حجم التداول في آخر نص ساعة (عدد أسهم)
+MOMENTUM_WINDOW_MIN = 30             # نص ساعة
+MOMENTUM_MIN_FLOAT = 700_000         # الفري فلوت من كذا
+MOMENTUM_MAX_FLOAT = 8_000_000       # إلى كذا
+MOMENTUM_SEND_UNKNOWN_FLOAT = True   # True = لو ياهو ما عنده الفري فلوت يرسله ويكتب "غير معروف"
+MOMENTUM_EVERY_MIN = 5               # كل كم دقيقة يفحص
+MOMENTUM_REALERT_MIN = 120           # ما يعيد تنبيه نفس السهم قبل كذا دقيقة
+
 SENT_KEEP_LINES = 20000             # ملفات "المرسل" تنقص لآخر كذا سطر عشان ما تكبر للأبد
 UNIVERSE_BATCH = 200                # حجم دفعة التحميل لما يفلتر كل الأسهم (أصغر = ذاكرة أقل)
 # ===============================================
@@ -860,15 +883,31 @@ def scan_news(tickers, already_sent):
 
 
 # ================== (3) نماذج الفريم اليومي ==================
-def find_pivots(hi, lo, n):
-    """القمم والقيعان المؤكدة، متناوبة (قمة، قاع، قمة ...)."""
+def raw_pivots(hi, lo, n):
+    """كل القمم والقيعان (قبل الترتيب المتناوب)."""
+    top = pd.Series(hi).rolling(2 * n + 1, center=True).max().values
+    bot = pd.Series(lo).rolling(2 * n + 1, center=True).min().values
     pts = []
     for i in range(n, len(hi) - n):
-        if hi[i] == max(hi[i - n:i + n + 1]):
+        if hi[i] == top[i]:
             pts.append((i, "H", hi[i]))
-        if lo[i] == min(lo[i - n:i + n + 1]):
+        if lo[i] == bot[i]:
             pts.append((i, "L", lo[i]))
     pts.sort(key=lambda x: (x[0], x[1] == "L"))
+    return pts
+
+
+def pivots_until(raw, t, n):
+    """القمم والقيعان اللي كانت مؤكدة يوم t (يعني كأننا واقفين في ذاك اليوم)، متناوبة."""
+    return _alternate([p for p in raw if p[0] <= t - n])
+
+
+def find_pivots(hi, lo, n):
+    """القمم والقيعان المؤكدة، متناوبة (قمة، قاع، قمة ...)."""
+    return _alternate(raw_pivots(hi, lo, n))
+
+
+def _alternate(pts):
     out = []
     for p in pts:
         if out and out[-1][1] == p[1]:
@@ -880,10 +919,11 @@ def find_pivots(hi, lo, n):
     return out
 
 
-def _double_bottom(hi, lo, cl):
-    """قاع مزدوج (W) واخترق خط العنق في آخر شمعة. يشتغل بالمقلوب للقمة المزدوجة."""
-    t = len(cl) - 1
-    piv = [p for p in find_pivots(hi, lo, PIVOT_BARS) if p[0] < t]
+def _double_bottom(hi, lo, cl, t=None, raw=None):
+    """قاع مزدوج (W) واخترق خط العنق في الشمعة t (الافتراضي آخر شمعة). يشتغل بالمقلوب للقمة المزدوجة."""
+    t = len(cl) - 1 if t is None else t
+    raw = raw_pivots(hi, lo, PIVOT_BARS) if raw is None else raw
+    piv = [p for p in pivots_until(raw, t, PIVOT_BARS) if p[0] < t]
     tried = 0
     for j in range(len(piv) - 1, 0, -1):
         if piv[j][1] != "H":
@@ -912,10 +952,11 @@ def _double_bottom(hi, lo, cl):
     return None
 
 
-def _inv_head_shoulders(hi, lo, cl):
-    """رأس وكتفين مقلوب واخترق خط العنق في آخر شمعة. يشتغل بالمقلوب للعادي."""
-    t = len(cl) - 1
-    piv = [p for p in find_pivots(hi, lo, PIVOT_BARS) if p[0] < t]
+def _inv_head_shoulders(hi, lo, cl, t=None, raw=None):
+    """رأس وكتفين مقلوب واخترق خط العنق في الشمعة t (الافتراضي آخر شمعة). يشتغل بالمقلوب للعادي."""
+    t = len(cl) - 1 if t is None else t
+    raw = raw_pivots(hi, lo, PIVOT_BARS) if raw is None else raw
+    piv = [p for p in pivots_until(raw, t, PIVOT_BARS) if p[0] < t]
     for k in range(len(piv) - 4, max(len(piv) - 7, -1), -1):
         seq = piv[k:k + 4]
         if [p[1] for p in seq] != ["L", "H", "L", "H"]:
@@ -943,54 +984,71 @@ def _inv_head_shoulders(hi, lo, cl):
     return None
 
 
-def check_daily_patterns(df):
-    """يرجع قائمة النماذج اللي اكتملت اليوم (في آخر شمعة يومية)."""
+DAILY_PATTERNS = [
+    # (مفعّل، الاسم، الكاشف، بالمقلوب؟)
+    ("W", "🟢 قاع مزدوج (W)", _double_bottom, False),
+    ("M", "🔴 قمة مزدوجة (M)", _double_bottom, True),
+    ("IHS", "🟢 رأس وكتفين مقلوب", _inv_head_shoulders, False),
+    ("HS", "🔴 رأس وكتفين", _inv_head_shoulders, True),
+]
+
+
+def _pattern_enabled(code):
+    return {"W": ENABLE_DOUBLE_BOTTOM, "M": ENABLE_DOUBLE_TOP,
+            "IHS": ENABLE_INV_HS, "HS": ENABLE_HS}[code]
+
+
+def check_daily_patterns(df, lookback=None):
+    """النماذج اللي اخترقت/كسرت خط العنق خلال آخر lookback شمعة يومية.
+    يرجع قائمة: (الرمز المختصر للنموذج، الاسم، رقم شمعة الاختراق، خط العنق)."""
+    lookback = DAILY_LOOKBACK_DAYS if lookback is None else lookback
     df = df.dropna(subset=["High", "Low", "Close"])
     if len(df) < 40:
         return []
     hi, lo, cl = (df[k].astype(float).values for k in ("High", "Low", "Close"))
+    arrays = {False: (hi, lo, cl), True: (-lo, -hi, -cl)}
+    raws = {flip: raw_pivots(a[0], a[1], PIVOT_BARS) for flip, a in arrays.items()}
     found = []
-    if ENABLE_DOUBLE_BOTTOM:
-        r = _double_bottom(hi, lo, cl)
-        if r:
-            found.append(("🟢 قاع مزدوج (W) - فريم يومي",
-                          f"القاع الأول: {r['b1']:.2f}\nالقاع الثاني: {r['b2']:.2f}\n"
-                          f"اخترق خط العنق لفوق: {r['neck']:.2f}"))
-    if ENABLE_DOUBLE_TOP:
-        r = _double_bottom(-lo, -hi, -cl)        # نفس الشي بالمقلوب
-        if r:
-            found.append(("🔴 قمة مزدوجة (M) - فريم يومي",
-                          f"القمة الأولى: {-r['b1']:.2f}\nالقمة الثانية: {-r['b2']:.2f}\n"
-                          f"كسر خط العنق لتحت: {-r['neck']:.2f}"))
-    if ENABLE_INV_HS:
-        r = _inv_head_shoulders(hi, lo, cl)
-        if r:
-            found.append(("🟢 رأس وكتفين مقلوب - فريم يومي",
-                          f"الكتف الأيسر: {r['ls']:.2f}\nالرأس: {r['head']:.2f}\n"
-                          f"الكتف الأيمن: {r['rs']:.2f}\nاخترق خط العنق لفوق: {r['neck']:.2f}"))
-    if ENABLE_HS:
-        r = _inv_head_shoulders(-lo, -hi, -cl)   # نفس الشي بالمقلوب
-        if r:
-            found.append(("🔴 رأس وكتفين - فريم يومي",
-                          f"الكتف الأيسر: {-r['ls']:.2f}\nالرأس: {-r['head']:.2f}\n"
-                          f"الكتف الأيمن: {-r['rs']:.2f}\nكسر خط العنق لتحت: {-r['neck']:.2f}"))
+    for code, name, detect, flip in DAILY_PATTERNS:
+        if not _pattern_enabled(code):
+            continue
+        h, l, c = arrays[flip]
+        for t in range(max(len(c) - lookback, 40), len(c)):
+            r = detect(h, l, c, t=t, raw=raws[flip])
+            if r:
+                neck = -r["neck"] if flip else r["neck"]
+                found.append((code, name, t, neck))
     return found
 
 
 def scan_daily(tickers, already_sent):
-    hits = 0
-    today = pd.Timestamp.now(tz=NY).date()
+    """يفحص النماذج ويجمع الجديد منها في رسايل (بدل رسالة لكل سهم)."""
+    new = {}   # الاسم -> [سطور]
     for t, df in download_batches(tickers, 200, period="1y", interval="1d", prepost=False):
         try:
-            for title, details in check_daily_patterns(df):
-                key = f"{t}-{title}-{today}"
+            last = float(df["Close"].iloc[-1])
+            for code, name, i, neck in check_daily_patterns(df):
+                day = pd.Timestamp(df.index[i]).strftime("%Y-%m-%d")
+                key = f"{t}-{code}-{day}"
                 if key in already_sent:
                     continue
                 already_sent.add(key)
-                hits += 1
-                send_telegram(f"{title}\nالسهم: {t}\nالسعر: {float(df['Close'].iloc[-1]):.2f}\n{details}")
+                _append_line(DAILY_SENT_FILE, key)
+                chg = (last / neck - 1) * 100
+                new.setdefault(name, []).append(
+                    (day, f"• {t} | الاختراق: {day} | خط العنق: {neck:.2f} | "
+                          f"السعر الحين: {last:.2f} ({chg:+.1f}%)"))
         except Exception as e:
             log(f"{t}: خطأ يومي - {e}")
+    hits = 0
+    for name, rows in new.items():
+        rows.sort(reverse=True)                   # الأحدث فوق
+        hits += len(rows)
+        for i in range(0, len(rows), 25):         # كل رسالة 25 سهم بالكثير
+            part = rows[i:i + 25]
+            send_telegram(f"{name} - فريم يومي (آخر {DAILY_LOOKBACK_DAYS} يوم تداول)\n"
+                          + "\n".join(r[1] for r in part))
+            time.sleep(3)
     free_memory()
     log(f"[{datetime.now():%H:%M}] اليومي: خلص الفحص - {hits} تنبيه جديد")
 
@@ -1065,6 +1123,84 @@ def scan_short(tickers, already_sent):
     log(f"[{datetime.now():%H:%M}] الشورت: خلص الفحص - {hits} تنبيه جديد")
 
 
+# ================== (5) الزخم ==================
+_float_cache = {}   # الرمز -> (اليوم، الفري فلوت، إغلاق أمس)
+
+
+def fetch_float(t):
+    """الفري فلوت وإغلاق أمس من ياهو (ينحفظ لباقي اليوم)."""
+    import yfinance as yf
+    today = pd.Timestamp.now(tz=NY).date()
+    got = _float_cache.get(t)
+    if got and got[0] == today:
+        return got[1], got[2]
+    fl, prev = None, None
+    try:
+        info = yf.Ticker(t).info or {}
+        fl = info.get("floatShares")
+        prev = info.get("regularMarketPreviousClose") or info.get("previousClose")
+    except Exception:
+        pass
+    _float_cache[t] = (today, fl, prev)
+    return fl, prev
+
+
+def momentum_hours(now=None):
+    """4 الفجر - 8 بالليل نيويورك، أيام الأسبوع."""
+    now = now or pd.Timestamp.now(tz=NY)
+    m = now.hour * 60 + now.minute
+    return now.weekday() < 5 and 4 * 60 <= m <= 20 * 60
+
+
+def _fmt_shares(x):
+    if x is None:
+        return "غير معروف"
+    x = float(x)
+    return f"{x / 1e6:.2f} مليون" if x >= 1e6 else f"{x / 1e3:.0f} ألف"
+
+
+def scan_momentum(tickers, last_alert):
+    hits = 0
+    now = pd.Timestamp.now(tz=NY)
+    since = now - pd.Timedelta(minutes=MOMENTUM_WINDOW_MIN)
+    for t, df in download_batches(tickers, 200, period="1d", interval="5m", prepost=True):
+        try:
+            df = to_ny(df)
+            price = float(df["Close"].iloc[-1])
+            if not (MOMENTUM_MIN_PRICE <= price <= MOMENTUM_MAX_PRICE):
+                continue
+            recent = df[df.index >= since]
+            vol = float(recent["Volume"].sum()) if not recent.empty else 0.0
+            if vol < MOMENTUM_MIN_VOLUME:
+                continue
+            prev_alert = last_alert.get(t)
+            if prev_alert is not None and now - prev_alert < pd.Timedelta(minutes=MOMENTUM_REALERT_MIN):
+                continue
+            fl, prev_close = fetch_float(t)
+            if fl is None:
+                if not MOMENTUM_SEND_UNKNOWN_FLOAT:
+                    continue
+            elif not (MOMENTUM_MIN_FLOAT <= fl <= MOMENTUM_MAX_FLOAT):
+                continue
+            last_alert[t] = now
+            hits += 1
+            day_vol = float(df[df.index.date == now.date()]["Volume"].sum())
+            chg = f" ({(price / prev_close - 1) * 100:+.1f}% عن إغلاق أمس)" if prev_close else ""
+            send_telegram(
+                f"🚀 زخم - حجم تداول مفاجئ\n"
+                f"السهم: {t}\n"
+                f"السعر: {price:.2f}{chg}\n"
+                f"الحجم آخر نص ساعة: {_fmt_shares(vol)} سهم\n"
+                f"الحجم اليوم كله: {_fmt_shares(day_vol)} سهم\n"
+                f"الفري فلوت: {_fmt_shares(fl)}\n"
+                f"الوقت: {now.tz_convert(LOCAL_TZ):%H:%M} (توقيتك)"
+            )
+        except Exception as e:
+            log(f"{t}: خطأ زخم - {e}")
+    free_memory()
+    log(f"[{datetime.now():%H:%M}] الزخم: خلص الفحص - {hits} تنبيه جديد")
+
+
 # ================== التشغيل ==================
 def main():
     if "--test" in sys.argv:
@@ -1084,7 +1220,9 @@ def main():
     news_tickers, news_day, news_last = [], None, 0.0
     news_sent = _load_set(NEWS_SENT_FILE)
     daily_tickers, daily_day, daily_last = [], None, 0.0
-    daily_sent = set()
+    daily_sent = _load_set(DAILY_SENT_FILE)
+    momentum_tickers, momentum_day, momentum_last = [], None, 0.0
+    momentum_alerts = {}
     short_day = None
     short_sent = _load_set(SHORT_SENT_FILE)
 
@@ -1112,16 +1250,27 @@ def main():
             news_last = time.time()
 
         # (3) النماذج اليومية - وقت السوق الرسمي، كل نص ساعة
-        if ENABLE_DAILY and (regular_session_open() or once) \
+        if ENABLE_DAILY and (regular_session_open() or once or daily_last == 0.0) \
                 and time.time() - daily_last >= DAILY_EVERY_MIN * 60:
             today = pd.Timestamp.now(tz=NY).date()
             if daily_day != today or not daily_tickers:
                 daily_tickers = build_universe("اليومي", DAILY_MIN_PRICE, 100_000,
                                                DAILY_MIN_AVG_VOLUME, include_nyse=False)
                 daily_day = today
-                daily_sent.clear()
             scan_daily(daily_tickers, daily_sent)
             daily_last = time.time()
+
+        # (5) الزخم - كل 5 دقايق وقت التداول (مع ما قبل الفتح وبعد الإغلاق)
+        if ENABLE_MOMENTUM and (momentum_hours() or once) \
+                and time.time() - momentum_last >= MOMENTUM_EVERY_MIN * 60:
+            today = pd.Timestamp.now(tz=NY).date()
+            if momentum_day != today or not momentum_tickers:
+                # نطاق أوسع شوي من 1-5$ لأن السعر يتحرك خلال اليوم، والفلتر الدقيق وقت الفحص
+                momentum_tickers = build_universe("الزخم", MOMENTUM_MIN_PRICE * 0.5,
+                                                  MOMENTUM_MAX_PRICE * 1.5, 0, include_nyse=False)
+                momentum_day = today
+            scan_momentum(momentum_tickers, momentum_alerts)
+            momentum_last = time.time()
 
         # (4) الشورت صفر - مرة باليوم
         if ENABLE_SHORT:
