@@ -55,12 +55,13 @@
   python gap_scanner.py --test   # يجرب نموذج الجاب على مثال NVDA (بدون نت)
   python gap_scanner.py --algotest   # يجرب كشف الأوامر المتكررة (بدون نت)
 
-(6) كشف خوارزميات التنفيذ - من ألباكا (بورصة IEX المجانية)
-    - يسحب الصفقات كل 15 ثانية ويدور على صفقات ورا بعض بنفس الحجم بالضبط (مثل 1،1،1،1،1،1)
-    - 6 صفقات أو أكثر متتالية بدون أي صفقة مختلفة بينها، والفرق بين كل صفقة والثانية 10 ثواني أو أقل
-    - لو أغلبها على نفس السعر يكتب "آيس بيرغ"، وإلا "خوارزمية تقسيم"
+(6) كشف خوارزميات التقطيع - من ألباكا
+    - الأسهم: أنشط 100 سهم في ناسداك قيمتها السوقية 30 مليون دولار وتحت
+    - يدور على صفقات صغيرة (10 أسهم وأقل) بنفس الحجم بالضبط، مثل 1، 1، 1، 1...
+    - تنبيه لو تكررت 300 مرة أو أكثر خلال 5 دقايق، وقوي عند 600
+    - يقدّر هل غالبها شراء ولا بيع من اتجاه السعر (تقريبي)
+    - البيانات من كل البورصات (sip) بتأخير 15 دقيقة في باقة ألباكا المجانية
     - يحتاج المتغيرين ALPACAAPIKEY و ALPACASECRETKEY في Railway
-    - الأسهم: قائمة ثابتة (تتغير بمتغير ALGO_SYMBOLS في Railway)
 """
 
 import gc
@@ -179,23 +180,22 @@ ALPACA_KEY = (os.environ.get("ALPACAAPIKEY") or os.environ.get("ALPACA_API_KEY")
 ALPACA_SECRET = (os.environ.get("ALPACASECRETKEY") or os.environ.get("ALPACA_SECRET_KEY")
                  or os.environ.get("APCA_API_SECRET_KEY", ""))
 ENABLE_ALGO = bool(ALPACA_KEY and ALPACA_SECRET)   # يتفعل لحاله لو المفاتيح موجودة
-ALGO_FEED = "iex"                    # البورصة المجانية
-# الأسهم اللي يراقبها (تقدر تغيرها من Railway بمتغير ALGO_SYMBOLS، بينها فاصلة)
-ALGO_SYMBOLS = [s.strip().upper() for s in os.environ.get(
-    "ALGO_SYMBOLS",
-    "NVDA,TSLA,AAPL,AMD,PLTR,SOFI,MARA,RIOT,AMZN,META,MSFT,GOOGL,SMCI,COIN,MSTR,NIO,LCID,INTC,HOOD,RIVN"
-).split(",") if s.strip()]
-ALGO_MAX_SYMBOLS = 60                # أقصى عدد أسهم يراقبها بنفس الوقت
-ALGO_POLL_SEC = 15                   # كل كم ثانية يسحب الصفقات الجديدة
-ALGO_MIN_PRICE = 1.00                 # فلتر سعر السهم
-ALGO_MAX_PRICE = 15.00
-ALGO_MIN_FLOAT = 200_000              # الفري فلوت المطلوب
-ALGO_MAX_FLOAT = 8_000_000
-ALGO_MIN_STREAK = 100                 # أول تنبيه عند 100 صفقة متكررة في نفس الثانية
-ALGO_STRONG_STREAK = 200              # تنبيه قوي عند 200 صفقة أو أكثر
-ALGO_IGNORE_SIZES = ()                # أحجام يتجاهلها، مثال: (100,)
-ALGO_REALERT_MIN = 15                 # ما يعيد نفس مستوى التنبيه قبل كذا دقيقة
-ALGO_FLOAT_CACHE_SEC = 6 * 60 * 60    # تحديث بيانات الفري فلوت كل 6 ساعات
+# sip = كل البورصات (المجاني يعطيها بتأخير 15 دقيقة) | iex = لحظي بس بورصة وحدة صغيرة
+# الأسهم الصغيرة تقريباً ما تتداول على IEX، فـ sip أدق بكثير لهالنوع
+ALGO_FEED = os.environ.get("ALGO_FEED", "sip").lower()
+ALGO_DELAY_MIN = 16 if ALGO_FEED == "sip" else 0   # الباقة المجانية: بيانات sip عمرها 15 دقيقة وفوق
+# الأسهم: تلقائياً أسهم ناسداك اللي قيمتها السوقية 30 مليون وتحت (الأنشط تداولاً)
+# ولو تبي قائمة ثابتة حطها في Railway بمتغير ALGO_SYMBOLS (بينها فاصلة)
+ALGO_SYMBOLS = [s.strip().upper() for s in os.environ.get("ALGO_SYMBOLS", "").split(",") if s.strip()]
+ALGO_MAX_MARKET_CAP = 30_000_000      # القيمة السوقية 30 مليون دولار وتحت
+ALGO_MIN_DAY_VOLUME = 50_000          # يشيل الأسهم الميتة (حجم اليوم)
+ALGO_MAX_SYMBOLS = 100                # أقصى عدد أسهم يراقبها (الأنشط أول)
+ALGO_POLL_SEC = 15                    # كل كم ثانية يسحب الصفقات الجديدة
+ALGO_MAX_SIZE = 10                    # الأحجام الصغيرة بس: صفقة حجمها 10 أسهم أو أقل (1، 1، 1...)
+ALGO_WINDOW_MIN = 5                   # يعد الصفقات المتكررة خلال آخر كذا دقيقة
+ALGO_MIN_STREAK = 300                 # تنبيه عند 300 صفقة بنفس الحجم
+ALGO_STRONG_STREAK = 600              # تنبيه قوي عند 600 أو أكثر
+ALGO_REALERT_MIN = 15                 # ما يعيد نفس مستوى التنبيه لنفس السهم والحجم قبل كذا دقيقة
 
 # ---- المحتوى التعليمي ----
 ADD_EDUCATION = True             # يضيف شرح تعليمي قصير للنموذج تحت كل تنبيه
@@ -353,10 +353,10 @@ EDUCATION = {
                "الشركة تدمج أسهمها (مثلاً كل 10 أسهم = سهم) عشان ترفع السعر، غالباً لتفادي "
                "الشطب من البورصة. عدد الأسهم يقل والقيمة ما تتغير.\n"
                "كثير منها يكمل نزول بعدها، وأحياناً يتبعها طرح أسهم جديدة."),
-    "algo": ("📚 للتعلّم - الأوامر الخوارزمية:\n"
-             "تكرار نفس حجم الصفقة مرات كثيرة بنفس الثانية علامة على برنامج ينفّذ أمر كبير "
-             "مقسّم على قطع صغيرة عشان ما يحرك السعر.\n"
-             "ما يوضح إذا كان شراء أو بيع، وبيانات IEX جزء بسيط من السوق."),
+    "algo": ("📚 للتعلّم - خوارزميات التقطيع:\n"
+             "مئات الصفقات الصغيرة بنفس الحجم بالضبط (سهم، سهم، سهم...) علامة على برنامج "
+             "يقسّم أمر كبير على قطع صغيرة عشان ما يحرك السعر ولا يبان.\n"
+             "تقدير الشراء/البيع من اتجاه السعر تقريبي، وفي الأسهم الصغيرة ممكن يكون تلاعب أو صانع سوق."),
 }
 
 
@@ -1230,11 +1230,13 @@ def trading_hours(now=None):
     return now.weekday() < 5 and 4 * 60 <= m <= 20 * 60
 
 
-def fetch_alpaca_trades(symbols, start):
+def fetch_alpaca_trades(symbols, start, end=None):
     """الصفقات من وقت start لين الحين لمجموعة أسهم. يرجع {الرمز: [صفقات]} أو None لو فشل."""
     headers = {"APCA-API-KEY-ID": ALPACA_KEY, "APCA-API-SECRET-KEY": ALPACA_SECRET}
     params = {"symbols": ",".join(symbols), "start": start.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
               "feed": ALGO_FEED, "limit": 10000, "sort": "asc"}
+    if end is not None:
+        params["end"] = end.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     out = {}
     for _ in range(20):                          # صفحات (لو الصفقات كثيرة)
         try:
@@ -1263,13 +1265,16 @@ def fetch_alpaca_trades(symbols, start):
 
 
 class AlgoDetector:
-    """يكشف تكرار نفس حجم الصفقة داخل نفس الثانية."""
+    """يعد الصفقات الصغيرة اللي بنفس الحجم بالضبط خلال آخر ALGO_WINDOW_MIN دقيقة لكل سهم.
+    ويقدّر الشراء/البيع من اتجاه السعر: صفقة أعلى من اللي قبلها = شراء، أقل = بيع (تقريبي)."""
     def __init__(self):
-        self.buckets = {}
+        self.win = {}         # (الرمز، الحجم) -> deque[(الوقت، السعر، الجهة)]
         self.seen = {}
+        self.last_px = {}
+        self.last_side = {}
         self.alerted = {}
 
-    def add(self, sym, trade, float_shares=None):
+    def add(self, sym, trade):
         tid = trade.get("i")
         seen = self.seen.setdefault(sym, deque(maxlen=50000))
         if tid is not None:
@@ -1278,102 +1283,143 @@ class AlgoDetector:
             seen.append(tid)
         size = float(trade.get("s") or 0)
         price = float(trade.get("p") or 0)
-        if size <= 0 or size in ALGO_IGNORE_SIZES:
+        if size <= 0 or price <= 0:
             return None
-        if not (ALGO_MIN_PRICE <= price <= ALGO_MAX_PRICE):
-            return None
-        if float_shares is None or not (ALGO_MIN_FLOAT <= float_shares <= ALGO_MAX_FLOAT):
+        prev = self.last_px.get(sym)
+        side = self.last_side.get(sym, 0)
+        if prev is not None and price != prev:
+            side = 1 if price > prev else -1          # نفس السعر = نفس جهة اللي قبلها
+        self.last_px[sym], self.last_side[sym] = price, side
+        if size > ALGO_MAX_SIZE:
             return None
         ts = pd.Timestamp(trade["t"])
-        sec = ts.floor("s")
-        key = (sym, sec, size)
-        b = self.buckets.get(key)
-        if b is None:
-            b = {"count": 0, "prices": [], "first_t": ts, "last_t": ts,
-                 "float": float_shares, "levels": set()}
-            self.buckets[key] = b
-        b["count"] += 1; b["prices"].append(price); b["last_t"] = ts
-        if len(self.buckets) > 2000:
-            cutoff = sec - pd.Timedelta(seconds=3)
-            self.buckets = {k:v for k,v in self.buckets.items() if k[1] >= cutoff}
-        threshold = None
-        if b["count"] >= ALGO_STRONG_STREAK and 200 not in b["levels"]:
-            threshold = 200
-        elif b["count"] >= ALGO_MIN_STREAK and 100 not in b["levels"]:
-            threshold = 100
-        if threshold is None:
+        q = self.win.setdefault((sym, size), deque())
+        q.append((ts, price, side))
+        cutoff = ts - pd.Timedelta(minutes=ALGO_WINDOW_MIN)
+        while q and q[0][0] < cutoff:
+            q.popleft()
+        n = len(q)
+        level = ("strong" if n >= ALGO_STRONG_STREAK else
+                 "normal" if n >= ALGO_MIN_STREAK else None)
+        if level is None:
             return None
-        last = self.alerted.get((sym, size, threshold))
-        if last is not None and ts-last < pd.Timedelta(minutes=ALGO_REALERT_MIN):
-            b["levels"].add(threshold); return None
-        b["levels"].add(threshold); self.alerted[(sym,size,threshold)] = ts
-        prices=b["prices"]
-        return {"size":size,"count":b["count"],"first_t":b["first_t"],"last_t":ts,
-                "secs":max((ts-b["first_t"]).total_seconds(),0),"low":min(prices),
-                "high":max(prices),"last":prices[-1],"float":float_shares,
-                "level":"strong" if threshold==200 else "normal"}
+        k = (sym, size, level)
+        last = self.alerted.get(k)
+        if last is not None and ts - last < pd.Timedelta(minutes=ALGO_REALERT_MIN):
+            return None
+        self.alerted[k] = ts
+        prices = [x[1] for x in q]
+        buys = sum(1 for x in q if x[2] > 0)
+        sells = sum(1 for x in q if x[2] < 0)
+        return {"size": size, "count": n, "first_t": q[0][0], "last_t": ts,
+                "low": min(prices), "high": max(prices), "last": price,
+                "buys": buys, "sells": sells, "level": level}
 
 
-def _algo_message(sym, a):
+def _algo_message(sym, a, cap=None):
     strength = "🔥 قوي" if a["level"] == "strong" else "⚡ رصد"
-    return (f"🤖 نشاط خوارزمي محتمل — {strength}\n"
-            f"السهم: {sym}\nالسعر: ${a['last']:.2f}\n"
+    mins = max((a["last_t"] - a["first_t"]).total_seconds() / 60, 0.1)
+    b, s_, total = a["buys"], a["sells"], a["count"]
+    side = ("غالبها شراء 🟢" if b >= 0.6 * total else
+            "غالبها بيع 🔴" if s_ >= 0.6 * total else "مختلط ⚪")
+    return (f"🤖 خوارزمية تقطيع محتملة — {strength}\n"
+            f"السهم: {sym}\n"
+            f"السعر: ${a['last']:.4g} (من {a['low']:.4g} إلى {a['high']:.4g})\n"
             f"الحجم المتكرر: {a['size']:g} سهم\n"
-            f"التكرار: {a['count']} صفقة في نفس الثانية\n"
-            f"الفري فلوت: {int(a['float']):,}\n"
-            f"⚠️ التكرار وحده لا يحدد شراء/بيع ولا يثبت أنه صانع سوق.\n"
-            f"المصدر: IEX عبر Alpaca\n"
-            f"الوقت: {a['last_t'].tz_convert(LOCAL_TZ):%H:%M:%S}")
+            f"التكرار: {total} صفقة خلال {mins:.1f} دقيقة\n"
+            f"التقدير: {side} | شراء {b} / بيع {s_} / بدون اتجاه {total - b - s_}\n"
+            + (f"القيمة السوقية: {cap / 1e6:.1f} مليون$\n" if cap else "")
+            + f"المصدر: {ALGO_FEED.upper()} عبر Alpaca"
+            + (f" (متأخر {ALGO_DELAY_MIN - 1} دقيقة)" if ALGO_DELAY_MIN else "") + "\n"
+            f"وقت آخر صفقة: {a['last_t'].tz_convert(LOCAL_TZ):%H:%M:%S} (توقيتك)")
 
 
+FLOAT_CACHE_SEC = 6 * 60 * 60    # تحديث بيانات الفلوت كل 6 ساعات (يستخدمها ماسح السيولة)
 _algo_float_cache = {}
+
+
 def get_algo_float(sym):
-    now=time.time(); old=_algo_float_cache.get(sym)
-    if old and now-old[0] < ALGO_FLOAT_CACHE_SEC: return old[1]
+    now = time.time(); old = _algo_float_cache.get(sym)
+    if old and now - old[0] < FLOAT_CACHE_SEC:
+        return old[1]
     try:
         import yfinance as yf
-        info=yf.Ticker(sym).info or {}; val=info.get("floatShares")
-        val=float(val) if val is not None else None
-    except Exception: val=None
-    _algo_float_cache[sym]=(now,val); return val
+        info = yf.Ticker(sym).info or {}; val = info.get("floatShares")
+        val = float(val) if val is not None else None
+    except Exception:
+        val = None
+    _algo_float_cache[sym] = (now, val)
+    return val
+
+
+def get_microcaps():
+    """أسهم ناسداك اللي قيمتها السوقية 30 مليون وتحت، الأنشط تداولاً أول. يرجع {الرمز: القيمة السوقية}."""
+    url = ("https://api.nasdaq.com/api/screener/stocks"
+           "?tableonly=true&limit=10000&exchange=nasdaq&download=true")
+    try:
+        r = requests.get(url, headers={**HEADERS, "Accept": "application/json"}, timeout=30)
+        data = r.json().get("data") or {}
+        rows = data.get("rows") or (data.get("table") or {}).get("rows") or []
+        picks = []
+        for row in rows:
+            sym = str(row.get("symbol", "")).strip().upper()
+            cap = _to_number(row.get("marketCap"))
+            vol = _to_number(row.get("volume"))
+            if sym.isalpha() and len(sym) <= 5 and 0 < cap <= ALGO_MAX_MARKET_CAP \
+                    and vol >= ALGO_MIN_DAY_VOLUME:
+                picks.append((vol, sym, cap))
+        picks.sort(reverse=True)
+        return {sym: cap for _, sym, cap in picks[:ALGO_MAX_SYMBOLS]}
+    except Exception as e:
+        log("كشف الخوارزميات: ما قدرت أجيب القيم السوقية من ناسداك -", e)
+        return {}
 
 
 def algo_loop():
     """يشتغل بخيط لحاله في الخلفية، عشان ما يتأخر بسبب الفحوصات الثانية الطويلة."""
     det = AlgoDetector()
-    last_start = None
+    last_end = None
     was_on = None
-    syms = ALGO_SYMBOLS[:ALGO_MAX_SYMBOLS]
-    log(f"كشف الخوارزميات: شغال على ألباكا ({ALGO_FEED}) - يراقب {len(syms)} سهم: {', '.join(syms)}")
+    caps, caps_day = {}, None
     while True:
         try:
-            on = trading_hours()
+            now = pd.Timestamp.now(tz="UTC")
+            end = now - pd.Timedelta(minutes=ALGO_DELAY_MIN)
+            on = trading_hours(end.tz_convert(NY))
             if on != was_on:
                 log("كشف الخوارزميات: " + ("بدأ المراقبة" if on else "السوق مسكر، أنتظر"))
                 was_on = on
             if not on:
-                last_start = None
+                last_end = None
                 time.sleep(60)
                 continue
-            now = pd.Timestamp.now(tz="UTC")
+            today = pd.Timestamp.now(tz=NY).date()
+            if caps_day != today or not (caps or ALGO_SYMBOLS):
+                caps = {s_: None for s_ in ALGO_SYMBOLS} if ALGO_SYMBOLS else get_microcaps()
+                caps_day = today
+                log(f"كشف الخوارزميات: ألباكا ({ALGO_FEED}"
+                    + (f"، متأخر {ALGO_DELAY_MIN - 1} دقيقة" if ALGO_DELAY_MIN else "، لحظي")
+                    + f") - يراقب {len(caps)} سهم قيمتها {ALGO_MAX_MARKET_CAP / 1e6:.0f} مليون وتحت: "
+                    + ", ".join(list(caps)[:30]) + (" ..." if len(caps) > 30 else ""))
+            syms = list(caps)
+            if not syms:
+                time.sleep(300)
+                continue
             # نرجع شوي لورا عشان الصفقات المتأخرة، والتكرار ينشال بأرقام الصفقات
-            start = (last_start or now - pd.Timedelta(seconds=60)) - pd.Timedelta(seconds=5)
+            start = (last_end or end - pd.Timedelta(seconds=60)) - pd.Timedelta(seconds=5)
             got = None
             for i in range(0, len(syms), 30):
-                part = fetch_alpaca_trades(syms[i:i + 30], start)
+                part = fetch_alpaca_trades(syms[i:i + 30], start, end)
                 if part is not None:
                     got = got or {}
                     got.update(part)
             if got is not None:
-                last_start = now
+                last_end = end
                 for sym, trades in got.items():
-                    float_shares = get_algo_float(sym)
-                    if float_shares is None or not (ALGO_MIN_FLOAT <= float_shares <= ALGO_MAX_FLOAT):
-                        continue
                     for tr in sorted(trades, key=lambda x: x.get("t", "")):
-                        res = det.add(sym, tr, float_shares=float_shares)
+                        res = det.add(sym, tr)
                         if res:
-                            send_telegram(_algo_message(sym, res), kind="algo")
+                            send_telegram(_algo_message(sym, res, caps.get(sym)), kind="algo")
         except Exception as e:
             log("كشف الخوارزميات: خطأ -", e)
         time.sleep(ALGO_POLL_SEC)
@@ -1387,13 +1433,18 @@ def start_algo_thread():
 
 
 def algo_self_test():
-    det=AlgoDetector(); t0=pd.Timestamp("2026-01-02T15:00:00Z"); alerts=[]
-    for k in range(200):
-        tr={"i":k+1,"s":1,"p":5.25,"t":t0+pd.Timedelta(milliseconds=k*2)}
-        a=det.add("TEST",tr,float_shares=1_000_000)
+    det = AlgoDetector(); t0 = pd.Timestamp("2026-01-02T15:00:00Z"); alerts = []
+    for k in range(650):          # 650 صفقة بحجم سهم واحد خلال 3 دقايق وشوي، السعر يطلع
+        tr = {"i": k + 1, "s": 1, "p": 0.50 + (k % 5) * 0.001,
+              "t": t0 + pd.Timedelta(milliseconds=k * 300)}
+        a = det.add("TEST", tr)
         if a: alerts.append(a)
-    assert [a["count"] for a in alerts] == [100,200], alerts
-    print("ALGO TEST OK: 100 / 200 trades in same second")
+    for k in range(400):          # صفقات حجمها كبير = تتجاهل
+        a = det.add("BIG", {"i": k + 1, "s": 500, "p": 1.0, "t": t0 + pd.Timedelta(seconds=k)})
+        assert a is None
+    assert [a["count"] for a in alerts] == [300, 600], [a["count"] for a in alerts]
+    print("ALGO TEST OK: 300 / 600 same-size trades")
+    print(_algo_message("TEST", alerts[-1], 12_300_000))
 
 
 def main():
