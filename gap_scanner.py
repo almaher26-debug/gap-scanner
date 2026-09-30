@@ -41,9 +41,12 @@
     - إذا بيانات الشورت الرسمية (من ياهو) صارت صفر  =>  تنبيه
     - البيانات الرسمية تنزل مرتين بالشهر وبتأخير أسبوعين تقريباً، فيفحصها مرة باليوم
 
-(4ب) التجزئة العكسية - مرة بالأسبوع
-    - قائمة بكل أسهم ناسداك اللي سوت تجزئة عكسية آخر شهر: الرمز، تاريخ التجزئة، السعر
-    - وتنبيه لو وحدة منها سعرها 5$ أو أقل والشورت عندها صفر
+(4ب) التجزئة العكسية - أسهم ناسداك
+    - كل يوم سوق (بعد 10 الصبح نيويورك): يرسل الأسهم اللي سوت تجزئة عكسية جديدة بس
+      ولو ما فيه جديد ما يرسل شي
+    - لكل سهم: تاريخ التجزئة، النسبة، سعر الافتتاح بعدها، السعر الحين، وكم مرة سوى تجزئة عكسية بالسنة
+    - كل جمعة: قائمة بتجزئات الأسبوع | أول كل شهر: قائمة بتجزئات الشهر اللي راح
+    - وتنبيه لو سهم جديد منها سعره 5$ أو أقل والشورت عنده صفر
 
 التشغيل:
   pip install yfinance pandas requests lxml
@@ -157,12 +160,15 @@ SHORT_SENT_FILE = "short_sent.txt"   # عشان ما يعيد نفس التنب�
 
 # ---- (4ب) تجزئة عكسية + شورت صفر (أسهم البني ستوك) ----
 ENABLE_RSPLIT_SHORT = True
-RSPLIT_MAX_PRICE = 5                 # بني ستوك = سعره 5$ أو أقل
-RSPLIT_DAYS = 30                     # سوى تجزئة عكسية خلال آخر كذا يوم
+RSPLIT_MAX_PRICE = 5                 # الشورت صفر: يفحصه لأسهم البني ستوك (5$ أو أقل) من اللي سوت تجزئة
+RSPLIT_NEW_DAYS = 4                  # "جديد" = تجزئة صارت خلال آخر كذا يوم (يغطي الويكند) وما انرسلت قبل
+RSPLIT_CHECK_AFTER_NY = 10           # الفحص اليومي بعد الساعة 10 الصبح نيويورك (عشان سعر الافتتاح يكون موجود)
 RSPLIT_WORKERS = 3
-RSPLIT_SENT_FILE = "rsplit_sent.txt"
-RSPLIT_LIST = True                   # يرسل قائمة بكل أسهم التجزئة العكسية آخر شهر (الرمز، التاريخ، السعر)
-RSPLIT_WEEK_FILE = "rsplit_week.txt" # عشان القائمة تنرسل مرة وحدة بالأسبوع حتى لو البوت أعاد التشغيل
+RSPLIT_SENT_FILE = "rsplit_sent.txt"     # تنبيهات الشورت صفر
+RSPLIT_NEW_FILE = "rsplit_new.txt"       # التجزئات الجديدة اللي انرسلت
+RSPLIT_WEEKLY = True                 # قائمة كل جمعة بتجزئات آخر 7 أيام
+RSPLIT_MONTHLY = True                # قائمة أول كل شهر بتجزئات الشهر اللي راح
+RSPLIT_STATE_FILE = "rsplit_state.txt"   # يحفظ آخر يوم/أسبوع/شهر انرسل عشان ما يتكرر
 
 # ---- (6) كشف خوارزميات التنفيذ (أوامر متكررة بنفس الحجم) - من ألباكا ----
 # يراقب الصفقات لحظياً (بورصة IEX المجانية) ويدور على صفقات ورا بعض بنفس الحجم بالضبط
@@ -1064,42 +1070,80 @@ def scan_short(tickers, already_sent):
 
 
 # ================== (4ب) تجزئة عكسية + شورت صفر ==================
-def scan_rsplit_short(tickers, already_sent):
-    """أسهم البني ستوك اللي سوت تجزئة عكسية خلال آخر RSPLIT_DAYS يوم، والشورت عندها صفر."""
-    since = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=RSPLIT_DAYS)
-    cands = {}   # الرمز -> (التاريخ، النسبة، آخر سعر)
-    for t, df in download_batches(tickers, UNIVERSE_BATCH, period="3mo", interval="1d",
+def load_rsplits(tickers):
+    """كل التجزئات العكسية آخر سنة.
+    يرجع {الرمز: {"splits": [(التاريخ، النسبة، سعر الافتتاح يومها)], "last": آخر سعر}}"""
+    out = {}
+    for t, df in download_batches(tickers, UNIVERSE_BATCH, period="1y", interval="1d",
                                   prepost=False, actions=True):
         try:
             if "Stock Splits" not in df:
                 continue
             sp = df["Stock Splits"].fillna(0)
-            idx = sp.index if sp.index.tz is not None else sp.index.tz_localize("UTC")
-            sp.index = idx
-            rev = sp[(sp > 0) & (sp < 1) & (sp.index >= since)]
-            if not rev.empty:
-                cands[t] = (rev.index[-1], float(rev.iloc[-1]), float(df["Close"].iloc[-1]))
+            rev = sp[(sp > 0) & (sp < 1)]
+            if rev.empty:
+                continue
+            splits = [(pd.Timestamp(i).date(), float(r), float(df.loc[i, "Open"]))
+                      for i, r in rev.items()]
+            out[t] = {"splits": splits, "last": float(df["Close"].iloc[-1])}
         except Exception:
             continue
-    log(f"التجزئة العكسية: {len(cands)} سهم سوى تجزئة عكسية آخر {RSPLIT_DAYS} يوم")
-    if RSPLIT_LIST:
-        rows = sorted(cands.items(), key=lambda kv: kv[1][0], reverse=True)   # الأحدث فوق
-        if not rows:
-            send_telegram(f"📋 أسهم التجزئة العكسية - آخر {RSPLIT_DAYS} يوم\nما فيه ولا سهم", kind="rsplit")
-        for i in range(0, len(rows), 40):
-            send_telegram(f"📋 أسهم التجزئة العكسية - آخر {RSPLIT_DAYS} يوم\n"
-                          + "\n".join(f"• {t} | {d:%Y-%m-%d} | {last:.2f}$"
-                                      for t, (d, _, last) in rows[i:i + 40]), kind="rsplit")
-            time.sleep(2)
-    # الشورت صفر لأسهم البني ستوك منها بس
-    cands = {t: v for t, v in cands.items() if v[2] <= RSPLIT_MAX_PRICE}
+    free_memory()
+    return out
+
+
+def _rsplit_line(t, info, split):
+    d, ratio, opn = split
+    return (f"• {t}\n"
+            f"   تاريخ التجزئة: {d:%Y-%m-%d} | النسبة: كل {1 / ratio:g} أسهم = سهم\n"
+            f"   افتتح بعد التجزئة على: {opn:.2f}$ | السعر الحين: {info['last']:.2f}$\n"
+            f"   عدد التجزئات العكسية آخر سنة: {len(info['splits'])}")
+
+
+def _send_rsplit_list(title, items):
+    """items = [(الرمز، البيانات، التجزئة)]. يرسلها على رسايل (كل رسالة 15 سهم)."""
+    items = sorted(items, key=lambda x: x[2][0], reverse=True)       # الأحدث فوق
+    for i in range(0, len(items), 15):
+        part = items[i:i + 15]
+        head = title + (f" ({i // 15 + 1})" if len(items) > 15 else "")
+        send_telegram(head + "\n\n" + "\n\n".join(_rsplit_line(*x) for x in part), kind="rsplit")
+        time.sleep(2)
+
+
+def splits_between(data, start, end):
+    """التجزئات اللي تاريخها من start لين end (تواريخ)."""
+    return [(t, info, sp) for t, info in data.items() for sp in info["splits"]
+            if start <= sp[0] <= end]
+
+
+def scan_rsplit_new(data, already_sent):
+    """يرسل التجزئات الجديدة بس. لو ما فيه جديد، ما يرسل شي."""
+    today = pd.Timestamp.now(tz=NY).date()
+    since = today - pd.Timedelta(days=RSPLIT_NEW_DAYS)
+    new = []
+    for t, info, sp in splits_between(data, since, today):
+        key = f"{t}-{sp[0]:%Y-%m-%d}"
+        if key in already_sent:
+            continue
+        already_sent.add(key)
+        _append_line(RSPLIT_NEW_FILE, key)
+        new.append((t, info, sp))
+    if new:
+        _send_rsplit_list(f"🆕 تجزئة عكسية جديدة - {len(new)} سهم", new)
+    log(f"[{datetime.now():%H:%M}] التجزئة العكسية: {len(new)} سهم جديد")
+    return new
+
+
+def scan_rsplit_short(new, already_sent):
+    """من التجزئات الجديدة: البني ستوك اللي الشورت عندها صفر."""
+    cands = {t: (info, sp) for t, info, sp in new if info["last"] <= RSPLIT_MAX_PRICE}
     hits = 0
     if cands:
         with ThreadPoolExecutor(max_workers=RSPLIT_WORKERS) as pool:
             for t, short, prior, date, price in pool.map(fetch_short, list(cands)):
                 if short is None or short != 0:
                     continue                      # لازم الشورت صفر بالضبط (مو ناقص بيانات)
-                sdate, ratio, last = cands[t]
+                info, (sdate, ratio, opn) = cands[t]
                 key = f"{t}-{sdate:%Y-%m-%d}"
                 if key in already_sent:
                     continue
@@ -1110,13 +1154,66 @@ def scan_rsplit_short(tickers, already_sent):
                 send_telegram(
                     f"🔻 تجزئة عكسية + شورت صفر\n"
                     f"السهم: {t}\n"
-                    f"السعر: {price or last:.2f}\n"
-                    f"التجزئة العكسية: {sdate:%Y-%m-%d} (1 مقابل {1 / ratio:g})\n"
+                    f"السعر: {price or info['last']:.2f}$\n"
+                    f"التجزئة العكسية: {sdate:%Y-%m-%d} (كل {1 / ratio:g} أسهم = سهم)\n"
                     f"الشورت الحالي: 0\n"
                     f"تاريخ بيانات الشورت: {d}", kind="rsplit"
                 )
+    log(f"[{datetime.now():%H:%M}] التجزئة العكسية + شورت صفر: {hits} تنبيه جديد")
+
+
+def _rsplit_state():
+    st = {}
+    for line in _load_set(RSPLIT_STATE_FILE):
+        k, _, v = line.partition("=")
+        st[k] = v
+    return st
+
+
+def _save_rsplit_state(st):
+    try:
+        with open(RSPLIT_STATE_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(f"{k}={v}" for k, v in st.items()) + "\n")
+    except Exception:
+        pass
+
+
+def rsplit_job(state, new_sent, short_sent, force=False):
+    """مرة باليوم (أيام السوق، بعد 10 الصبح نيويورك):
+    الجديد كل يوم + قائمة الأسبوع يوم الجمعة + قائمة الشهر أول يوم سوق بالشهر."""
+    now = pd.Timestamp.now(tz=NY)
+    today = now.date()
+    if not force and (now.weekday() >= 5 or now.hour < RSPLIT_CHECK_AFTER_NY):
+        return
+    if not force and state.get("day") == str(today):
+        return
+    tickers = build_universe("التجزئة العكسية", 0.01, 100_000, 0, include_nyse=False)
+    data = load_rsplits(tickers)
+    log(f"التجزئة العكسية: {len(data)} سهم سوى تجزئة عكسية آخر سنة")
+
+    new = scan_rsplit_new(data, new_sent)
+    scan_rsplit_short(new, short_sent)
+
+    week = f"{today.isocalendar()[0]}-W{today.isocalendar()[1]:02d}"
+    if RSPLIT_WEEKLY and now.weekday() == 4 and state.get("week") != week:     # الجمعة
+        items = splits_between(data, today - pd.Timedelta(days=6), today)
+        if items:
+            _send_rsplit_list(f"📋 قائمة الأسبوع - تجزئات عكسية آخر 7 أيام ({len(items)} سهم)", items)
+        state["week"] = week
+
+    month = f"{today:%Y-%m}"
+    if RSPLIT_MONTHLY and state.get("month") != month:
+        if today.day <= 4:                             # أول أيام الشهر بس (لو البوت اشتغل نص الشهر ما يرسل)
+            last_day = today.replace(day=1) - pd.Timedelta(days=1)
+            items = splits_between(data, last_day.replace(day=1), last_day)
+            if items:
+                _send_rsplit_list(f"🗓️ قائمة الشهر - تجزئات عكسية {last_day:%Y-%m} ({len(items)} سهم)",
+                                  items)
+        state["month"] = month
+
+    state["day"] = str(today)
+    _save_rsplit_state(state)
     free_memory()
-    log(f"[{datetime.now():%H:%M}] التجزئة العكسية: خلص الفحص - {hits} تنبيه جديد")
 
 
 # ================== (6) كشف خوارزميات التنفيذ - ألباكا ==================
@@ -1327,7 +1424,8 @@ def main():
     short_day = None
     short_sent = _load_set(SHORT_SENT_FILE)
     rsplit_sent = _load_set(RSPLIT_SENT_FILE)
-    rsplit_week = next(iter(_load_set(RSPLIT_WEEK_FILE)), None)
+    rsplit_new_sent = _load_set(RSPLIT_NEW_FILE)
+    rsplit_state = _rsplit_state()
 
     while True:
         discover_groups()
@@ -1381,20 +1479,9 @@ def main():
             scan_daily(daily_tickers, daily_sent)
             daily_last = time.time()
 
-        # (4ب) قائمة التجزئة العكسية + شورت صفر - مرة بالأسبوع
+        # (4ب) التجزئة العكسية - الجديد كل يوم، قائمة كل جمعة، وقائمة أول الشهر
         if ENABLE_RSPLIT_SHORT:
-            iso = pd.Timestamp.now(tz=LOCAL_TZ).isocalendar()
-            week = f"{iso[0]}-W{iso[1]:02d}"
-            if rsplit_week != week:
-                top = 100_000 if RSPLIT_LIST else RSPLIT_MAX_PRICE
-                rs_tickers = build_universe("التجزئة العكسية", 0.01, top, 0, include_nyse=False)
-                scan_rsplit_short(rs_tickers, rsplit_sent)
-                rsplit_week = week
-                try:
-                    with open(RSPLIT_WEEK_FILE, "w", encoding="utf-8") as f:
-                        f.write(week + "\n")
-                except Exception:
-                    pass
+            rsplit_job(rsplit_state, rsplit_new_sent, rsplit_sent, force=once)
 
         # (4) الشورت صفر - مرة باليوم
         if ENABLE_SHORT:
