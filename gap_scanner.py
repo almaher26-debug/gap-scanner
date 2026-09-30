@@ -57,12 +57,16 @@
   python gap_scanner.py --algotest   # يجرب كشف الأوامر المتكررة (بدون نت)
 
 (6) كشف خوارزميات التقطيع - من ألباكا
-    - الأسهم: أنشط 100 سهم في ناسداك سعرها من 1$ إلى 15$ وقيمتها السوقية 40 مليون دولار وتحت
+    - الأسهم: أسهم ناسداك اللي سعرها من 1$ إلى 15$ وسوت تجزئة عكسية خلال آخر 3 شهور
     - يدور على صفقات صغيرة (10 أسهم وأقل) بنفس الحجم بالضبط، مثل 1، 1، 1، 1...
     - تنبيه لو تكررت 300 مرة أو أكثر خلال 5 دقايق، وقوي عند 600
     - يقدّر هل غالبها شراء ولا بيع من اتجاه السعر (تقريبي)
     - البيانات من كل البورصات (sip) بتأخير 15 دقيقة في باقة ألباكا المجانية
     - يحتاج المتغيرين ALPACAAPIKEY و ALPACASECRETKEY في Railway
+
+(6ج) خوارزميات البني ستوك - نفس منطق (6) بالضبط
+    - الأسهم: ناسداك من 1$ إلى 5$ وقيمتها السوقية 40 مليون دولار وتحت (أنشط 300)
+    - ALGO_PENNY=0 يطفيه
 
 (6ب) خوارزميات الأسهم الكبيرة - صفقات متتالية بنفس الحجم - من ألباكا
     - الأسهم: أسهم ناسداك اللي قيمتها السوقية مليار دولار وفوق (أنشط 200)
@@ -78,6 +82,7 @@ import io
 import logging
 import os
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -196,21 +201,31 @@ ENABLE_ALGO = bool(ALPACA_KEY and ALPACA_SECRET)   # يتفعل لحاله لو 
 # الأسهم الصغيرة تقريباً ما تتداول على IEX، فـ sip أدق بكثير لهالنوع
 ALGO_FEED = os.environ.get("ALGO_FEED", "sip").lower()
 ALGO_DELAY_MIN = 16 if ALGO_FEED == "sip" else 0   # الباقة المجانية: بيانات sip عمرها 15 دقيقة وفوق
-# الأسهم: تلقائياً أسهم ناسداك اللي سعرها من 1$ إلى 15$ وقيمتها السوقية 40 مليون وتحت (الأنشط تداولاً)
+# الأسهم: تلقائياً أسهم ناسداك اللي سعرها من 1$ إلى 15$ وسوت تجزئة عكسية خلال آخر 3 شهور
 # ولو تبي قائمة ثابتة حطها في Railway بمتغير ALGO_SYMBOLS (بينها فاصلة)
 ALGO_SYMBOLS = [s.strip().upper() for s in os.environ.get("ALGO_SYMBOLS", "").split(",") if s.strip()]
 ALGO_SMALL = os.environ.get("ALGO_SMALL", "1") != "0"   # 0 = يطفي هالقسم
 ALGO_MIN_PRICE = 1                    # أقل سعر سهم
 ALGO_MAX_PRICE = 15                   # أعلى سعر سهم
-ALGO_MAX_MARKET_CAP = 40_000_000      # القيمة السوقية 40 مليون دولار وتحت (0 = بدون شرط)
+ALGO_MAX_MARKET_CAP = 0               # 0 = بدون شرط قيمة سوقية
+ALGO_RSPLIT_DAYS = 92                 # لازم سوى تجزئة عكسية خلال آخر كذا يوم (3 شهور) - 0 = بدون شرط
 ALGO_MIN_DAY_VOLUME = 50_000          # يشيل الأسهم الميتة (حجم اليوم)
-ALGO_MAX_SYMBOLS = 100                # أقصى عدد أسهم يراقبها (الأنشط أول)
+ALGO_MAX_SYMBOLS = 300                # أقصى عدد أسهم يراقبها (الأنشط أول) - بالعادة أقل من كذا بكثير
 ALGO_POLL_SEC = 15                    # كل كم ثانية يسحب الصفقات الجديدة
 ALGO_MAX_SIZE = 10                    # الأحجام الصغيرة بس: صفقة حجمها 10 أسهم أو أقل (1، 1، 1...)
 ALGO_WINDOW_MIN = 5                   # يعد الصفقات المتكررة خلال آخر كذا دقيقة
 ALGO_MIN_STREAK = 300                 # تنبيه عند 300 صفقة بنفس الحجم
 ALGO_STRONG_STREAK = 600              # تنبيه قوي عند 600 أو أكثر
 ALGO_REALERT_MIN = 15                 # ما يعيد نفس مستوى التنبيه لنفس السهم والحجم قبل كذا دقيقة
+
+# ---- (6ج) خوارزميات البني ستوك: من 1$ إلى 5$ وقيمتها السوقية 40 مليون وتحت ----
+# نفس منطق القسم (6) بالضبط: صفقات 10 أسهم وأقل بنفس الحجم، تنبيه 300 وقوي 600 خلال 5 دقايق
+# السهم اللي داخل قائمة التجزئة العكسية (6) ما يتكرر هنا
+ALGO_PENNY = os.environ.get("ALGO_PENNY", "1") != "0"   # 0 = يطفي هالقسم
+ALGO_PENNY_MIN_PRICE = 1
+ALGO_PENNY_MAX_PRICE = 5
+ALGO_PENNY_MAX_MARKET_CAP = 40_000_000
+ALGO_PENNY_MAX_SYMBOLS = 300          # الأنشط أول
 
 # ---- (6ب) خوارزميات الأسهم الكبيرة: صفقات متتالية بنفس الحجم ----
 # أسهم ناسداك اللي قيمتها السوقية مليار دولار وفوق
@@ -436,6 +451,9 @@ def us_market_open(now=None):
     return start <= m <= end + buf
 
 
+_YF_LOCK = threading.RLock()   # ياهو ما يتحمل تحميلين بنفس اللحظة من خيطين
+
+
 def download_batches(tickers, batch_size, **kw):
     """يحمّل بيانات ياهو على دفعات، ويرجع (الرمز، البيانات) لكل سهم."""
     import yfinance as yf
@@ -443,8 +461,9 @@ def download_batches(tickers, batch_size, **kw):
     for i in range(0, len(tickers), batch_size):
         batch = tickers[i:i + batch_size]
         try:
-            data = yf.download(batch, group_by="ticker", progress=False,
-                               threads=True, auto_adjust=False, **kw)
+            with _YF_LOCK:
+                data = yf.download(batch, group_by="ticker", progress=False,
+                                   threads=True, auto_adjust=False, **kw)
         except Exception as e:
             log("فشل تحميل دفعة:", e)
             time.sleep(5)
@@ -1284,7 +1303,6 @@ def rsplit_job(state, new_sent, short_sent, force=False):
 
 
 # ================== (6) كشف خوارزميات التنفيذ - ألباكا ==================
-import threading
 from collections import deque
 
 ALGO_URL = "https://data.alpaca.markets/v2/stocks/trades"
@@ -1408,17 +1426,19 @@ def _side_lines(b, s_, total, size):
             + (f"⚪ بدون اتجاه: {n:,} صفقة\n" if n else ""))
 
 
-def _algo_message(sym, a, cap=None):
+def _algo_message(sym, a, cap=None, section="", note=""):
     strength = "🔥 قوي" if a["level"] == "strong" else "⚡ رصد"
     mins = max((a["last_t"] - a["first_t"]).total_seconds() / 60, 0.1)
     b, s_, total = a["buys"], a["sells"], a["count"]
     return (f"🤖 خوارزمية تقطيع محتملة — {strength}\n"
-            f"السهم: {sym}\n"
+            + (f"القسم: {section}\n" if section else "")
+            + f"السهم: {sym}\n"
             f"السعر: ${a['last']:.4g} (من {a['low']:.4g} إلى {a['high']:.4g})\n"
             f"الحجم المتكرر: {a['size']:g} سهم\n"
             f"التكرار: {total} صفقة خلال {mins:.1f} دقيقة\n"
             + _side_lines(b, s_, total, a["size"])
             + (f"القيمة السوقية: {_cap_txt(cap)}\n" if cap else "")
+            + (f"{note}\n" if note else "")
             + f"المصدر: {ALGO_FEED.upper()} عبر Alpaca"
             + (f" (متأخر {ALGO_DELAY_MIN - 1} دقيقة)" if ALGO_DELAY_MIN else "") + "\n"
             f"وقت آخر صفقة: {a['last_t'].tz_convert(LOCAL_TZ):%H:%M:%S} (توقيتك)")
@@ -1462,21 +1482,74 @@ def _nasdaq_rows():
     return out
 
 
+RSPLIT_ALGO_SYMS = set()   # أسهم قسم التجزئة العكسية (عشان قسم البني ستوك ما يكررها)
+
+
+def _recent_rsplits(syms, days):
+    """{الرمز: (تاريخ آخر تجزئة عكسية، النسبة)} للي سوت تجزئة عكسية خلال آخر days يوم."""
+    since = pd.Timestamp.now(tz=NY).date() - pd.Timedelta(days=days)
+    out = {}
+    for t, df in download_batches(sorted(syms), UNIVERSE_BATCH, period="6mo", interval="1d",
+                                  prepost=False, actions=True):
+        try:
+            if "Stock Splits" not in df:
+                continue
+            sp = df["Stock Splits"].fillna(0)
+            rev = sp[(sp > 0) & (sp < 1)]
+            rev = [(pd.Timestamp(i).date(), float(r)) for i, r in rev.items()
+                   if pd.Timestamp(i).date() >= since]
+            if rev:
+                out[t] = rev[-1]
+        except Exception:
+            continue
+    free_memory()
+    return out
+
+
+def _price_universe(min_px, max_px, max_cap, max_n):
+    """أسهم ناسداك داخل نطاق السعر (وتحت حد القيمة السوقية لو فيه)، الأنشط أول.
+    يرجع [(الرمز، القيمة السوقية)]."""
+    picks = []
+    for sym, cap, vol, px in _nasdaq_rows():
+        if not (min_px <= px <= max_px) or vol < ALGO_MIN_DAY_VOLUME:
+            continue
+        if max_cap and not (0 < cap <= max_cap):
+            continue
+        picks.append((vol, sym, cap))
+    picks.sort(reverse=True)
+    return [(sym, cap) for _, sym, cap in picks[:max_n]]
+
+
 def get_microcaps():
-    """أسهم ناسداك اللي سعرها من ALGO_MIN_PRICE إلى ALGO_MAX_PRICE (ولو فيه شرط قيمة سوقية يطبقه)،
-    الأنشط تداولاً أول. يرجع {الرمز: القيمة السوقية}."""
+    """قسم (6): 1$-15$ وسوت تجزئة عكسية آخر 3 شهور. يرجع {الرمز: (القيمة السوقية، ملاحظة)}."""
+    global RSPLIT_ALGO_SYMS
     try:
-        picks = []
-        for sym, cap, vol, px in _nasdaq_rows():
-            if not (ALGO_MIN_PRICE <= px <= ALGO_MAX_PRICE) or vol < ALGO_MIN_DAY_VOLUME:
-                continue
-            if ALGO_MAX_MARKET_CAP and not (0 < cap <= ALGO_MAX_MARKET_CAP):
-                continue
-            picks.append((vol, sym, cap))
-        picks.sort(reverse=True)
-        return {sym: cap for _, sym, cap in picks[:ALGO_MAX_SYMBOLS]}
+        base = _price_universe(ALGO_MIN_PRICE, ALGO_MAX_PRICE, ALGO_MAX_MARKET_CAP, 100_000)
+        if not ALGO_RSPLIT_DAYS:
+            return {sym: (cap, "") for sym, cap in base[:ALGO_MAX_SYMBOLS]}
+        log(f"كشف الخوارزميات: أدور التجزئات العكسية بين {len(base)} سهم سعرها "
+            f"{ALGO_MIN_PRICE:g}$-{ALGO_MAX_PRICE:g}$ ...")
+        rs = _recent_rsplits([sym for sym, _ in base], ALGO_RSPLIT_DAYS)
+        out = {}
+        for sym, cap in base:                         # base مرتبة بالأنشط
+            if sym in rs and len(out) < ALGO_MAX_SYMBOLS:
+                d, ratio = rs[sym]
+                out[sym] = (cap, f"تجزئة عكسية: {d:%Y-%m-%d} (كل {1 / ratio:g} أسهم = سهم)")
+        RSPLIT_ALGO_SYMS = set(out)
+        return out
     except Exception as e:
-        log("كشف الخوارزميات: ما قدرت أجيب قائمة الأسهم من ناسداك -", e)
+        log("كشف الخوارزميات: ما قدرت أجيب قائمة الأسهم -", e)
+        return {}
+
+
+def get_pennies():
+    """قسم (6ج): 1$-5$ وقيمتها 40 مليون وتحت. يرجع {الرمز: (القيمة السوقية، ملاحظة)}."""
+    try:
+        return {sym: (cap, "") for sym, cap in _price_universe(
+            ALGO_PENNY_MIN_PRICE, ALGO_PENNY_MAX_PRICE, ALGO_PENNY_MAX_MARKET_CAP,
+            ALGO_PENNY_MAX_SYMBOLS)}
+    except Exception as e:
+        log("البني ستوك: ما قدرت أجيب قائمة الأسهم -", e)
         return {}
 
 
@@ -1492,8 +1565,10 @@ def get_bigcaps():
         return {}
 
 
-def algo_loop():
-    """يشتغل بخيط لحاله في الخلفية، عشان ما يتأخر بسبب الفحوصات الثانية الطويلة."""
+def algo_loop(name, section, get_universe, fixed=None, exclude=None):
+    """يشتغل بخيط لحاله في الخلفية، عشان ما يتأخر بسبب الفحوصات الثانية الطويلة.
+    get_universe يرجع {الرمز: (القيمة السوقية، ملاحظة)} - تتجدد مرة باليوم.
+    exclude = دالة ترجع أسهم ما نراقبها هنا (موجودة بقسم ثاني)."""
     det = AlgoDetector()
     last_end = None
     was_on = None
@@ -1504,22 +1579,26 @@ def algo_loop():
             end = now - pd.Timedelta(minutes=ALGO_DELAY_MIN)
             on = trading_hours(end.tz_convert(NY))
             if on != was_on:
-                log("كشف الخوارزميات: " + ("بدأ المراقبة" if on else "السوق مسكر، أنتظر"))
+                log(f"{name}: " + ("بدأ المراقبة" if on else "السوق مسكر، أنتظر"))
                 was_on = on
             if not on:
                 last_end = None
                 time.sleep(60)
                 continue
             today = pd.Timestamp.now(tz=NY).date()
-            if caps_day != today or not (caps or ALGO_SYMBOLS):
-                caps = {s_: None for s_ in ALGO_SYMBOLS} if ALGO_SYMBOLS else get_microcaps()
+            if caps_day != today or not caps:
+                caps = {s_: (None, "") for s_ in fixed} if fixed else get_universe()
                 caps_day = today
-                log(f"كشف الخوارزميات: ألباكا ({ALGO_FEED}"
+                log(f"{name}: ألباكا ({ALGO_FEED}"
                     + (f"، متأخر {ALGO_DELAY_MIN - 1} دقيقة" if ALGO_DELAY_MIN else "، لحظي")
-                    + f") - يراقب {len(caps)} سهم ناسداك سعرها {ALGO_MIN_PRICE:g}$-{ALGO_MAX_PRICE:g}$"
-                    + (f" وقيمتها {ALGO_MAX_MARKET_CAP / 1e6:g} مليون وتحت" if ALGO_MAX_MARKET_CAP else "") + ": "
+                    + f") - يراقب {len(caps)} سهم ({section}): "
                     + ", ".join(list(caps)[:30]) + (" ..." if len(caps) > 30 else ""))
-            syms = list(caps)
+                if not caps:
+                    time.sleep(600)                   # ما لقى أسهم، يعيد المحاولة بعد 10 دقايق
+                    caps_day = None
+                    continue
+            skip = exclude() if exclude else set()
+            syms = [x for x in caps if x not in skip]
             if not syms:
                 time.sleep(300)
                 continue
@@ -1537,9 +1616,10 @@ def algo_loop():
                     for tr in sorted(trades, key=lambda x: x.get("t", "")):
                         res = det.add(sym, tr)
                         if res:
-                            send_telegram(_algo_message(sym, res, caps.get(sym)), kind="algo")
+                            cap, note = caps.get(sym, (None, ""))
+                            send_telegram(_algo_message(sym, res, cap, section, note), kind="algo")
         except Exception as e:
-            log("كشف الخوارزميات: خطأ -", e)
+            log(f"{name}: خطأ -", e)
         time.sleep(ALGO_POLL_SEC)
 
 
@@ -1693,7 +1773,16 @@ def start_algo_thread():
         log("كشف الخوارزميات: مطفي (حط ALPACAAPIKEY و ALPACASECRETKEY في Railway عشان يشتغل)")
         return
     if ALGO_SMALL:
-        threading.Thread(target=algo_loop, daemon=True, name="algo").start()
+        sec = (f"{ALGO_MIN_PRICE:g}$-{ALGO_MAX_PRICE:g}$"
+               + (f" + تجزئة عكسية آخر {ALGO_RSPLIT_DAYS} يوم" if ALGO_RSPLIT_DAYS else ""))
+        threading.Thread(target=algo_loop, daemon=True, name="algo",
+                         args=("كشف الخوارزميات (تجزئة عكسية)", sec, get_microcaps, ALGO_SYMBOLS)).start()
+    if ALGO_PENNY:
+        sec = (f"بني ستوك {ALGO_PENNY_MIN_PRICE:g}$-{ALGO_PENNY_MAX_PRICE:g}$ وقيمتها "
+               f"{ALGO_PENNY_MAX_MARKET_CAP / 1e6:g} مليون وتحت")
+        threading.Thread(target=algo_loop, daemon=True, name="algo_penny",
+                         args=("خوارزميات البني ستوك", sec, get_pennies, None,
+                               lambda: RSPLIT_ALGO_SYMS)).start()
     if ALGO_BIG:
         threading.Thread(target=algo_big_loop, daemon=True, name="algo_big").start()
 
