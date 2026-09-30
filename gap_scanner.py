@@ -33,9 +33,9 @@
         * طالع 5% أو أكثر عن إغلاق أمس
     - كل سهم يتنبه عليه مرة وحدة باليوم
 
-(3) نموذج القاع المزدوج (W) - الفريم اليومي بس - أسهم ناسداك 2 مليار وفوق
-    - قاعين متقاربين (فرق 3% أو أقل) + اختراق خط العنق لفوق خلال آخر 15 يوم تداول
-    - كل نموذج يتنبه عليه مرة وحدة بس، والتنبيهات تنجمع في رسايل
+(3) نموذج القاع المزدوج (W) - الفريم اليومي - أسهم ناسداك 2 مليار وفوق
+    - قاعين متقاربين (فرق 3% أو أقل) + اختراق خط العنق لفوق خلال آخر أسبوعين (10 أيام تداول)
+    - رسالة وحدة بالأسبوع: كل جمعة بعد إغلاق السوق، فيها كل الأسهم
 
 (4) الشورت صفر - أسهم ناسداك من 0.10$ إلى 15$
     - إذا بيانات الشورت الرسمية (من ياهو) صارت صفر  =>  تنبيه
@@ -140,15 +140,16 @@ ENABLE_DAILY = True
 ENABLE_DOUBLE_BOTTOM = True      # W
 DAILY_MIN_PRICE = 1              # أقل سعر سهم
 DAILY_MIN_AVG_VOLUME = 300_000   # يشيل الأسهم الميتة (عدد أسهم يومي)
-DAILY_EVERY_MIN = 30             # كل كم دقيقة يفحص اليومي (وقت السوق الرسمي)
+DAILY_WEEKDAY = 4                # يرسل مرة بالأسبوع: 4 = الجمعة (0 = الاثنين)
+DAILY_AFTER_NY = (16, 15)        # بعد إغلاق السوق الجمعة (4:15 العصر نيويورك = 11:15 بالليل بتوقيتك)
+DAILY_WEEK_FILE = "daily_week.txt"   # عشان ما يرسل مرتين بنفس الأسبوع لو البوت أعاد التشغيل
 DOUBLE_TOLERANCE = 0.03          # 3% أقصى فرق بين القاعين أو القمتين
 PATTERN_MIN_DEPTH = 0.04         # خط العنق لازم يبعد عن القاع/القمة 4% على الأقل (عشان يشيل النماذج الصغيرة)
 PIVOT_BARS = 5                   # القمة/القاع لازم تكون أعلى/أنزل من 5 شموع قبلها و5 بعدها
 PATTERN_MIN_BARS = 10            # أقل مسافة بين القاعين/القمتين (أيام تداول)
 PATTERN_MAX_BARS = 120           # أقصى طول للنموذج (تقريباً 6 شهور)
-DAILY_LOOKBACK_DAYS = 15         # اليومي: يرسل النماذج اللي اخترقت خلال آخر كذا يوم تداول
+DAILY_LOOKBACK_DAYS = 10         # النماذج اللي اخترقت خلال آخر أسبوعين (10 أيام تداول)
 DAILY_MIN_MARKET_CAP = 2_000_000_000   # نموذج W على الأسهم اللي قيمتها 2 مليار وفوق بس
-DAILY_SENT_FILE = "daily_sent.txt"   # عشان ما يعيد نفس النموذج كل يوم
 
 # ---- (4) الشورت صفر ----
 ENABLE_SHORT = True             # الشورت صفر شغال
@@ -948,44 +949,43 @@ def check_daily_patterns(df, lookback=None):
     return found
 
 
-def _scan_patterns_frame(tickers, already_sent, weekly):
-    """يفحص النماذج على فريم واحد (يومي أو أسبوعي) ويرجع {الاسم: [سطور]}."""
-    new = {}
-    kw, lookback, tag = dict(period="1y", interval="1d"), DAILY_LOOKBACK_DAYS, ""
-    for t, df in download_batches(tickers, 200, prepost=False, **kw):
+def _scan_patterns_frame(tickers):
+    """يرجع {الاسم: [(التاريخ، السطر)]} - سطر واحد لكل سهم (آخر اختراق خلال آخر أسبوعين)."""
+    found = {}
+    for t, df in download_batches(tickers, 200, prepost=False, period="1y", interval="1d"):
         try:
             last = float(df["Close"].iloc[-1])
-            for code, name, i, neck in check_daily_patterns(df, lookback):
+            for code, name, i, neck in check_daily_patterns(df, DAILY_LOOKBACK_DAYS):
                 day = pd.Timestamp(df.index[i]).strftime("%Y-%m-%d")
-                key = f"{t}-{code}-{tag}{day}"     # اليومي نفس المفتاح القديم عشان ما يعيد
-                if key in already_sent:
-                    continue
-                already_sent.add(key)
-                _append_line(DAILY_SENT_FILE, key)
                 chg = (last / neck - 1) * 100
-                new.setdefault(name, []).append(
-                    (day, f"• {t} | الاختراق: {day} | خط العنق: {neck:.2f} | "
-                          f"السعر الحين: {last:.2f} ({chg:+.1f}%)"))
+                row = (day, f"• {t} | الاختراق: {day} | خط العنق: {neck:.2f} | "
+                            f"السعر الحين: {last:.2f} ({chg:+.1f}%)")
+                found.setdefault(name, {})
+                if t not in found[name] or day > found[name][t][0]:
+                    found[name][t] = row
         except Exception as e:
-            log(f"{t}: خطأ {'أسبوعي' if weekly else 'يومي'} - {e}")
-    return new
+            log(f"{t}: خطأ يومي - {e}")
+    return {name: list(rows.values()) for name, rows in found.items()}
 
 
-def scan_daily(tickers, already_sent):
-    """يفحص النماذج على اليومي والأسبوعي ويجمع الجديد منها في رسايل (بدل رسالة لكل سهم)."""
+def scan_daily(tickers):
+    """قائمة وحدة بالأسبوع بكل الأسهم اللي سوت قاع مزدوج واخترقت خط العنق آخر أسبوعين."""
+    found = _scan_patterns_frame(tickers)
     hits = 0
-    frames = [(False, f"فريم يومي (آخر {DAILY_LOOKBACK_DAYS} يوم تداول)")]
-    for weekly, label in frames:
-        new = _scan_patterns_frame(tickers, already_sent, weekly)
-        for name, rows in new.items():
-            rows.sort(reverse=True)                   # الأحدث فوق
-            hits += len(rows)
-            for i in range(0, len(rows), 25):         # كل رسالة 25 سهم بالكثير
-                part = rows[i:i + 25]
-                send_telegram(f"{name} - {label}\n" + "\n".join(r[1] for r in part), kind="w")
-                time.sleep(3)
-        free_memory()
-    log(f"[{datetime.now():%H:%M}] نموذج W (يومي): خلص الفحص - {hits} تنبيه جديد")
+    label = "فريم يومي - آخر أسبوعين | أسهم ناسداك 2 مليار وفوق"
+    for name, rows in found.items():
+        rows.sort(reverse=True)                   # الأحدث فوق
+        hits += len(rows)
+        for i in range(0, len(rows), 40):         # رسالة وحدة، إلا لو الأسهم كثيرة مرة
+            part = rows[i:i + 40]
+            send_telegram(f"📅 القائمة الأسبوعية - {name}\n{label}\n\n"
+                          + "\n".join(r[1] for r in part), kind="w")
+            time.sleep(3)
+    if not found:
+        send_telegram(f"📅 القائمة الأسبوعية - القاع المزدوج (W)\n{label}\n\n"
+                      "ما فيه ولا سهم هالأسبوعين", kind="w")
+    free_memory()
+    log(f"[{datetime.now():%H:%M}] نموذج W (أسبوعي): {hits} سهم")
 
 
 def nasdaq_above_cap(min_cap):
@@ -1419,8 +1419,7 @@ def main():
     gap_sent = _load_set(GAP_SENT_FILE)
     flow_tickers, flow_day, flow_last = [], None, 0.0
     flow_sent = _load_set(FLOW_SENT_FILE)
-    daily_tickers, daily_day, daily_last = [], None, 0.0
-    daily_sent = _load_set(DAILY_SENT_FILE)
+    daily_week = next(iter(_load_set(DAILY_WEEK_FILE)), None)
     short_day = None
     short_sent = _load_set(SHORT_SENT_FILE)
     rsplit_sent = _load_set(RSPLIT_SENT_FILE)
@@ -1464,20 +1463,26 @@ def main():
             scan_flow(flow_tickers, flow_sent)
             flow_last = time.time()
 
-        # (3) النماذج اليومية - وقت السوق الرسمي، كل نص ساعة
-        if ENABLE_DAILY and (regular_session_open() or once or daily_last == 0.0) \
-                and time.time() - daily_last >= DAILY_EVERY_MIN * 60:
-            today = pd.Timestamp.now(tz=NY).date()
-            if daily_day != today or not daily_tickers:
-                daily_tickers = build_universe("اليومي", DAILY_MIN_PRICE, 100_000,
-                                               DAILY_MIN_AVG_VOLUME, include_nyse=False)
-                big = nasdaq_above_cap(DAILY_MIN_MARKET_CAP)
-                daily_tickers = [t for t in daily_tickers if t in big]
-                log(f"النماذج: {len(daily_tickers)} سهم قيمتها السوقية "
-                    f"{DAILY_MIN_MARKET_CAP / 1e9:.0f} مليار وفوق")
-                daily_day = today
-            scan_daily(daily_tickers, daily_sent)
-            daily_last = time.time()
+        # (3) القاع المزدوج W - قائمة وحدة كل جمعة بعد الإغلاق
+        now_ny = pd.Timestamp.now(tz=NY)
+        iso = now_ny.isocalendar()
+        week = f"{iso[0]}-W{iso[1]:02d}"
+        if ENABLE_DAILY and (once or (now_ny.weekday() == DAILY_WEEKDAY
+                                      and (now_ny.hour, now_ny.minute) >= DAILY_AFTER_NY
+                                      and daily_week != week)):
+            daily_tickers = build_universe("اليومي", DAILY_MIN_PRICE, 100_000,
+                                           DAILY_MIN_AVG_VOLUME, include_nyse=False)
+            big = nasdaq_above_cap(DAILY_MIN_MARKET_CAP)
+            daily_tickers = [t for t in daily_tickers if t in big]
+            log(f"النماذج: {len(daily_tickers)} سهم قيمتها السوقية "
+                f"{DAILY_MIN_MARKET_CAP / 1e9:.0f} مليار وفوق")
+            scan_daily(daily_tickers)
+            daily_week = week
+            try:
+                with open(DAILY_WEEK_FILE, "w", encoding="utf-8") as f:
+                    f.write(week + "\n")
+            except Exception:
+                pass
 
         # (4ب) التجزئة العكسية - الجديد كل يوم، قائمة كل جمعة، وقائمة أول الشهر
         if ENABLE_RSPLIT_SHORT:
