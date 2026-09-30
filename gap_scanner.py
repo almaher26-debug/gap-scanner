@@ -2,7 +2,8 @@
 بوت التنبيهات - يشتغل على Railway ويرسل على تيليجرام
 =====================================================
 
-(1) نموذج الـ Inversion Gap - فريمين: 4 ساعات + ساعة
+(1) نموذج الـ Inversion Gap - ثلاث فريمات: يومي + 4 ساعات + ساعة
+    اليومي: يفحص مرة باليوم بعد إغلاق السوق (4:20 العصر نيويورك = 11:20 بالليل بتوقيتك)
     الأسهم: كل أسهم ناسداك اللي قيمتها السوقية 2 مليار دولار وفوق (ميد كاب وأعلى)
     ⚠️ لون الشموع الثلاث ما يهم - المهم إن ذيل الشمعة الأولى والثالثة ما يلتقون
 
@@ -56,12 +57,20 @@
   python gap_scanner.py --algotest   # يجرب كشف الأوامر المتكررة (بدون نت)
 
 (6) كشف خوارزميات التقطيع - من ألباكا
-    - الأسهم: أنشط 100 سهم في ناسداك قيمتها السوقية 30 مليون دولار وتحت
+    - الأسهم: أنشط 100 سهم في ناسداك سعرها من 1$ إلى 15$ وقيمتها السوقية 40 مليون دولار وتحت
     - يدور على صفقات صغيرة (10 أسهم وأقل) بنفس الحجم بالضبط، مثل 1، 1، 1، 1...
     - تنبيه لو تكررت 300 مرة أو أكثر خلال 5 دقايق، وقوي عند 600
     - يقدّر هل غالبها شراء ولا بيع من اتجاه السعر (تقريبي)
     - البيانات من كل البورصات (sip) بتأخير 15 دقيقة في باقة ألباكا المجانية
     - يحتاج المتغيرين ALPACAAPIKEY و ALPACASECRETKEY في Railway
+
+(6ب) خوارزميات الأسهم الكبيرة - صفقات متتالية بنفس الحجم - من ألباكا
+    - الأسهم: أسهم ناسداك اللي قيمتها السوقية مليار دولار وفوق (أنشط 200)
+    - صفقات حجمها 10 أسهم وأقل: تنبيه لما تجي 600 صفقة أو أكثر ورا بعض بنفس الحجم بالضبط،
+      وما بينها ولا صفقة بحجم ثاني، والفاصل بين كل صفقتين 5 ثواني أو أقل
+    - يوضح كم صفقة منها نزلت بنفس اللحظة، والمدة، والقيمة، وتقدير شراء/بيع
+    - لو السلسلة كملت يرسل تحديث عند 1200 ثم 2400 ...
+    - نفس مفاتيح ألباكا | ALGO_BIG=0 يطفيه | ALGO_SMALL=0 يطفي القسم (6)
 """
 
 import gc
@@ -71,7 +80,7 @@ import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 import requests
@@ -106,7 +115,10 @@ GAP_MIN_STOCK_PRICE = 10         # يتجاهل الأسهم اللي سعرها
 GAP_MIN_SIZE = 0.50              # يتجاهل الجاب اللي حجمه أقل من كذا (دولار)
 ENABLE_GAP_4H = True             # فريم 4 ساعات - ينبه عند إغلاق الشمعة
 ENABLE_GAP_1H = True             # فريم ساعة - ينبه عند إغلاق الشمعة
-ENABLE_GAP_15M = True            # فريم 15 دقيقة - ينبه عند إغلاق الشمعة
+ENABLE_GAP_15M = False           # فريم 15 دقيقة - مطفي
+ENABLE_GAP_1D = True             # فريم يومي - ينبه بعد إغلاق السوق كل يوم
+GAP_1D_AFTER_NY = (16, 20)       # يفحص بعد الإغلاق: 4:20 العصر نيويورك = 11:20 بالليل بتوقيتك
+GAP_1D_MIN_SIZE = 0.50           # أقل حجم للجاب اليومي (دولار)
 
 # ---- فريم 15 دقيقة له قائمة أسهم مستقلة: من 1$ إلى 15$ وبدون شرط القيمة السوقية ----
 GAP15_MIN_PRICE = 1              # أقل سعر لأسهم فريم 15 دقيقة
@@ -184,10 +196,13 @@ ENABLE_ALGO = bool(ALPACA_KEY and ALPACA_SECRET)   # يتفعل لحاله لو 
 # الأسهم الصغيرة تقريباً ما تتداول على IEX، فـ sip أدق بكثير لهالنوع
 ALGO_FEED = os.environ.get("ALGO_FEED", "sip").lower()
 ALGO_DELAY_MIN = 16 if ALGO_FEED == "sip" else 0   # الباقة المجانية: بيانات sip عمرها 15 دقيقة وفوق
-# الأسهم: تلقائياً أسهم ناسداك اللي قيمتها السوقية 30 مليون وتحت (الأنشط تداولاً)
+# الأسهم: تلقائياً أسهم ناسداك اللي سعرها من 1$ إلى 15$ وقيمتها السوقية 40 مليون وتحت (الأنشط تداولاً)
 # ولو تبي قائمة ثابتة حطها في Railway بمتغير ALGO_SYMBOLS (بينها فاصلة)
 ALGO_SYMBOLS = [s.strip().upper() for s in os.environ.get("ALGO_SYMBOLS", "").split(",") if s.strip()]
-ALGO_MAX_MARKET_CAP = 30_000_000      # القيمة السوقية 30 مليون دولار وتحت
+ALGO_SMALL = os.environ.get("ALGO_SMALL", "1") != "0"   # 0 = يطفي هالقسم
+ALGO_MIN_PRICE = 1                    # أقل سعر سهم
+ALGO_MAX_PRICE = 15                   # أعلى سعر سهم
+ALGO_MAX_MARKET_CAP = 40_000_000      # القيمة السوقية 40 مليون دولار وتحت (0 = بدون شرط)
 ALGO_MIN_DAY_VOLUME = 50_000          # يشيل الأسهم الميتة (حجم اليوم)
 ALGO_MAX_SYMBOLS = 100                # أقصى عدد أسهم يراقبها (الأنشط أول)
 ALGO_POLL_SEC = 15                    # كل كم ثانية يسحب الصفقات الجديدة
@@ -196,6 +211,22 @@ ALGO_WINDOW_MIN = 5                   # يعد الصفقات المتكررة �
 ALGO_MIN_STREAK = 300                 # تنبيه عند 300 صفقة بنفس الحجم
 ALGO_STRONG_STREAK = 600              # تنبيه قوي عند 600 أو أكثر
 ALGO_REALERT_MIN = 15                 # ما يعيد نفس مستوى التنبيه لنفس السهم والحجم قبل كذا دقيقة
+
+# ---- (6ب) خوارزميات الأسهم الكبيرة: صفقات متتالية بنفس الحجم ----
+# أسهم ناسداك اللي قيمتها السوقية مليار دولار وفوق
+# ينبه لما تجي 600 صفقة أو أكثر ورا بعض بنفس الحجم بالضبط، وما بينها ولا صفقة بحجم ثاني
+# الأحجام الصغيرة بس: 10 أسهم وأقل (1، 1، 1 ... أو 5، 5، 5 ...)
+ALGO_BIG = os.environ.get("ALGO_BIG", "1") != "0"      # 0 = يطفي هالقسم
+ALGO_BIG_MIN_MARKET_CAP = 1_000_000_000   # مليار دولار وفوق
+ALGO_BIG_MIN_STREAK = 600                 # أقل عدد صفقات متتالية بنفس الحجم
+ALGO_BIG_MAX_SIZE = 10                    # حجم الصفقة 10 أسهم أو أقل
+ALGO_BIG_MAX_GAP_SEC = 5                  # لو مر أكثر من كذا ثانية بين صفقتين، تنقطع السلسلة
+ALGO_BIG_MAX_SYMBOLS = int(os.environ.get("ALGO_BIG_MAX_SYMBOLS", "200"))   # الأنشط أول
+ALGO_BIG_SYMBOLS = [s.strip().upper() for s in os.environ.get("ALGO_BIG_SYMBOLS", "").split(",")
+                    if s.strip()]         # قائمة ثابتة بدل التلقائية (اختياري)
+ALGO_BIG_POLL_SEC = 20                    # كل كم ثانية يسحب الصفقات الجديدة
+ALGO_BIG_CHUNK = 20                       # كم سهم بكل طلب لألباكا (الكبيرة صفقاتها كثيرة)
+ALGO_BIG_REALERT_MIN = 15                 # ما يعيد التنبيه لنفس السهم والحجم قبل كذا دقيقة
 
 # ---- المحتوى التعليمي ----
 ADD_EDUCATION = True             # يضيف شرح تعليمي قصير للنموذج تحت كل تنبيه
@@ -357,6 +388,10 @@ EDUCATION = {
              "مئات الصفقات الصغيرة بنفس الحجم بالضبط (سهم، سهم، سهم...) علامة على برنامج "
              "يقسّم أمر كبير على قطع صغيرة عشان ما يحرك السعر ولا يبان.\n"
              "تقدير الشراء/البيع من اتجاه السعر تقريبي، وفي الأسهم الصغيرة ممكن يكون تلاعب أو صانع سوق."),
+    "algo_big": ("📚 للتعلّم - صفقات متتالية بنفس الحجم:\n"
+                 "في سهم كبير عليه آلاف المتداولين، إن مئات الصفقات تجي ورا بعض بنفس الحجم بالضبط "
+                 "وبدون ولا صفقة ثانية بينها = غالباً برنامج واحد (TWAP/VWAP أو آيس بيرغ) ينفذ أمر كبير.\n"
+                 "ما يوضح مين وراه، وتقدير الشراء/البيع من اتجاه السعر تقريبي."),
 }
 
 
@@ -662,6 +697,38 @@ def scan_gap(tickers, already_sent, frames=None, min_price=None, max_price=None,
             log(f"{t}: خطأ - {e}")
     free_memory()
     log(f"[{datetime.now():%H:%M}] الجاب{tag_label}: خلص الفحص - {hits} تنبيه جديد")
+
+
+def scan_gap_daily(tickers, already_sent):
+    """Inversion Gap على الفريم اليومي (الجلسة الرسمية، نفس شموع تريدنج فيو اليومية).
+    ينبه بس لو الشمعة الرابعة هي شمعة اليوم (قفلت الحين)."""
+    hits = 0
+    today = pd.Timestamp.now(tz=NY).date()
+    for t, df in download_batches(tickers, 200, period="1mo", interval="1d", prepost=False):
+        try:
+            df = df.dropna(subset=OHLC)[OHLC].copy()
+            if len(df) < 4 or pd.Timestamp(df.index[-1]).date() != today:
+                continue
+            last = float(df["Close"].iloc[-1])
+            if last < GAP_MIN_STOCK_PRICE:
+                continue
+            days = [pd.Timestamp(d).date() for d in df.index]
+            df.index = pd.DatetimeIndex([pd.Timestamp(d, tz=NY) for d in days])
+            df["end"] = df.index + pd.Timedelta(hours=16)       # الشمعة اليومية تقفل 4 العصر
+            res = check_pattern(df)
+            if not res or res["gap_top"] - res["gap_bottom"] < GAP_1D_MIN_SIZE:
+                continue
+            key = f"{t}-1d-{res['side']}-{today}"
+            if key in already_sent:
+                continue
+            already_sent.add(key)
+            _append_line(GAP_SENT_FILE, key)
+            hits += 1
+            send_telegram(_gap_message(t, res, "فريم يومي"), kind="gap")
+        except Exception as e:
+            log(f"{t}: خطأ جاب يومي - {e}")
+    free_memory()
+    log(f"[{datetime.now():%H:%M}] الجاب اليومي: خلص الفحص - {hits} تنبيه جديد")
 
 
 def gap_scan_due(now, last_run):
@@ -1230,6 +1297,21 @@ def trading_hours(now=None):
     return now.weekday() < 5 and 4 * 60 <= m <= 20 * 60
 
 
+_alpaca_lock = threading.Lock()
+_alpaca_next = [0.0]
+ALPACA_MIN_GAP_SEC = 0.35    # ≈ 170 طلب بالدقيقة (حد الباقة المجانية 200) - للقسمين مع بعض
+
+
+def _alpaca_wait():
+    """القسمين (الصغيرة والكبيرة) يشتركون بنفس حد الطلبات، فنوزعها بالدور."""
+    with _alpaca_lock:
+        now = time.time()
+        wait = _alpaca_next[0] - now
+        _alpaca_next[0] = max(now, _alpaca_next[0]) + ALPACA_MIN_GAP_SEC
+    if wait > 0:
+        time.sleep(wait)
+
+
 def fetch_alpaca_trades(symbols, start, end=None):
     """الصفقات من وقت start لين الحين لمجموعة أسهم. يرجع {الرمز: [صفقات]} أو None لو فشل."""
     headers = {"APCA-API-KEY-ID": ALPACA_KEY, "APCA-API-SECRET-KEY": ALPACA_SECRET}
@@ -1239,6 +1321,7 @@ def fetch_alpaca_trades(symbols, start, end=None):
         params["end"] = end.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     out = {}
     for _ in range(20):                          # صفحات (لو الصفقات كثيرة)
+        _alpaca_wait()
         try:
             r = requests.get(ALGO_URL, headers=headers, params=params, timeout=20)
         except Exception as e:
@@ -1316,19 +1399,26 @@ class AlgoDetector:
                 "buys": buys, "sells": sells, "level": level}
 
 
+def _side_lines(b, s_, total, size):
+    """الشراء والبيع مع بعض (تقدير من اتجاه السعر: صفقة أعلى من اللي قبلها = شراء، أقل = بيع)."""
+    pct = lambda x: f"{x / total * 100:.0f}%" if total else "0%"
+    n = total - b - s_
+    return (f"🟢 شراء: {b:,} صفقة ({pct(b)}) = {b * size:,.0f} سهم\n"
+            f"🔴 بيع: {s_:,} صفقة ({pct(s_)}) = {s_ * size:,.0f} سهم\n"
+            + (f"⚪ بدون اتجاه: {n:,} صفقة\n" if n else ""))
+
+
 def _algo_message(sym, a, cap=None):
     strength = "🔥 قوي" if a["level"] == "strong" else "⚡ رصد"
     mins = max((a["last_t"] - a["first_t"]).total_seconds() / 60, 0.1)
     b, s_, total = a["buys"], a["sells"], a["count"]
-    side = ("غالبها شراء 🟢" if b >= 0.6 * total else
-            "غالبها بيع 🔴" if s_ >= 0.6 * total else "مختلط ⚪")
     return (f"🤖 خوارزمية تقطيع محتملة — {strength}\n"
             f"السهم: {sym}\n"
             f"السعر: ${a['last']:.4g} (من {a['low']:.4g} إلى {a['high']:.4g})\n"
             f"الحجم المتكرر: {a['size']:g} سهم\n"
             f"التكرار: {total} صفقة خلال {mins:.1f} دقيقة\n"
-            f"التقدير: {side} | شراء {b} / بيع {s_} / بدون اتجاه {total - b - s_}\n"
-            + (f"القيمة السوقية: {cap / 1e6:.1f} مليون$\n" if cap else "")
+            + _side_lines(b, s_, total, a["size"])
+            + (f"القيمة السوقية: {_cap_txt(cap)}\n" if cap else "")
             + f"المصدر: {ALGO_FEED.upper()} عبر Alpaca"
             + (f" (متأخر {ALGO_DELAY_MIN - 1} دقيقة)" if ALGO_DELAY_MIN else "") + "\n"
             f"وقت آخر صفقة: {a['last_t'].tz_convert(LOCAL_TZ):%H:%M:%S} (توقيتك)")
@@ -1352,26 +1442,53 @@ def get_algo_float(sym):
     return val
 
 
-def get_microcaps():
-    """أسهم ناسداك اللي قيمتها السوقية 30 مليون وتحت، الأنشط تداولاً أول. يرجع {الرمز: القيمة السوقية}."""
+def _cap_txt(cap):
+    return f"{cap / 1e9:.2f} مليار$" if cap >= 1e9 else f"{cap / 1e6:.1f} مليون$"
+
+
+def _nasdaq_rows():
+    """كل أسهم ناسداك من السكرينر الرسمي: [(الرمز، القيمة السوقية، حجم اليوم، السعر)]."""
     url = ("https://api.nasdaq.com/api/screener/stocks"
            "?tableonly=true&limit=10000&exchange=nasdaq&download=true")
+    r = requests.get(url, headers={**HEADERS, "Accept": "application/json"}, timeout=30)
+    data = r.json().get("data") or {}
+    rows = data.get("rows") or (data.get("table") or {}).get("rows") or []
+    out = []
+    for row in rows:
+        sym = str(row.get("symbol", "")).strip().upper()
+        if sym.isalpha() and len(sym) <= 5:
+            out.append((sym, _to_number(row.get("marketCap")), _to_number(row.get("volume")),
+                        _to_number(row.get("lastsale"))))
+    return out
+
+
+def get_microcaps():
+    """أسهم ناسداك اللي سعرها من ALGO_MIN_PRICE إلى ALGO_MAX_PRICE (ولو فيه شرط قيمة سوقية يطبقه)،
+    الأنشط تداولاً أول. يرجع {الرمز: القيمة السوقية}."""
     try:
-        r = requests.get(url, headers={**HEADERS, "Accept": "application/json"}, timeout=30)
-        data = r.json().get("data") or {}
-        rows = data.get("rows") or (data.get("table") or {}).get("rows") or []
         picks = []
-        for row in rows:
-            sym = str(row.get("symbol", "")).strip().upper()
-            cap = _to_number(row.get("marketCap"))
-            vol = _to_number(row.get("volume"))
-            if sym.isalpha() and len(sym) <= 5 and 0 < cap <= ALGO_MAX_MARKET_CAP \
-                    and vol >= ALGO_MIN_DAY_VOLUME:
-                picks.append((vol, sym, cap))
+        for sym, cap, vol, px in _nasdaq_rows():
+            if not (ALGO_MIN_PRICE <= px <= ALGO_MAX_PRICE) or vol < ALGO_MIN_DAY_VOLUME:
+                continue
+            if ALGO_MAX_MARKET_CAP and not (0 < cap <= ALGO_MAX_MARKET_CAP):
+                continue
+            picks.append((vol, sym, cap))
         picks.sort(reverse=True)
         return {sym: cap for _, sym, cap in picks[:ALGO_MAX_SYMBOLS]}
     except Exception as e:
-        log("كشف الخوارزميات: ما قدرت أجيب القيم السوقية من ناسداك -", e)
+        log("كشف الخوارزميات: ما قدرت أجيب قائمة الأسهم من ناسداك -", e)
+        return {}
+
+
+def get_bigcaps():
+    """أسهم ناسداك اللي قيمتها السوقية مليار وفوق، الأنشط تداولاً أول. يرجع {الرمز: القيمة السوقية}."""
+    try:
+        picks = [(vol, sym, cap) for sym, cap, vol, px in _nasdaq_rows()
+                 if cap >= ALGO_BIG_MIN_MARKET_CAP and vol > 0]
+        picks.sort(reverse=True)
+        return {sym: cap for _, sym, cap in picks[:ALGO_BIG_MAX_SYMBOLS]}
+    except Exception as e:
+        log("خوارزميات الكبيرة: ما قدرت أجيب القيم السوقية من ناسداك -", e)
         return {}
 
 
@@ -1399,7 +1516,8 @@ def algo_loop():
                 caps_day = today
                 log(f"كشف الخوارزميات: ألباكا ({ALGO_FEED}"
                     + (f"، متأخر {ALGO_DELAY_MIN - 1} دقيقة" if ALGO_DELAY_MIN else "، لحظي")
-                    + f") - يراقب {len(caps)} سهم قيمتها {ALGO_MAX_MARKET_CAP / 1e6:.0f} مليون وتحت: "
+                    + f") - يراقب {len(caps)} سهم ناسداك سعرها {ALGO_MIN_PRICE:g}$-{ALGO_MAX_PRICE:g}$"
+                    + (f" وقيمتها {ALGO_MAX_MARKET_CAP / 1e6:g} مليون وتحت" if ALGO_MAX_MARKET_CAP else "") + ": "
                     + ", ".join(list(caps)[:30]) + (" ..." if len(caps) > 30 else ""))
             syms = list(caps)
             if not syms:
@@ -1425,11 +1543,159 @@ def algo_loop():
         time.sleep(ALGO_POLL_SEC)
 
 
+# ---------- (6ب) الأسهم الكبيرة: صفقات متتالية بنفس الحجم ----------
+def _ts_sec(t):
+    """وقت الصفقة بالثواني (سريع، لأن الأسهم الكبيرة فيها آلاف الصفقات بكل سحبة)."""
+    if isinstance(t, str) and len(t) >= 19:
+        base = datetime.fromisoformat(t[:19]).replace(tzinfo=timezone.utc).timestamp()
+        frac = t[19:].split("+")[0].rstrip("Z")
+        if frac.startswith(".") and len(frac) > 1:
+            base += float("0" + frac[:10])
+        return base
+    return pd.Timestamp(t).timestamp()
+
+
+class StreakDetector:
+    """يعد الصفقات المتتالية بنفس الحجم لكل سهم: أي صفقة بحجم مختلف (أو فاصل أكثر من
+    ALGO_BIG_MAX_GAP_SEC ثانية) تقطع السلسلة وتبدأ وحدة جديدة.
+    ينبه عند ALGO_BIG_MIN_STREAK، ثم كل ما تتضاعف (600، 1200، 2400 ...)."""
+    def __init__(self):
+        self.st = {}          # الرمز -> السلسلة الحالية
+        self.recent = {}      # الرمز -> (deque[(الوقت، رقم الصفقة)], set) لآخر 60 ثانية - لمنع التكرار
+        self.alerted = {}     # (الرمز، الحجم) -> وقت آخر تنبيه
+
+    def _dup(self, sym, tid, ts):
+        if tid is None:
+            return False
+        q, ids = self.recent.setdefault(sym, (deque(), set()))
+        while q and q[0][0] < ts - 60:
+            ids.discard(q.popleft()[1])
+        if tid in ids:
+            return True
+        q.append((ts, tid))
+        ids.add(tid)
+        return False
+
+    def add(self, sym, trade):
+        ts = _ts_sec(trade["t"])
+        if self._dup(sym, trade.get("i"), ts):
+            return None
+        size = float(trade.get("s") or 0)
+        price = float(trade.get("p") or 0)
+        if size <= 0 or price <= 0:
+            return None
+        s = self.st.get(sym)
+        side = s["side"] if s else 0
+        if s and price != s["px"]:
+            side = 1 if price > s["px"] else -1       # نفس السعر = نفس جهة اللي قبلها
+        moment = round(ts, 3)                         # "نفس اللحظة" = نفس الملي ثانية
+        if s and s["size"] == size and ts - s["last"] <= ALGO_BIG_MAX_GAP_SEC:
+            s["n"] += 1
+            s["same"] = s["same"] + 1 if moment == s["moment"] else 1
+            s["max_same"] = max(s["max_same"], s["same"])
+            s["low"], s["high"] = min(s["low"], price), max(s["high"], price)
+            s["value"] += size * price
+        else:
+            s = {"size": size, "n": 1, "first": ts, "low": price, "high": price,
+                 "value": size * price, "buys": 0, "sells": 0, "same": 1, "max_same": 1,
+                 "next_alert": ALGO_BIG_MIN_STREAK}
+            self.st[sym] = s
+        s["buys"] += side > 0
+        s["sells"] += side < 0
+        s["last"], s["px"], s["side"], s["moment"] = ts, price, side, moment
+        if s["n"] < s["next_alert"] or size > ALGO_BIG_MAX_SIZE:
+            return None
+        s["next_alert"] *= 2
+        k = (sym, size)
+        first_alert = s["n"] == ALGO_BIG_MIN_STREAK
+        last = self.alerted.get(k)
+        if first_alert and last is not None and ts - last < ALGO_BIG_REALERT_MIN * 60:
+            return None
+        self.alerted[k] = ts
+        return {"size": size, "count": s["n"], "first_t": s["first"], "last_t": ts,
+                "low": s["low"], "high": s["high"], "last": price, "value": s["value"],
+                "buys": s["buys"], "sells": s["sells"], "max_same": s["max_same"],
+                "update": not first_alert}
+
+
+def _big_message(sym, a, cap=None):
+    secs = max(a["last_t"] - a["first_t"], 0.001)
+    b, s_, total = a["buys"], a["sells"], a["count"]
+    t1 = pd.Timestamp(a["first_t"], unit="s", tz="UTC").tz_convert(LOCAL_TZ)
+    t2 = pd.Timestamp(a["last_t"], unit="s", tz="UTC").tz_convert(LOCAL_TZ)
+    head = ("🔁 تحديث: السلسلة مستمرة" if a["update"] else
+            "🏦🤖 خوارزمية على سهم كبير — صفقات متتالية بنفس الحجم")
+    return (f"{head}\n"
+            f"السهم: {sym}\n"
+            + (f"القيمة السوقية: {_cap_txt(cap)}\n" if cap else "")
+            + f"الحجم المتكرر: {a['size']:g} سهم\n"
+            f"عدد الصفقات المتتالية: {total:,} (ولا صفقة بحجم ثاني بينها)\n"
+            f"المدة: {secs:.1f} ثانية (≈ {total / secs:.0f} صفقة/ثانية)\n"
+            f"أكثر عدد صفقات بنفس اللحظة: {a['max_same']}\n"
+            f"قيمتها: ≈ {a['value']:,.0f}$\n"
+            f"السعر: ${a['last']:.2f} (من {a['low']:.2f} إلى {a['high']:.2f})\n"
+            + _side_lines(b, s_, total, a["size"])
+            + f"المصدر: {ALGO_FEED.upper()} عبر Alpaca"
+            + (f" (متأخر {ALGO_DELAY_MIN - 1} دقيقة)" if ALGO_DELAY_MIN else "") + "\n"
+            f"من {t1:%H:%M:%S} إلى {t2:%H:%M:%S} (توقيتك)")
+
+
+def algo_big_loop():
+    det = StreakDetector()
+    last_end, was_on = None, None
+    caps, caps_day = {}, None
+    while True:
+        try:
+            now = pd.Timestamp.now(tz="UTC")
+            end = now - pd.Timedelta(minutes=ALGO_DELAY_MIN)
+            on = trading_hours(end.tz_convert(NY))
+            if on != was_on:
+                log("خوارزميات الكبيرة: " + ("بدأ المراقبة" if on else "السوق مسكر، أنتظر"))
+                was_on = on
+            if not on:
+                last_end = None
+                time.sleep(60)
+                continue
+            today = pd.Timestamp.now(tz=NY).date()
+            if caps_day != today or not caps:
+                caps = ({s_: None for s_ in ALGO_BIG_SYMBOLS} if ALGO_BIG_SYMBOLS
+                        else get_bigcaps())
+                caps_day = today
+                log(f"خوارزميات الكبيرة: يراقب {len(caps)} سهم ناسداك قيمتها "
+                    f"{ALGO_BIG_MIN_MARKET_CAP / 1e9:g} مليار وفوق - تنبيه عند "
+                    f"{ALGO_BIG_MIN_STREAK} صفقة متتالية بنفس الحجم ({ALGO_BIG_MAX_SIZE:g} أسهم وأقل)")
+            syms = list(caps)
+            if not syms:
+                time.sleep(300)
+                continue
+            start = last_end or end - pd.Timedelta(seconds=60)
+            got = None
+            for i in range(0, len(syms), ALGO_BIG_CHUNK):
+                part = fetch_alpaca_trades(syms[i:i + ALGO_BIG_CHUNK], start, end)
+                if part is not None:
+                    got = got or {}
+                    got.update(part)
+            if got is not None:
+                last_end = end
+                for sym, trades in got.items():
+                    for tr in sorted(trades, key=lambda x: x.get("t", "")):
+                        res = det.add(sym, tr)
+                        if res:
+                            send_telegram(_big_message(sym, res, caps.get(sym)), kind="algo_big")
+                del got
+        except Exception as e:
+            log("خوارزميات الكبيرة: خطأ -", e)
+        time.sleep(ALGO_BIG_POLL_SEC)
+
+
 def start_algo_thread():
     if not ENABLE_ALGO:
         log("كشف الخوارزميات: مطفي (حط ALPACAAPIKEY و ALPACASECRETKEY في Railway عشان يشتغل)")
         return
-    threading.Thread(target=algo_loop, daemon=True, name="algo").start()
+    if ALGO_SMALL:
+        threading.Thread(target=algo_loop, daemon=True, name="algo").start()
+    if ALGO_BIG:
+        threading.Thread(target=algo_big_loop, daemon=True, name="algo_big").start()
 
 
 def algo_self_test():
@@ -1445,6 +1711,25 @@ def algo_self_test():
     assert [a["count"] for a in alerts] == [300, 600], [a["count"] for a in alerts]
     print("ALGO TEST OK: 300 / 600 same-size trades")
     print(_algo_message("TEST", alerts[-1], 12_300_000))
+
+    # (6ب) الكبيرة: 700 صفقة متتالية بحجم 100 (كل 3 ورا بعض بنفس اللحظة)، ثم صفقة بحجم ثاني تقطعها
+    det = StreakDetector(); big = []
+    for k in range(700):
+        tr = {"i": k + 1, "s": 1, "p": 180.00 - (k // 50) * 0.01,
+              "t": (t0 + pd.Timedelta(milliseconds=(k // 3) * 40)).strftime("%Y-%m-%dT%H:%M:%S.%f000Z")}
+        a = det.add("BIGCAP", tr)
+        if a: big.append(a)
+    assert det.add("BIGCAP", {"i": 701, "s": 1, "p": 180, "t": "2026-01-02T15:00:00.000000000Z"}) is None  # مكرر
+    det.add("BIGCAP", {"i": 9999, "s": 37, "p": 179.9, "t": "2026-01-02T15:00:10Z"})   # حجم ثاني = تنقطع
+    for k in range(599):          # 599 ما توصل الحد
+        a = det.add("BIGCAP", {"i": 10000 + k, "s": 1, "p": 179.9, "t": t0 + pd.Timedelta(seconds=11 + k * 0.01)})
+        assert a is None
+    assert [a["count"] for a in big] == [600], [a["count"] for a in big]
+    for k in range(1300):         # حجم 100 (أكبر من 10) = يتجاهل
+        assert det.add("BIG100", {"i": k + 1, "s": 100, "p": 50, "t": t0 + pd.Timedelta(milliseconds=k * 10)}) is None
+    assert big[0]["max_same"] == 3
+    print("ALGO BIG TEST OK: 600 consecutive same-size trades")
+    print(_big_message("BIGCAP", big[0], 45_600_000_000))
 
 
 def main():
@@ -1463,6 +1748,7 @@ def main():
 
     gap_tickers, gap_day, gap_last = [], None, None
     gap15_tickers = []
+    gap1d_day = None
     log("الجاب: " + ("24 ساعة (مع الجلسة الليلية من Tiingo)" if GAP_OVERNIGHT else
                      "الجلسة الممتدة 4 الفجر - 8 بالليل نيويورك (ياهو مجاناً)" if GAP_EXTENDED else
                      "الجلسة الرسمية بس"))
@@ -1502,6 +1788,16 @@ def main():
                          frames=[(True, 15, "15m", "فريم 15 دقيقة")],
                          min_price=GAP15_MIN_PRICE, max_price=GAP15_MAX_PRICE,
                          min_size=GAP15_MIN_SIZE, tag_label=" (15 دقيقة)")
+
+        # (1ب) الجاب اليومي - مرة باليوم بعد إغلاق السوق
+        now_ny = pd.Timestamp.now(tz=NY)
+        if ENABLE_GAP and ENABLE_GAP_1D and gap1d_day != now_ny.date() and (
+                once or (now_ny.weekday() < 5 and (now_ny.hour, now_ny.minute) >= GAP_1D_AFTER_NY)):
+            if gap_day != now_ny.date() or not gap_tickers:
+                gap_tickers = get_nasdaq_midcap_plus()
+                gap_day = now_ny.date()
+            scan_gap_daily(gap_tickers, gap_sent)
+            gap1d_day = now_ny.date()
 
         # (2) ماسح السيولة - وقت السوق الرسمي، كل 5 دقايق
         if ENABLE_FLOW and (regular_session_open() or once) \
