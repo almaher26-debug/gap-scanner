@@ -24,12 +24,14 @@
 
     فلتر: السهم سعره فوق 10$ ، وحجم الجاب (الفرق بين الحدين) 0.50$ أو أكثر
 
-(2) الأخبار - 24 ساعة - الإيجابية بس
-    - كل أسهم ناسداك (عليها تداول)
-    - يرسل الأخبار الإيجابية بس: اندماج، استحواذ، أرباح ونتائج، موافقات، عقود وشراكات...
-      والسلبي والمحايد يتجاهلهم (التصنيف تقريبي من كلمات العنوان، مو دقيق 100%)
-    - عنوان الخبر يتترجم للعربي (لو فشلت الترجمة يرسله بالإنجليزي)
-    - المصدر: ياهو فاينانس
+(2) ماسح السيولة (البني ستوك) - كل 5 دقايق وقت السوق الرسمي
+    - أسهم ناسداك من 1$ إلى 5$
+    - الشروط كلها مع بعض:
+        * الحجم النسبي: حجم اليوم 5 أضعاف متوسط آخر 20 يوم أو أكثر
+        * اختراق: السعر فوق أعلى قمة آخر 20 يوم، وقريب من قمة اليوم (ما رجع أكثر من 3%)
+        * الفلوت أقل من 20 مليون سهم
+        * طالع 5% أو أكثر عن إغلاق أمس
+    - كل سهم يتنبه عليه مرة وحدة باليوم
 
 (3) نموذج القاع المزدوج (W) - الفريم اليومي بس - أسهم ناسداك 2 مليار وفوق
     - قاعين متقاربين (فرق 3% أو أقل) + اختراق خط العنق لفوق خلال آخر 15 يوم تداول
@@ -118,22 +120,17 @@ MIN_PRICE = 50
 MAX_PRICE = 500
 
 # ---- (2) الأخبار - 24 ساعة ----
-ENABLE_NEWS = True
-NEWS_MIN_PRICE = 1               # أقل سعر للسهم
-NEWS_MAX_PRICE = 20              # أعلى سعر للسهم
-NEWS_MIN_DOLLAR_FLOW = 300_000   # لازم تدخل سيولة بهالمبلغ ($) بعد الخبر قبل ما يرسله
-NEWS_FLOW_WINDOW_MIN = 15        # يحسب السيولة في هالمدة (دقيقة) من وقت الخبر
-NEWS_MIN_AVG_VOLUME = 100_000    # يشيل الأسهم الميتة اللي ما عليها تداول (عدد أسهم يومي)
-NEWS_INCLUDE_NYSE = False        # False = ناسداك بس
-NEWS_EVERY_MIN = 5               # كل كم دقيقة يفحص الأخبار (الأسهم كثيرة، أقل من كذا ياهو ممكن يحظر)
-NEWS_MAX_AGE_MIN = 90            # يتجاهل الأخبار الأقدم من كذا (عشان ما يرسل أخبار قديمة أول ما يشتغل)
-NEWS_WORKERS = 3                 # عدد الطلبات المتوازية على ياهو (كثرتها تخلي ياهو يحظر)
-NEWS_CHUNK = 100                 # يفحص الأسهم على دفعات، وبين كل دفعة يشيك هل ياهو حاظره
-NEWS_CHUNK_PAUSE_SEC = 2         # استراحة بين الدفعات
-NEWS_MAX_BACKOFF_MIN = 60        # لو ياهو حظر، يوقف ويرجع بعد وقت يزيد لين هالحد
-NEWS_SENT_FILE = "news_sent.txt" # عشان ما يعيد نفس الخبر لو البوت أعاد التشغيل
-NEWS_ONLY_POSITIVE = True        # True = يرسل الأخبار الإيجابية بس
-NEWS_TRANSLATE = True            # True = يترجم عنوان الخبر للعربي
+ENABLE_FLOW = True               # ماسح السيولة للبني ستوك
+FLOW_MIN_PRICE = 1               # أقل سعر
+FLOW_MAX_PRICE = 5               # أعلى سعر
+FLOW_MIN_AVG_VOLUME = 100_000    # يشيل الأسهم الميتة
+FLOW_RVOL = 5                    # حجم اليوم لازم يكون كذا ضعف متوسط آخر 20 يوم
+FLOW_AVG_DAYS = 20               # عدد الأيام لمتوسط الحجم وقمة الاختراق
+FLOW_MAX_FLOAT = 20_000_000      # الفلوت أقل من كذا سهم
+FLOW_MIN_CHANGE = 0.05           # طالع 5% أو أكثر عن إغلاق أمس
+FLOW_MAX_PULLBACK = 0.03         # ما رجع أكثر من 3% عن قمة اليوم
+FLOW_EVERY_MIN = 5               # كل كم دقيقة يفحص
+FLOW_SENT_FILE = "flow_sent.txt" # عشان ما يعيد نفس السهم بنفس اليوم
 
 # ---- (3) نماذج الفريم اليومي ----
 ENABLE_DAILY = True
@@ -192,6 +189,11 @@ ALGO_STRONG_STREAK = 200              # تنبيه قوي عند 200 صفقة أ
 ALGO_IGNORE_SIZES = ()                # أحجام يتجاهلها، مثال: (100,)
 ALGO_REALERT_MIN = 15                 # ما يعيد نفس مستوى التنبيه قبل كذا دقيقة
 ALGO_FLOAT_CACHE_SEC = 6 * 60 * 60    # تحديث بيانات الفري فلوت كل 6 ساعات
+
+# ---- المحتوى التعليمي ----
+ADD_EDUCATION = True             # يضيف شرح تعليمي قصير للنموذج تحت كل تنبيه
+ADD_DISCLAIMER = True            # يضيف سطر إخلاء المسؤولية تحت كل رسالة
+DISCLAIMER = "⚠️ محتوى تعليمي فقط، وليس توصية بيع أو شراء. القرار مسؤوليتك."
 
 SENT_KEEP_LINES = 20000             # ملفات "المرسل" تنقص لآخر كذا سطر عشان ما تكبر للأبد
 UNIVERSE_BATCH = 200                # حجم دفعة التحميل لما يفلتر كل الأسهم (أصغر = ذاكرة أقل)
@@ -323,7 +325,39 @@ def _send_one(chat_id, text):
         log(f"فشل إرسال التنبيه لـ {chat_id}:", e)
 
 
-def send_telegram(text):
+EDUCATION = {
+    "gap": ("📚 للتعلّم - Inversion Gap:\n"
+            "فجوة بين ذيل الشمعة الأولى والثالثة. لما تقفل الشمعة الرابعة وراها، الفجوة تنقلب "
+            "من مقاومة لدعم (أو العكس)، وكثير يراقبون إعادة اختبارها.\n"
+            "يضعف لو رجع السعر وقفل داخل الفجوة، أو كان الحجم ضعيف."),
+    "flow": ("📚 للتعلّم - دخول السيولة:\n"
+             "الحجم النسبي يقارن تداول اليوم بمعدّله. حجم أضعاف المعتاد مع اختراق قمة وفلوت صغير "
+             "يعني طلب غير عادي على سهم قليل المعروض، فالحركة تكون عنيفة.\n"
+             "البني ستوك ترتد بسرعة لو ما وراها سبب حقيقي، والسبريد والتذبذب عالي."),
+    "w": ("📚 للتعلّم - القاع المزدوج (W):\n"
+          "السعر ينزل لقاع، يرتد، يرجع لنفس المستوى تقريباً ويصمد، ثم يخترق خط العنق "
+          "(أعلى نقطة بين القاعين). الاختراق هو التأكيد.\n"
+          "يضعف لو رجع السعر تحت خط العنق بعد الاختراق."),
+    "short": ("📚 للتعلّم - الشورت صفر:\n"
+              "يعني ما فيه مراكز بيع على المكشوف مسجلة في آخر بيانات رسمية. البيانات تنشر مرتين "
+              "بالشهر وبتأخير، فالوضع الحالي ممكن يكون تغيّر.\n"
+              "صفر أحياناً يعني نقص بيانات أو قيود على الإقراض، مو بالضرورة إشارة إيجابية."),
+    "rsplit": ("📚 للتعلّم - التجزئة العكسية:\n"
+               "الشركة تدمج أسهمها (مثلاً كل 10 أسهم = سهم) عشان ترفع السعر، غالباً لتفادي "
+               "الشطب من البورصة. عدد الأسهم يقل والقيمة ما تتغير.\n"
+               "كثير منها يكمل نزول بعدها، وأحياناً يتبعها طرح أسهم جديدة."),
+    "algo": ("📚 للتعلّم - الأوامر الخوارزمية:\n"
+             "تكرار نفس حجم الصفقة مرات كثيرة بنفس الثانية علامة على برنامج ينفّذ أمر كبير "
+             "مقسّم على قطع صغيرة عشان ما يحرك السعر.\n"
+             "ما يوضح إذا كان شراء أو بيع، وبيانات IEX جزء بسيط من السوق."),
+}
+
+
+def send_telegram(text, kind=None):
+    if ADD_EDUCATION and kind in EDUCATION:
+        text += "\n\n" + EDUCATION[kind]
+    if ADD_DISCLAIMER:
+        text += "\n\n" + DISCLAIMER
     log(text)
     if "ضع_" in TELEGRAM_TOKEN:
         return  # ما حطيت التوكن، يطبع بالشاشة بس
@@ -616,7 +650,7 @@ def scan_gap(tickers, already_sent, frames=None, min_price=None, max_price=None,
                 already_sent.add(key)
                 _append_line(GAP_SENT_FILE, key)
                 hits += 1
-                send_telegram(_gap_message(t, res, label))
+                send_telegram(_gap_message(t, res, label), kind="gap")
         except Exception as e:
             log(f"{t}: خطأ - {e}")
     free_memory()
@@ -676,7 +710,7 @@ def _self_test_run(times):
         print()
 
 
-# ================== (2) فلتر الأخبار ==================
+# ================== قوائم الأسهم (تستخدمها كل الأقسام) ==================
 def get_all_us_symbols(include_nyse=True):
     """كل الأسهم المدرجة في ناسداك (وبورصة نيويورك) من ملفات ناسداك الرسمية،
     بدون صناديق ETF ولا وارنتات ولا حقوق ولا وحدات."""
@@ -714,7 +748,7 @@ _universe_cache = {}   # (اليوم، مع نيويورك؟) -> {الرمز: (�
 
 def _universe_stats(include_nyse):
     """آخر سعر ومتوسط الحجم لكل الأسهم. ينحمّل مرة وحدة باليوم ويستخدمه
-    الأخبار واليومي والشورت كلهم (بدل ما كل واحد يحمّل 3000 سهم لحاله)."""
+    الماسح واليومي والشورت كلهم (بدل ما كل واحد يحمّل 3000 سهم لحاله)."""
     key = (pd.Timestamp.now(tz=NY).date(), bool(include_nyse))
     if key in _universe_cache:
         return _universe_cache[key]
@@ -741,216 +775,68 @@ def build_universe(label, min_price, max_price, min_vol, include_nyse):
     return keep
 
 
-def build_news_universe():
-    return build_universe("الأخبار", NEWS_MIN_PRICE, NEWS_MAX_PRICE,
-                          NEWS_MIN_AVG_VOLUME, NEWS_INCLUDE_NYSE)
-
-
-def _parse_news_item(item):
-    """ياهو غيّر شكل الأخبار أكثر من مرة، هذي تقرأ الشكلين القديم والجديد."""
-    c = item.get("content") if isinstance(item.get("content"), dict) else item
-    news_id = item.get("id") or c.get("id") or item.get("uuid")
-    title = c.get("title") or ""
-    # الوقت
-    ts = None
-    if c.get("pubDate"):
-        ts = pd.Timestamp(c["pubDate"])
-    elif c.get("providerPublishTime"):
-        ts = pd.Timestamp(int(c["providerPublishTime"]), unit="s")
-    if ts is not None and ts.tzinfo is None:
-        ts = ts.tz_localize("UTC")
-    # الرابط والمصدر
-    link = ""
-    for k in ("canonicalUrl", "clickThroughUrl"):
-        if isinstance(c.get(k), dict) and c[k].get("url"):
-            link = c[k]["url"]
-            break
-    link = link or c.get("link") or ""
-    provider = c.get("provider")
-    source = provider.get("displayName") if isinstance(provider, dict) else (c.get("publisher") or "")
-    summary = c.get("summary") or c.get("description") or ""
-    return {"id": news_id or f"{title}-{ts}", "title": title, "time": ts,
-            "link": link, "source": source, "summary": summary}
-
-
-POSITIVE_WORDS = """
-beat beats surpass surpasses exceeded tops record soar soars soared surge surges surged jump jumps
-jumped rally rallies rallied gain gains climb climbs rise rises rose upgrade upgraded upgrades
-outperform buy raises raised raise boost boosts boosted strong stronger growth profit profitable
-approval approved approves fda-approved clearance cleared breakthrough partnership partners
-collaboration agreement contract awarded wins win won acquire acquisition acquires merger buyback
-repurchase dividend expands expansion launch launches launched positive success successful
-milestone higher bullish upbeat optimistic tops beat-and-raise guidance-raise order orders deal
-""".split()
-NEGATIVE_WORDS = """
-miss misses missed plunge plunges plunged plummet plummets sink sinks sank drop drops dropped fall
-falls fell slump slumps tumble tumbles tumbled decline declines declined downgrade downgraded
-downgrades underperform sell cut cuts lowers lowered weak weaker loss losses lawsuit sued sues
-probe investigation subpoena sec fraud recall recalls halt halted delisting delist delisted
-bankruptcy bankrupt chapter default offering dilution dilutive reverse-split warning warns layoffs
-layoff resign resigns resigned rejected rejects rejection fails failed failure crl negative bearish
-concern concerns downbeat disappointing disappoints suspend suspended short-seller shortfall lower
-""".split()
-
-
-NEWS_CATEGORIES = [
-    ("🤝 اندماج / استحواذ", "merger merge merges merging acquire acquires acquired acquisition "
-                          "acquisitions buyout takeover to-be-acquired tender"),
-    ("💰 أرباح / نتائج", "earnings profit profits profitable revenue revenues results eps quarter "
-                        "quarterly q1 q2 q3 q4 guidance record"),
-    ("💊 موافقة", "fda approval approved approves clearance cleared"),
-    ("📝 عقد / شراكة", "contract contracts partnership partners collaboration agreement awarded order orders deal"),
-    ("🔁 إعادة شراء / توزيعات", "buyback repurchase dividend"),
-]
-NEWS_CATEGORIES = [(name, set(words.split())) for name, words in NEWS_CATEGORIES]
-
-
-def news_classify(text):
-    """تصنيف تقريبي من كلمات العنوان. يرجع (النوع، التصنيف)
-    النوع: إيجابي / سلبي / محايد ، والتصنيف مثل اندماج أو أرباح."""
-    import re
-    t = text.lower().replace("to be acquired", "to-be-acquired")
-    words = re.findall(r"[a-z0-9][a-z0-9\-]*", t)
-    pos = sum(w in POSITIVE_WORDS for w in words)
-    neg = sum(w in NEGATIVE_WORDS for w in words)
-    category = next((name for name, keys in NEWS_CATEGORIES if any(w in keys for w in words)), "")
-    if neg > pos:
-        return "negative", category
-    if pos > neg or (category and neg == 0):
-        return "positive", category
-    return "neutral", category
-
-
-def news_sentiment(text):
-    kind, _ = news_classify(text)
-    return {"positive": "🟢 إيجابي", "negative": "🔴 سلبي"}.get(kind, "⚪ محايد")
-
-
-_translations = {}
-
-
-def translate_ar(text):
-    """يترجم العنوان للعربي. يجرب قوقل وبعدين MyMemory، ولو فشلوا يرجع None."""
-    if text in _translations:
-        return _translations[text]
-    result = None
-    try:
-        r = requests.get("https://translate.googleapis.com/translate_a/single",
-                         params={"client": "gtx", "sl": "en", "tl": "ar", "dt": "t", "q": text},
-                         headers=HEADERS, timeout=8)
-        data = r.json()
-        result = "".join(seg[0] for seg in data[0] if seg and seg[0])
-    except Exception:
-        pass
-    if not result or not any("\u0600" <= ch <= "\u06ff" for ch in result):
-        try:
-            r = requests.get("https://api.mymemory.translated.net/get",
-                             params={"q": text[:480], "langpair": "en|ar"}, timeout=8)
-            result = r.json()["responseData"]["translatedText"]
-        except Exception:
-            result = None
-    if result and not any("\u0600" <= ch <= "\u06ff" for ch in result):
-        result = None                     # ما طلع عربي = الترجمة فشلت
-    _translations[text] = result
-    return result
-
-
-def fetch_news(t):
-    import yfinance as yf
-    try:
-        return t, [_parse_news_item(n) for n in (yf.Ticker(t).news or [])]
-    except Exception:
-        return t, []
-
-
-_news_state = {"cursor": 0, "backoff": 0}   # وين وقف الفحص لو ياهو حظر، وكم يستنى
-
-
-def dollar_flow_since(ticker, news_time):
-    """قيمة التداول بالدولار (السعر × الحجم) من وقت الخبر لمدة NEWS_FLOW_WINDOW_MIN، بشموع 5 دقايق."""
-    try:
-        df = yf.download(ticker, period="2d", interval="5m", prepost=True,
-                         progress=False, auto_adjust=False, threads=False)
-        if df is None or df.empty:
-            return None
-        df = to_ny(df)
-        start = news_time.tz_convert(NY).floor("5min")
-        end = start + pd.Timedelta(minutes=NEWS_FLOW_WINDOW_MIN)
-        win = df[(df.index >= start) & (df.index < end)]
-        if win.empty:
-            return 0.0
-        close, vol = win["Close"], win["Volume"]
-        if isinstance(close, pd.DataFrame):
-            close, vol = close.iloc[:, 0], vol.iloc[:, 0]
-        return float((close.astype(float) * vol.astype(float)).sum())
-    except Exception:
+# ================== (2) ماسح السيولة - البني ستوك ==================
+def check_flow(df):
+    """df = شموع يومية (آخر شمعة = اليوم). يرجع التفاصيل لو الشروط كلها تحققت (ما عدا الفلوت)."""
+    if len(df) < FLOW_AVG_DAYS + 2:
         return None
+    today, past = df.iloc[-1], df.iloc[-(FLOW_AVG_DAYS + 1):-1]
+    avg_vol = float(past["Volume"].mean())
+    vol, close, high = float(today["Volume"]), float(today["Close"]), float(today["High"])
+    prev_close = float(past["Close"].iloc[-1])
+    top = float(past["High"].max())
+    if avg_vol <= 0 or prev_close <= 0 or high <= 0:
+        return None
+    rvol = vol / avg_vol
+    change = close / prev_close - 1
+    pullback = 1 - close / high
+    if not (FLOW_MIN_PRICE <= close <= FLOW_MAX_PRICE):
+        return None
+    if rvol < FLOW_RVOL or change < FLOW_MIN_CHANGE:
+        return None
+    if close <= top or pullback > FLOW_MAX_PULLBACK:
+        return None
+    return {"close": close, "high": high, "prev": prev_close, "top": top, "vol": vol,
+            "avg_vol": avg_vol, "rvol": rvol, "change": change, "dollar": close * vol}
 
 
-def scan_news(tickers, already_sent):
-    hits, done, blocked = 0, 0, False
-    if not tickers:
-        return
-    now = pd.Timestamp.now(tz="UTC")
-    oldest = now - pd.Timedelta(minutes=NEWS_MAX_AGE_MIN)
-    start = _news_state["cursor"] % len(tickers)
-    order = tickers[start:] + tickers[:start]     # يكمل من حيث وقف آخر مرة
-    fails_total = _YFNoise.news_fail
-    with ThreadPoolExecutor(max_workers=NEWS_WORKERS) as pool:
-        for i in range(0, len(order), NEWS_CHUNK):
-            chunk = order[i:i + NEWS_CHUNK]
-            fails_before = _YFNoise.news_fail
-            for t, items in pool.map(fetch_news, chunk):
-                for n in items:
-                    if not n["title"] or n["time"] is None or n["time"] < oldest:
-                        continue
-                    key = f"{t}-{n['id']}"
-                    if key in already_sent:
-                        continue
-                    kind, category = news_classify(n["title"])
-                    if NEWS_ONLY_POSITIVE and kind != "positive":
-                        already_sent.add(key)
-                        _append_line(NEWS_SENT_FILE, key)
-                        continue                  # سلبي أو محايد = نتجاهله
-                    flow = dollar_flow_since(t, n["time"])
-                    if flow is not None and flow < NEWS_MIN_DOLLAR_FLOW:
-                        if now - n["time"] > pd.Timedelta(minutes=NEWS_FLOW_WINDOW_MIN + 5):
-                            already_sent.add(key)     # خلصت النافذة وما دخلت سيولة = نتركه
-                            _append_line(NEWS_SENT_FILE, key)
-                        continue                  # لسه ما دخلت سيولة كافية، نعيد الفحص الجولة الجاية
-                    already_sent.add(key)
-                    _append_line(NEWS_SENT_FILE, key)
-                    hits += 1
-                    title = (translate_ar(n["title"]) if NEWS_TRANSLATE else None) or n["title"]
-                    label = {"positive": "🟢 إيجابي", "negative": "🔴 سلبي"}.get(kind, "⚪ محايد")
-                    local_time = n["time"].tz_convert(LOCAL_TZ)
-                    send_telegram(
-                        f"📰 خبر {label}" + (f" - {category}" if category else "") + "\n"
-                        f"السهم: {t}\n"
-                        f"الخبر: {title}\n"
-                        f"المصدر: {n['source']}\n"
-                        + (f"السيولة بعد الخبر: ${flow:,.0f}\n" if flow else "") +
-                        f"الوقت: {local_time:%H:%M} (توقيتك)\n"
-                        f"{n['link']}"
-                    )
-            if _YFNoise.news_fail - fails_before > len(chunk) // 2:
-                blocked = True                    # أكثر من نص الدفعة فشل = ياهو حاظرنا
-                break
-            done += len(chunk)
-            time.sleep(NEWS_CHUNK_PAUSE_SEC)
-    failed = _YFNoise.news_fail - fails_total
-    if blocked:
-        _news_state["cursor"] = (start + done) % len(tickers)
-        _news_state["backoff"] = min(max(_news_state["backoff"] * 2, NEWS_EVERY_MIN),
-                                     NEWS_MAX_BACKOFF_MIN)
-        log(f"[{datetime.now():%H:%M}] الأخبار: ياهو حاظر مؤقتاً - فحصت {done} من {len(tickers)}، "
-            f"أرجع بعد {NEWS_EVERY_MIN + _news_state['backoff']} دقيقة وأكمل من حيث وقفت")
-    else:
-        _news_state["cursor"] = 0
-        _news_state["backoff"] = 0
+def _flow_message(t, r, flt):
+    return (f"💰 دخول سيولة + اختراق\n"
+            f"السهم: {t}\n"
+            f"السعر: {r['close']:.2f}$ ({r['change'] * 100:+.1f}% عن إغلاق أمس)\n"
+            f"الحجم النسبي: {r['rvol']:.1f} ضعف متوسط {FLOW_AVG_DAYS} يوم\n"
+            f"حجم اليوم: {int(r['vol']):,} سهم (≈ {r['dollar']:,.0f}$)\n"
+            f"اخترق قمة {FLOW_AVG_DAYS} يوم: {r['top']:.2f}$ | قمة اليوم: {r['high']:.2f}$\n"
+            f"الفلوت: {int(flt):,} سهم\n"
+            f"الوقت: {pd.Timestamp.now(tz=LOCAL_TZ):%H:%M} (توقيتك)")
+
+
+def scan_flow(tickers, already_sent):
+    hits = 0
+    day = pd.Timestamp.now(tz=NY).date()
+    cands = []
+    for t, df in download_batches(tickers, UNIVERSE_BATCH, period="3mo", interval="1d", prepost=False):
+        try:
+            if pd.Timestamp(df.index[-1]).date() != day:
+                continue                          # ما فيه شمعة اليوم
+            if f"{t}-{day}" in already_sent:
+                continue
+            r = check_flow(df)
+            if r:
+                cands.append((t, r))
+        except Exception:
+            continue
+    for t, r in sorted(cands, key=lambda x: -x[1]["rvol"]):
+        flt = get_algo_float(t)                   # الفلوت يتجاب للمرشحين بس (أسرع)
+        if flt is None or flt <= 0 or flt >= FLOW_MAX_FLOAT:
+            continue
+        key = f"{t}-{day}"
+        already_sent.add(key)
+        _append_line(FLOW_SENT_FILE, key)
+        hits += 1
+        send_telegram(_flow_message(t, r, flt), kind="flow")
     free_memory()
-    log(f"[{datetime.now():%H:%M}] الأخبار: خلص الفحص - {hits} خبر جديد"
-        + (f" ({failed} سهم ما رجع أخباره)" if failed else ""))
+    log(f"[{datetime.now():%H:%M}] ماسح السيولة: خلص الفحص - {len(cands)} مرشح، {hits} تنبيه جديد")
 
 
 # ================== (3) نماذج الفريم اليومي ==================
@@ -1090,7 +976,7 @@ def scan_daily(tickers, already_sent):
             hits += len(rows)
             for i in range(0, len(rows), 25):         # كل رسالة 25 سهم بالكثير
                 part = rows[i:i + 25]
-                send_telegram(f"{name} - {label}\n" + "\n".join(r[1] for r in part))
+                send_telegram(f"{name} - {label}\n" + "\n".join(r[1] for r in part), kind="w")
                 time.sleep(3)
         free_memory()
     log(f"[{datetime.now():%H:%M}] نموذج W (يومي): خلص الفحص - {hits} تنبيه جديد")
@@ -1171,7 +1057,7 @@ def scan_short(tickers, already_sent):
                 f"السعر: {price}\n"
                 f"الشورت الحالي: 0\n"
                 f"الشورت الشهر اللي قبله: {prior_txt}\n"
-                f"تاريخ البيانات: {d}"
+                f"تاريخ البيانات: {d}", kind="short"
             )
     free_memory()
     log(f"[{datetime.now():%H:%M}] الشورت: خلص الفحص - {hits} تنبيه جديد")
@@ -1199,11 +1085,11 @@ def scan_rsplit_short(tickers, already_sent):
     if RSPLIT_LIST:
         rows = sorted(cands.items(), key=lambda kv: kv[1][0], reverse=True)   # الأحدث فوق
         if not rows:
-            send_telegram(f"📋 أسهم التجزئة العكسية - آخر {RSPLIT_DAYS} يوم\nما فيه ولا سهم")
+            send_telegram(f"📋 أسهم التجزئة العكسية - آخر {RSPLIT_DAYS} يوم\nما فيه ولا سهم", kind="rsplit")
         for i in range(0, len(rows), 40):
             send_telegram(f"📋 أسهم التجزئة العكسية - آخر {RSPLIT_DAYS} يوم\n"
                           + "\n".join(f"• {t} | {d:%Y-%m-%d} | {last:.2f}$"
-                                      for t, (d, _, last) in rows[i:i + 40]))
+                                      for t, (d, _, last) in rows[i:i + 40]), kind="rsplit")
             time.sleep(2)
     # الشورت صفر لأسهم البني ستوك منها بس
     cands = {t: v for t, v in cands.items() if v[2] <= RSPLIT_MAX_PRICE}
@@ -1227,7 +1113,7 @@ def scan_rsplit_short(tickers, already_sent):
                     f"السعر: {price or last:.2f}\n"
                     f"التجزئة العكسية: {sdate:%Y-%m-%d} (1 مقابل {1 / ratio:g})\n"
                     f"الشورت الحالي: 0\n"
-                    f"تاريخ بيانات الشورت: {d}"
+                    f"تاريخ بيانات الشورت: {d}", kind="rsplit"
                 )
     free_memory()
     log(f"[{datetime.now():%H:%M}] التجزئة العكسية: خلص الفحص - {hits} تنبيه جديد")
@@ -1390,7 +1276,7 @@ def algo_loop():
                     for tr in sorted(trades, key=lambda x: x.get("t", "")):
                         res = det.add(sym, tr, float_shares=float_shares)
                         if res:
-                            send_telegram(_algo_message(sym, res))
+                            send_telegram(_algo_message(sym, res), kind="algo")
         except Exception as e:
             log("كشف الخوارزميات: خطأ -", e)
         time.sleep(ALGO_POLL_SEC)
@@ -1434,8 +1320,8 @@ def main():
                      "الجلسة الرسمية بس"))
     was_open = None
     gap_sent = _load_set(GAP_SENT_FILE)
-    news_tickers, news_day, news_last = [], None, 0.0
-    news_sent = _load_set(NEWS_SENT_FILE)
+    flow_tickers, flow_day, flow_last = [], None, 0.0
+    flow_sent = _load_set(FLOW_SENT_FILE)
     daily_tickers, daily_day, daily_last = [], None, 0.0
     daily_sent = _load_set(DAILY_SENT_FILE)
     short_day = None
@@ -1469,14 +1355,16 @@ def main():
                          min_price=GAP15_MIN_PRICE, max_price=GAP15_MAX_PRICE,
                          min_size=GAP15_MIN_SIZE, tag_label=" (15 دقيقة)")
 
-        # (2) الأخبار - 24 ساعة
-        if ENABLE_NEWS and time.time() - news_last >= (NEWS_EVERY_MIN + _news_state["backoff"]) * 60:
+        # (2) ماسح السيولة - وقت السوق الرسمي، كل 5 دقايق
+        if ENABLE_FLOW and (regular_session_open() or once) \
+                and time.time() - flow_last >= FLOW_EVERY_MIN * 60:
             today = pd.Timestamp.now(tz=NY).date()
-            if news_day != today or not news_tickers:
-                news_tickers = build_news_universe()
-                news_day = today
-            scan_news(news_tickers, news_sent)
-            news_last = time.time()
+            if flow_day != today or not flow_tickers:
+                flow_tickers = build_universe("ماسح السيولة", FLOW_MIN_PRICE, FLOW_MAX_PRICE,
+                                              FLOW_MIN_AVG_VOLUME, include_nyse=False)
+                flow_day = today
+            scan_flow(flow_tickers, flow_sent)
+            flow_last = time.time()
 
         # (3) النماذج اليومية - وقت السوق الرسمي، كل نص ساعة
         if ENABLE_DAILY and (regular_session_open() or once or daily_last == 0.0) \
@@ -1519,7 +1407,7 @@ def main():
 
         is_open = us_market_open()
         if not is_open and was_open is not False:
-            log(f"[{datetime.now():%H:%M}] السوق مسكر (الأخبار شغالة)، أنتظر...")
+            log(f"[{datetime.now():%H:%M}] السوق مسكر، أنتظر...")
         was_open = is_open
 
         if once:
