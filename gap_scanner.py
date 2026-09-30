@@ -96,11 +96,17 @@ TIINGO_TOKEN = os.environ.get("TIINGO_TOKEN", "")
 GAP_OVERNIGHT = bool(TIINGO_TOKEN)   # يتفعل لحاله لو حطيت المفتاح
 TIINGO_WORKERS = 8
 
-GAP_MIN_STOCK_PRICE = 10         # يتجاهل الأسهم اللي سعرها أقل من كذا
+GAP_MIN_STOCK_PRICE = 10         # يتجاهل الأسهم اللي سعرها أقل من كذا (لفريم 4 ساعات والساعة)
 GAP_MIN_SIZE = 0.50              # يتجاهل الجاب اللي حجمه أقل من كذا (دولار)
 ENABLE_GAP_4H = True             # فريم 4 ساعات - ينبه عند إغلاق الشمعة
 ENABLE_GAP_1H = True             # فريم ساعة - ينبه عند إغلاق الشمعة
 ENABLE_GAP_15M = True            # فريم 15 دقيقة - ينبه عند إغلاق الشمعة
+
+# ---- فريم 15 دقيقة له قائمة أسهم مستقلة: من 1$ إلى 15$ وبدون شرط القيمة السوقية ----
+GAP15_MIN_PRICE = 1              # أقل سعر لأسهم فريم 15 دقيقة
+GAP15_MAX_PRICE = 15             # أعلى سعر لأسهم فريم 15 دقيقة
+GAP15_MIN_AVG_VOLUME = 100_000   # يشيل الأسهم الميتة اللي ما عليها تداول
+GAP15_MIN_SIZE = 0.05            # الجاب على الأسهم الرخيصة أصغر، فحجم أقل
 GAP_REQUIRE_MIDDLE_COVER = True  # الشمعة الثانية لازم تغطي الجاب كامل (من قمة الثالثة لقاع الأولى)
 GAP_BASE_MIN = 15                # البيانات تنحمّل بشموع 15 دقيقة، وكل الفريمات تنبني منها
 GAP_SCAN_AFTER_CLOSE_MIN = (1, 5, 12)   # يفحص بعد الإغلاق بكذا دقيقة (الأولى هي الأساسية)
@@ -113,11 +119,13 @@ MAX_PRICE = 500
 
 # ---- (2) الأخبار - 24 ساعة ----
 ENABLE_NEWS = True
-NEWS_MIN_PRICE = 0               # 0 = كل الأسعار
-NEWS_MAX_PRICE = 1_000_000
+NEWS_MIN_PRICE = 1               # أقل سعر للسهم
+NEWS_MAX_PRICE = 20              # أعلى سعر للسهم
+NEWS_MIN_DOLLAR_FLOW = 300_000   # لازم تدخل سيولة بهالمبلغ ($) بعد الخبر قبل ما يرسله
+NEWS_FLOW_WINDOW_MIN = 15        # يحسب السيولة في هالمدة (دقيقة) من وقت الخبر
 NEWS_MIN_AVG_VOLUME = 100_000    # يشيل الأسهم الميتة اللي ما عليها تداول (عدد أسهم يومي)
 NEWS_INCLUDE_NYSE = False        # False = ناسداك بس
-NEWS_EVERY_MIN = 10              # كل كم دقيقة يفحص الأخبار (الأسهم كثيرة، أقل من كذا ياهو ممكن يحظر)
+NEWS_EVERY_MIN = 5               # كل كم دقيقة يفحص الأخبار (الأسهم كثيرة، أقل من كذا ياهو ممكن يحظر)
 NEWS_MAX_AGE_MIN = 90            # يتجاهل الأخبار الأقدم من كذا (عشان ما يرسل أخبار قديمة أول ما يشتغل)
 NEWS_WORKERS = 3                 # عدد الطلبات المتوازية على ياهو (كثرتها تخلي ياهو يحظر)
 NEWS_CHUNK = 100                 # يفحص الأسهم على دفعات، وبين كل دفعة يشيك هل ياهو حاظره
@@ -565,12 +573,16 @@ def load_boats(tickers, now):
     return {t: v[1] for t, v in _boats_cache.items()}
 
 
-def scan_gap(tickers, already_sent):
+def scan_gap(tickers, already_sent, frames=None, min_price=None, max_price=None,
+             min_size=None, tag_label=""):
+    """frames = الفريمات اللي يفحصها. لو ما انعطت، يفحص 4 ساعات والساعة بس."""
     hits = 0
     now = pd.Timestamp.now(tz=NY)
+    if frames is None:
+        frames = [(ENABLE_GAP_4H, 240, "4h", "فريم 4 ساعات"), (ENABLE_GAP_1H, 60, "1h", "فريم ساعة")]
+    min_price = GAP_MIN_STOCK_PRICE if min_price is None else min_price
+    min_size = GAP_MIN_SIZE if min_size is None else min_size
     boats = load_boats(tickers, now) if GAP_OVERNIGHT else {}
-    frames = [(ENABLE_GAP_4H, 240, "4h", "فريم 4 ساعات"), (ENABLE_GAP_1H, 60, "1h", "فريم ساعة"),
-              (ENABLE_GAP_15M, 15, "15m", "فريم 15 دقيقة")]
     for t, df in download_batches(tickers, 100, period="7d", interval=f"{GAP_BASE_MIN}m",
                                   prepost=GAP_EXTENDED or GAP_OVERNIGHT):
         try:
@@ -584,7 +596,9 @@ def scan_gap(tickers, already_sent):
             last = float(df["Close"].iloc[-1])
             if USE_PRICE_FILTER and not (MIN_PRICE <= last <= MAX_PRICE):
                 continue
-            if last < GAP_MIN_STOCK_PRICE:
+            if last < min_price:
+                continue
+            if max_price is not None and last > max_price:
                 continue
             last_bar = df.index.max()
 
@@ -592,7 +606,7 @@ def scan_gap(tickers, already_sent):
                 if not enabled:
                     continue
                 res = check_pattern(only_closed(to_frame(df, minutes), last_bar, now))
-                if not res or res["gap_top"] - res["gap_bottom"] < GAP_MIN_SIZE:
+                if not res or res["gap_top"] - res["gap_bottom"] < min_size:
                     continue
                 if (now - res["end"]).total_seconds() / 60 > GAP_MAX_ALERT_DELAY_MIN:
                     continue                    # شمعة قديمة، مو إغلاق جديد
@@ -606,7 +620,7 @@ def scan_gap(tickers, already_sent):
         except Exception as e:
             log(f"{t}: خطأ - {e}")
     free_memory()
-    log(f"[{datetime.now():%H:%M}] الجاب: خلص الفحص - {hits} تنبيه جديد")
+    log(f"[{datetime.now():%H:%M}] الجاب{tag_label}: خلص الفحص - {hits} تنبيه جديد")
 
 
 def gap_scan_due(now, last_run):
@@ -852,6 +866,27 @@ def fetch_news(t):
 _news_state = {"cursor": 0, "backoff": 0}   # وين وقف الفحص لو ياهو حظر، وكم يستنى
 
 
+def dollar_flow_since(ticker, news_time):
+    """قيمة التداول بالدولار (السعر × الحجم) من وقت الخبر لمدة NEWS_FLOW_WINDOW_MIN، بشموع 5 دقايق."""
+    try:
+        df = yf.download(ticker, period="2d", interval="5m", prepost=True,
+                         progress=False, auto_adjust=False, threads=False)
+        if df is None or df.empty:
+            return None
+        df = to_ny(df)
+        start = news_time.tz_convert(NY).floor("5min")
+        end = start + pd.Timedelta(minutes=NEWS_FLOW_WINDOW_MIN)
+        win = df[(df.index >= start) & (df.index < end)]
+        if win.empty:
+            return 0.0
+        close, vol = win["Close"], win["Volume"]
+        if isinstance(close, pd.DataFrame):
+            close, vol = close.iloc[:, 0], vol.iloc[:, 0]
+        return float((close.astype(float) * vol.astype(float)).sum())
+    except Exception:
+        return None
+
+
 def scan_news(tickers, already_sent):
     hits, done, blocked = 0, 0, False
     if not tickers:
@@ -872,11 +907,19 @@ def scan_news(tickers, already_sent):
                     key = f"{t}-{n['id']}"
                     if key in already_sent:
                         continue
-                    already_sent.add(key)
-                    _append_line(NEWS_SENT_FILE, key)
                     kind, category = news_classify(n["title"])
                     if NEWS_ONLY_POSITIVE and kind != "positive":
+                        already_sent.add(key)
+                        _append_line(NEWS_SENT_FILE, key)
                         continue                  # سلبي أو محايد = نتجاهله
+                    flow = dollar_flow_since(t, n["time"])
+                    if flow is not None and flow < NEWS_MIN_DOLLAR_FLOW:
+                        if now - n["time"] > pd.Timedelta(minutes=NEWS_FLOW_WINDOW_MIN + 5):
+                            already_sent.add(key)     # خلصت النافذة وما دخلت سيولة = نتركه
+                            _append_line(NEWS_SENT_FILE, key)
+                        continue                  # لسه ما دخلت سيولة كافية، نعيد الفحص الجولة الجاية
+                    already_sent.add(key)
+                    _append_line(NEWS_SENT_FILE, key)
                     hits += 1
                     title = (translate_ar(n["title"]) if NEWS_TRANSLATE else None) or n["title"]
                     label = {"positive": "🟢 إيجابي", "negative": "🔴 سلبي"}.get(kind, "⚪ محايد")
@@ -886,6 +929,7 @@ def scan_news(tickers, already_sent):
                         f"السهم: {t}\n"
                         f"الخبر: {title}\n"
                         f"المصدر: {n['source']}\n"
+                        + (f"السيولة بعد الخبر: ${flow:,.0f}\n" if flow else "") +
                         f"الوقت: {local_time:%H:%M} (توقيتك)\n"
                         f"{n['link']}"
                     )
@@ -1384,6 +1428,7 @@ def main():
         start_algo_thread()
 
     gap_tickers, gap_day, gap_last = [], None, None
+    gap15_tickers = []
     log("الجاب: " + ("24 ساعة (مع الجلسة الليلية من Tiingo)" if GAP_OVERNIGHT else
                      "الجلسة الممتدة 4 الفجر - 8 بالليل نيويورك (ياهو مجاناً)" if GAP_EXTENDED else
                      "الجلسة الرسمية بس"))
@@ -1408,9 +1453,21 @@ def main():
             today = pd.Timestamp.now(tz=NY).date()
             if gap_day != today or not gap_tickers:
                 gap_tickers = get_nasdaq_midcap_plus()
-                gap_day = today
                 log(f"الجاب: {len(gap_tickers)} سهم ناسداك قيمتها السوقية {MIN_MARKET_CAP/1e9:.0f} مليار وفوق")
-            scan_gap(gap_tickers, gap_sent)
+                if ENABLE_GAP_15M:
+                    gap15_tickers = build_universe("الجاب 15 دقيقة", GAP15_MIN_PRICE,
+                                                   GAP15_MAX_PRICE, GAP15_MIN_AVG_VOLUME,
+                                                   include_nyse=False)
+                gap_day = today
+            # (أ) فريم 4 ساعات والساعة - أسهم الملياري دولار وسعر 10$ وفوق
+            if ENABLE_GAP_4H or ENABLE_GAP_1H:
+                scan_gap(gap_tickers, gap_sent)
+            # (ب) فريم 15 دقيقة - أسهم من 1$ إلى 15$ بدون شرط القيمة السوقية
+            if ENABLE_GAP_15M and gap15_tickers:
+                scan_gap(gap15_tickers, gap_sent,
+                         frames=[(True, 15, "15m", "فريم 15 دقيقة")],
+                         min_price=GAP15_MIN_PRICE, max_price=GAP15_MAX_PRICE,
+                         min_size=GAP15_MIN_SIZE, tag_label=" (15 دقيقة)")
 
         # (2) الأخبار - 24 ساعة
         if ENABLE_NEWS and time.time() - news_last >= (NEWS_EVERY_MIN + _news_state["backoff"]) * 60:
