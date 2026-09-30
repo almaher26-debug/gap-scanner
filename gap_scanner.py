@@ -68,6 +68,11 @@
     - الأسهم: ناسداك من 1$ إلى 5$ وقيمتها السوقية 40 مليون دولار وتحت (أنشط 300)
     - ALGO_PENNY=0 يطفيه
 
+(6د) الآيس بيرغ - نفس أسهم (6ب) (ناسداك مليار وفوق)
+    - 20 صفقة أو أكثر ورا بعض بنفس الحجم ونفس السعر بالضبط، والفاصل بين كل صفقتين ثانيتين أو أقل
+    - أي حجم (سهم سهم سهم ... أو 100، 100، 100 ...)، ويرسل تحديث عند 40 ثم 80 ...
+    - ALGO_ICE=0 يطفيه
+
 (6ب) خوارزميات الأسهم الكبيرة - صفقات متتالية بنفس الحجم - من ألباكا
     - الأسهم: أسهم ناسداك اللي قيمتها السوقية مليار دولار وفوق (أنشط 200)
     - صفقات حجمها 10 أسهم وأقل: تنبيه لما تجي 600 صفقة أو أكثر ورا بعض بنفس الحجم بالضبط،
@@ -243,6 +248,16 @@ ALGO_BIG_POLL_SEC = 20                    # كل كم ثانية يسحب الص
 ALGO_BIG_CHUNK = 20                       # كم سهم بكل طلب لألباكا (الكبيرة صفقاتها كثيرة)
 ALGO_BIG_REALERT_MIN = 15                 # ما يعيد التنبيه لنفس السهم والحجم قبل كذا دقيقة
 
+# ---- (6د) الآيس بيرغ: صفقات متتالية بنفس الحجم ونفس السعر بالضبط ----
+# نفس أسهم (6ب) (ناسداك مليار وفوق) ونفس الصفقات اللي تنسحب لها، فما يزيد طلبات على ألباكا
+# مثال: 100، 100، 100 ... كلها على 228.15 ورا بعض، وما بينها ولا صفقة ثانية
+ALGO_ICE = os.environ.get("ALGO_ICE", "1") != "0"      # 0 = يطفي هالقسم (يشتغل لو (6ب) شغال)
+ALGO_ICE_MIN_STREAK = 20                  # أقل عدد صفقات متتالية
+ALGO_ICE_MIN_SIZE = 1                     # أقل حجم للصفقة (أي حجم: سهم، 70، 100 ...)
+ALGO_ICE_MAX_SIZE = 0                     # 0 = بدون حد أعلى
+ALGO_ICE_MAX_GAP_SEC = 2                  # "وقت قصير": أكثر من كذا ثانية بين صفقتين = تنقطع السلسلة
+ALGO_ICE_REALERT_MIN = 5                  # ما يعيد التنبيه لنفس السهم ونفس الحجم والسعر قبل كذا دقيقة
+
 # ---- المحتوى التعليمي ----
 ADD_EDUCATION = True             # يضيف شرح تعليمي قصير للنموذج تحت كل تنبيه
 ADD_DISCLAIMER = True            # يضيف سطر إخلاء المسؤولية تحت كل رسالة
@@ -403,6 +418,10 @@ EDUCATION = {
              "مئات الصفقات الصغيرة بنفس الحجم بالضبط (سهم، سهم، سهم...) علامة على برنامج "
              "يقسّم أمر كبير على قطع صغيرة عشان ما يحرك السعر ولا يبان.\n"
              "تقدير الشراء/البيع من اتجاه السعر تقريبي، وفي الأسهم الصغيرة ممكن يكون تلاعب أو صانع سوق."),
+    "ice": ("📚 للتعلّم - الآيس بيرغ:\n"
+            "أمر كبير مخفي يطلع للسوق على قطع صغيرة بنفس الحجم وعلى نفس السعر، وكل ما تنفذ قطعة "
+            "تطلع اللي بعدها. تكرار نفس الحجم على نفس السعر ورا بعض = غالباً أمر واحد كبير.\n"
+            "ما يوضح مين وراه، والجهة (شراء/بيع) تقدير من حركة السعر قبله."),
     "algo_big": ("📚 للتعلّم - صفقات متتالية بنفس الحجم:\n"
                  "في سهم كبير عليه آلاف المتداولين، إن مئات الصفقات تجي ورا بعض بنفس الحجم بالضبط "
                  "وبدون ولا صفقة ثانية بينها = غالباً برنامج واحد (TWAP/VWAP أو آيس بيرغ) ينفذ أمر كبير.\n"
@@ -1638,8 +1657,16 @@ def _ts_sec(t):
 class StreakDetector:
     """يعد الصفقات المتتالية بنفس الحجم لكل سهم: أي صفقة بحجم مختلف (أو فاصل أكثر من
     ALGO_BIG_MAX_GAP_SEC ثانية) تقطع السلسلة وتبدأ وحدة جديدة.
-    ينبه عند ALGO_BIG_MIN_STREAK، ثم كل ما تتضاعف (600، 1200، 2400 ...)."""
-    def __init__(self):
+    ينبه عند ALGO_BIG_MIN_STREAK، ثم كل ما تتضاعف (600، 1200، 2400 ...).
+    same_price=True = لازم نفس السعر بعد (الآيس بيرغ)."""
+    def __init__(self, min_streak=None, min_size=0, max_size=None, max_gap=None,
+                 realert_min=None, same_price=False):
+        self.min_streak = min_streak or ALGO_BIG_MIN_STREAK
+        self.min_size = min_size
+        self.max_size = ALGO_BIG_MAX_SIZE if max_size is None else max_size   # 0 = بدون حد
+        self.max_gap = ALGO_BIG_MAX_GAP_SEC if max_gap is None else max_gap
+        self.realert = (ALGO_BIG_REALERT_MIN if realert_min is None else realert_min) * 60
+        self.same_price = same_price
         self.st = {}          # الرمز -> السلسلة الحالية
         self.recent = {}      # الرمز -> (deque[(الوقت، رقم الصفقة)], set) لآخر 60 ثانية - لمنع التكرار
         self.alerted = {}     # (الرمز، الحجم) -> وقت آخر تنبيه
@@ -1669,7 +1696,9 @@ class StreakDetector:
         if s and price != s["px"]:
             side = 1 if price > s["px"] else -1       # نفس السعر = نفس جهة اللي قبلها
         moment = round(ts, 3)                         # "نفس اللحظة" = نفس الملي ثانية
-        if s and s["size"] == size and ts - s["last"] <= ALGO_BIG_MAX_GAP_SEC:
+        prev_px = s["px"] if s else None
+        if s and s["size"] == size and ts - s["last"] <= self.max_gap \
+                and (not self.same_price or price == prev_px):
             s["n"] += 1
             s["same"] = s["same"] + 1 if moment == s["moment"] else 1
             s["max_same"] = max(s["max_same"], s["same"])
@@ -1678,24 +1707,45 @@ class StreakDetector:
         else:
             s = {"size": size, "n": 1, "first": ts, "low": price, "high": price,
                  "value": size * price, "buys": 0, "sells": 0, "same": 1, "max_same": 1,
-                 "next_alert": ALGO_BIG_MIN_STREAK}
+                 "next_alert": self.min_streak}
             self.st[sym] = s
         s["buys"] += side > 0
         s["sells"] += side < 0
         s["last"], s["px"], s["side"], s["moment"] = ts, price, side, moment
-        if s["n"] < s["next_alert"] or size > ALGO_BIG_MAX_SIZE:
+        if s["n"] < s["next_alert"] or size < self.min_size \
+                or (self.max_size and size > self.max_size):
             return None
         s["next_alert"] *= 2
-        k = (sym, size)
-        first_alert = s["n"] == ALGO_BIG_MIN_STREAK
+        k = (sym, size, price if self.same_price else None)
+        first_alert = s["n"] == self.min_streak
         last = self.alerted.get(k)
-        if first_alert and last is not None and ts - last < ALGO_BIG_REALERT_MIN * 60:
+        if first_alert and last is not None and ts - last < self.realert:
             return None
         self.alerted[k] = ts
         return {"size": size, "count": s["n"], "first_t": s["first"], "last_t": ts,
                 "low": s["low"], "high": s["high"], "last": price, "value": s["value"],
                 "buys": s["buys"], "sells": s["sells"], "max_same": s["max_same"],
                 "update": not first_alert}
+
+
+def _ice_message(sym, a, cap=None):
+    secs = a["last_t"] - a["first_t"]
+    b, s_, total = a["buys"], a["sells"], a["count"]
+    t1 = pd.Timestamp(a["first_t"], unit="s", tz="UTC").tz_convert(LOCAL_TZ)
+    t2 = pd.Timestamp(a["last_t"], unit="s", tz="UTC").tz_convert(LOCAL_TZ)
+    head = ("🔁 تحديث: الآيس بيرغ مستمر" if a["update"] else
+            "🧊 آيس بيرغ — صفقات متتالية بنفس الحجم ونفس السعر")
+    return (f"{head}\n"
+            f"السهم: {sym}\n"
+            + (f"القيمة السوقية: {_cap_txt(cap)}\n" if cap else "")
+            + f"الحجم: {a['size']:g} سهم × {total:,} صفقة ورا بعض\n"
+            f"السعر: {a['last']:.2f} (نفس السعر كلها)\n"
+            f"المبلغ: ≈ {a['value']:,.0f}$ ({a['size'] * total:,.0f} سهم)\n"
+            f"خلال: {secs:.1f} ثانية | أكثر عدد صفقات بنفس اللحظة: {a['max_same']}\n"
+            + _side_lines(b, s_, total, a["size"])
+            + f"المصدر: {ALGO_FEED.upper()} عبر Alpaca (كل البورصات)"
+            + (f" - متأخر {ALGO_DELAY_MIN - 1} دقيقة" if ALGO_DELAY_MIN else "") + "\n"
+            f"من {t1:%H:%M:%S} إلى {t2:%H:%M:%S} (توقيتك)")
 
 
 def _big_message(sym, a, cap=None):
@@ -1722,6 +1772,9 @@ def _big_message(sym, a, cap=None):
 
 def algo_big_loop():
     det = StreakDetector()
+    ice = (StreakDetector(ALGO_ICE_MIN_STREAK, ALGO_ICE_MIN_SIZE, ALGO_ICE_MAX_SIZE,
+                          ALGO_ICE_MAX_GAP_SEC, ALGO_ICE_REALERT_MIN, same_price=True)
+           if ALGO_ICE else None)
     last_end, was_on = None, None
     caps, caps_day = {}, None
     while True:
@@ -1743,7 +1796,8 @@ def algo_big_loop():
                 caps_day = today
                 log(f"خوارزميات الكبيرة: يراقب {len(caps)} سهم ناسداك قيمتها "
                     f"{ALGO_BIG_MIN_MARKET_CAP / 1e9:g} مليار وفوق - تنبيه عند "
-                    f"{ALGO_BIG_MIN_STREAK} صفقة متتالية بنفس الحجم ({ALGO_BIG_MAX_SIZE:g} أسهم وأقل)")
+                    f"{ALGO_BIG_MIN_STREAK} صفقة متتالية بنفس الحجم ({ALGO_BIG_MAX_SIZE:g} أسهم وأقل)"
+                    + (f" | الآيس بيرغ: {ALGO_ICE_MIN_STREAK} صفقة متتالية بنفس الحجم والسعر" if ALGO_ICE else ""))
             syms = list(caps)
             if not syms:
                 time.sleep(300)
@@ -1762,6 +1816,10 @@ def algo_big_loop():
                         res = det.add(sym, tr)
                         if res:
                             send_telegram(_big_message(sym, res, caps.get(sym)), kind="algo_big")
+                        if ice is not None:
+                            res = ice.add(sym, tr)
+                            if res:
+                                send_telegram(_ice_message(sym, res, caps.get(sym)), kind="ice")
                 del got
         except Exception as e:
             log("خوارزميات الكبيرة: خطأ -", e)
@@ -1818,6 +1876,25 @@ def algo_self_test():
         assert det.add("BIG100", {"i": k + 1, "s": 100, "p": 50, "t": t0 + pd.Timedelta(milliseconds=k * 10)}) is None
     assert big[0]["max_same"] == 3
     print("ALGO BIG TEST OK: 600 consecutive same-size trades")
+
+    # (6د) آيس بيرغ: 25 صفقة × 70 سهم على 228.15 ورا بعض (بعد صفقة أقل سعر = شراء)
+    ice = StreakDetector(ALGO_ICE_MIN_STREAK, ALGO_ICE_MIN_SIZE, ALGO_ICE_MAX_SIZE,
+                         ALGO_ICE_MAX_GAP_SEC, ALGO_ICE_REALERT_MIN, same_price=True)
+    ice.add("NVDA", {"i": 1, "s": 13, "p": 228.10, "t": t0})
+    got = [a for k in range(25) if (a := ice.add("NVDA", {"i": k + 2, "s": 70, "p": 228.15,
+                                                        "t": t0 + pd.Timedelta(milliseconds=50 * k)}))]
+    assert [a["count"] for a in got] == [20] and got[0]["buys"] == 20, got
+    # نفس الحجم بس السعر تغير = تنقطع
+    ice2 = StreakDetector(ALGO_ICE_MIN_STREAK, ALGO_ICE_MIN_SIZE, ALGO_ICE_MAX_SIZE,
+                          ALGO_ICE_MAX_GAP_SEC, ALGO_ICE_REALERT_MIN, same_price=True)
+    for k in range(40):
+        assert ice2.add("AMD", {"i": k, "s": 100, "p": 150 + (k % 2) * 0.01,
+                                "t": t0 + pd.Timedelta(milliseconds=50 * k)}) is None
+    # فاصل أكثر من ثانيتين = تنقطع
+    for k in range(40):
+        assert ice2.add("AAPL", {"i": k, "s": 1, "p": 200, "t": t0 + pd.Timedelta(seconds=3 * k)}) is None
+    print("ICEBERG TEST OK: 20 same-size same-price trades")
+    print(_ice_message("NVDA", got[0], 5_500_000_000_000))
     print(_big_message("BIGCAP", big[0], 45_600_000_000))
 
 
