@@ -69,8 +69,8 @@
     - ALGO_PENNY=0 يطفيه
 
 (6د) الآيس بيرغ - نفس أسهم (6ب) (ناسداك مليار وفوق)
-    - 20 صفقة أو أكثر ورا بعض بنفس الحجم ونفس السعر بالضبط، والفاصل بين كل صفقتين ثانيتين أو أقل
-    - أي حجم (سهم سهم سهم ... أو 100، 100، 100 ...)، ويرسل تحديث عند 40 ثم 80 ...
+    - 200 صفقة أو أكثر ورا بعض بنفس الحجم ونفس السعر بالضبط، والفاصل بين كل صفقتين ثانيتين أو أقل
+    - حجم الصفقة من سهم إلى 10 أسهم (سهم سهم سهم ...)، ويرسل تحديث عند 400 ثم 800 ...
     - ALGO_ICE=0 يطفيه
 
 (6ب) خوارزميات الأسهم الكبيرة - صفقات متتالية بنفس الحجم - من ألباكا
@@ -250,11 +250,11 @@ ALGO_BIG_REALERT_MIN = 15                 # ما يعيد التنبيه لنف�
 
 # ---- (6د) الآيس بيرغ: صفقات متتالية بنفس الحجم ونفس السعر بالضبط ----
 # نفس أسهم (6ب) (ناسداك مليار وفوق) ونفس الصفقات اللي تنسحب لها، فما يزيد طلبات على ألباكا
-# مثال: 100، 100، 100 ... كلها على 228.15 ورا بعض، وما بينها ولا صفقة ثانية
+# مثال: 1، 1، 1 ... (من سهم إلى 10 أسهم) كلها على نفس السعر ورا بعض، وما بينها ولا صفقة ثانية
 ALGO_ICE = os.environ.get("ALGO_ICE", "1") != "0"      # 0 = يطفي هالقسم (يشتغل لو (6ب) شغال)
-ALGO_ICE_MIN_STREAK = 20                  # أقل عدد صفقات متتالية
-ALGO_ICE_MIN_SIZE = 1                     # أقل حجم للصفقة (أي حجم: سهم، 70، 100 ...)
-ALGO_ICE_MAX_SIZE = 0                     # 0 = بدون حد أعلى
+ALGO_ICE_MIN_STREAK = 200                 # أقل عدد صفقات متتالية
+ALGO_ICE_MIN_SIZE = 1                     # أقل حجم للصفقة: سهم واحد
+ALGO_ICE_MAX_SIZE = 10                    # أعلى حجم للصفقة: 10 أسهم
 ALGO_ICE_MAX_GAP_SEC = 2                  # "وقت قصير": أكثر من كذا ثانية بين صفقتين = تنقطع السلسلة
 ALGO_ICE_REALERT_MIN = 5                  # ما يعيد التنبيه لنفس السهم ونفس الحجم والسعر قبل كذا دقيقة
 
@@ -395,9 +395,9 @@ def _send_one(chat_id, text):
 
 EDUCATION = {
     "gap": ("📚 للتعلّم - Inversion Gap:\n"
-            "فجوة بين ذيل الشمعة الأولى والثالثة. لما تقفل الشمعة الرابعة وراها، الفجوة تنقلب "
+            "Inversion Gap بين ذيل الشمعة الأولى والثالثة. لما تقفل الشمعة الرابعة وراه، ينقلب "
             "من مقاومة لدعم (أو العكس)، وكثير يراقبون إعادة اختبارها.\n"
-            "يضعف لو رجع السعر وقفل داخل الفجوة، أو كان الحجم ضعيف."),
+            "يضعف لو رجع السعر وقفل داخل الـ Inversion Gap، أو كان الحجم ضعيف."),
     "flow": ("📚 للتعلّم - دخول السيولة:\n"
              "الحجم النسبي يقارن تداول اليوم بمعدّله. حجم أضعاف المعتاد مع اختراق قمة وفلوت صغير "
              "يعني طلب غير عادي على سهم قليل المعروض، فالحركة تكون عنيفة.\n"
@@ -627,14 +627,14 @@ def _gap_message(t, res, frame):
     lo, hi, px = (round(float(res[k]), 2) for k in ("gap_bottom", "gap_top", "price"))
     if res["side"] == "bull":
         head = f"🟢 Inversion Gap صعودي - {frame}"
-        line = f"الشمعة قفلت فوق أعلى الجاب ({hi})"
+        line = f"الشمعة قفلت فوق أعلى الـ Inversion Gap ({hi})"
     else:
         head = f"🔴 Inversion Gap هبوطي - {frame}"
-        line = f"الشمعة قفلت تحت أسفل الجاب ({lo})"
+        line = f"الشمعة قفلت تحت أسفل الـ Inversion Gap ({lo})"
     closed_at = pd.Timestamp(res["end"]).tz_convert(LOCAL_TZ)
     return (f"{head}\n"
             f"السهم: {t}\n"
-            f"الجاب: {lo} ← {hi}  (حجمه {hi - lo:.2f}$)\n"
+            f"Inversion Gap: {lo} ← {hi}  (حجمه {hi - lo:.2f}$)\n"
             f"{line}\n"
             f"سعر الإغلاق: {px}\n"
             f"وقت الإغلاق: {closed_at:%H:%M} (توقيتك)")
@@ -1877,23 +1877,26 @@ def algo_self_test():
     assert big[0]["max_same"] == 3
     print("ALGO BIG TEST OK: 600 consecutive same-size trades")
 
-    # (6د) آيس بيرغ: 25 صفقة × 70 سهم على 228.15 ورا بعض (بعد صفقة أقل سعر = شراء)
+    # (6د) آيس بيرغ: 250 صفقة × سهم واحد على 228.15 ورا بعض (بعد صفقة أقل سعر = شراء)
     ice = StreakDetector(ALGO_ICE_MIN_STREAK, ALGO_ICE_MIN_SIZE, ALGO_ICE_MAX_SIZE,
                          ALGO_ICE_MAX_GAP_SEC, ALGO_ICE_REALERT_MIN, same_price=True)
     ice.add("NVDA", {"i": 1, "s": 13, "p": 228.10, "t": t0})
-    got = [a for k in range(25) if (a := ice.add("NVDA", {"i": k + 2, "s": 70, "p": 228.15,
-                                                        "t": t0 + pd.Timedelta(milliseconds=50 * k)}))]
-    assert [a["count"] for a in got] == [20] and got[0]["buys"] == 20, got
+    got = [a for k in range(250) if (a := ice.add("NVDA", {"i": k + 2, "s": 1, "p": 228.15,
+                                                         "t": t0 + pd.Timedelta(milliseconds=50 * k)}))]
+    assert [a["count"] for a in got] == [200] and got[0]["buys"] == 200, got
+    # حجم 70 (أكبر من 10) = يتجاهل
+    for k in range(300):
+        assert ice.add("MSFT", {"i": k, "s": 70, "p": 400, "t": t0 + pd.Timedelta(milliseconds=50 * k)}) is None
     # نفس الحجم بس السعر تغير = تنقطع
     ice2 = StreakDetector(ALGO_ICE_MIN_STREAK, ALGO_ICE_MIN_SIZE, ALGO_ICE_MAX_SIZE,
                           ALGO_ICE_MAX_GAP_SEC, ALGO_ICE_REALERT_MIN, same_price=True)
-    for k in range(40):
-        assert ice2.add("AMD", {"i": k, "s": 100, "p": 150 + (k % 2) * 0.01,
+    for k in range(400):
+        assert ice2.add("AMD", {"i": k, "s": 1, "p": 150 + (k % 2) * 0.01,
                                 "t": t0 + pd.Timedelta(milliseconds=50 * k)}) is None
     # فاصل أكثر من ثانيتين = تنقطع
-    for k in range(40):
+    for k in range(400):
         assert ice2.add("AAPL", {"i": k, "s": 1, "p": 200, "t": t0 + pd.Timedelta(seconds=3 * k)}) is None
-    print("ICEBERG TEST OK: 20 same-size same-price trades")
+    print("ICEBERG TEST OK: 200 same-size same-price trades (1-10 shares)")
     print(_ice_message("NVDA", got[0], 5_500_000_000_000))
     print(_big_message("BIGCAP", big[0], 45_600_000_000))
 
