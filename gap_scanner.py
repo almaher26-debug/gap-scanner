@@ -84,16 +84,16 @@
     - ALGO_PENNY=0 يطفيه
 
 (6د) الآيس بيرغ - نفس أسهم (6ب) (ناسداك مليار وفوق)
-    - 200 صفقة أو أكثر ورا بعض بنفس الحجم ونفس السعر بالضبط، والفاصل بين كل صفقتين ثانيتين أو أقل
-    - حجم الصفقة من سهم إلى 10 أسهم (سهم سهم سهم ...)، ويرسل تحديث عند 400 ثم 800 ...
+    - 500 صفقة أو أكثر ورا بعض بنفس الحجم ونفس السعر بالضبط، والفاصل بين كل صفقتين ثانيتين أو أقل
+    - حجم الصفقة من سهم إلى 10 أسهم (سهم سهم سهم ...)، ويرسل تحديث عند 1000 ثم 2000 ...
     - ALGO_ICE=0 يطفيه
 
 (6ب) خوارزميات الأسهم الكبيرة - صفقات متتالية بنفس الحجم - من ألباكا
     - الأسهم: أسهم ناسداك اللي قيمتها السوقية مليار دولار وفوق (أنشط 200)
-    - صفقات حجمها 10 أسهم وأقل: تنبيه لما تجي 600 صفقة أو أكثر ورا بعض بنفس الحجم بالضبط،
+    - صفقات حجمها 10 أسهم وأقل: تنبيه لما تجي 1000 صفقة أو أكثر ورا بعض بنفس الحجم بالضبط،
       وما بينها ولا صفقة بحجم ثاني، والفاصل بين كل صفقتين 5 ثواني أو أقل
     - يوضح كم صفقة منها نزلت بنفس اللحظة، والمدة، والقيمة، وتقدير شراء/بيع
-    - لو السلسلة كملت يرسل تحديث عند 1200 ثم 2400 ...
+    - لو السلسلة كملت يرسل تحديث عند 2000 ثم 4000 ...
     - نفس مفاتيح ألباكا | ALGO_BIG=0 يطفيه | ALGO_SMALL=0 يطفي القسم (6)
 """
 
@@ -144,6 +144,8 @@ GAP4H_MIN_SIZE = 2.00            # الجاب لازم يكون أكبر من 2$
 GAP4H_REQUIRE_RED = False        # True = الشموع الثلاث لازم حمراء | False = لونها ما يهم
 GAP4H_REQUIRE_STEP = True        # الشموع الثلاث متراصة: كل وحدة أنزل من اللي قبلها (صعودي) وأعلى (هبوطي)
 GAP4H_REQUIRE_COLOR4 = True      # الرابعة خضراء (صعودي) أو حمراء (هبوطي)
+GAP4H_MIN_FILL = 0.9             # كل شمعة لازم فيها 90% من شموع الربع ساعة وأكثر، وإلا بياناتها ناقصة وتنرفض
+GAP_SHOW_CANDLES = True          # يكتب الشموع الأربع (وقت، أعلى، أقل) في التنبيه عشان تقارنها بالشارت
 ENABLE_GAP_1H = True             # فريم ساعة - ينبه عند إغلاق الشمعة
 ENABLE_GAP_15M = False           # فريم 15 دقيقة - مطفي
 ENABLE_GAP_1D = True             # فريم يومي - ينبه بعد إغلاق السوق كل يوم
@@ -259,11 +261,11 @@ ALGO_PENNY_MAX_SYMBOLS = 300          # الأنشط أول
 
 # ---- (6ب) خوارزميات الأسهم الكبيرة: صفقات متتالية بنفس الحجم ----
 # أسهم ناسداك اللي قيمتها السوقية مليار دولار وفوق
-# ينبه لما تجي 600 صفقة أو أكثر ورا بعض بنفس الحجم بالضبط، وما بينها ولا صفقة بحجم ثاني
+# ينبه لما تجي 1000 صفقة أو أكثر ورا بعض بنفس الحجم بالضبط، وما بينها ولا صفقة بحجم ثاني
 # الأحجام الصغيرة بس: 10 أسهم وأقل (1، 1، 1 ... أو 5، 5، 5 ...)
 ALGO_BIG = os.environ.get("ALGO_BIG", "1") != "0"      # 0 = يطفي هالقسم
 ALGO_BIG_MIN_MARKET_CAP = 1_000_000_000   # مليار دولار وفوق
-ALGO_BIG_MIN_STREAK = 600                 # أقل عدد صفقات متتالية بنفس الحجم
+ALGO_BIG_MIN_STREAK = 1000                # أقل عدد صفقات متتالية بنفس الحجم
 ALGO_BIG_MAX_SIZE = 10                    # حجم الصفقة 10 أسهم أو أقل
 ALGO_BIG_MAX_GAP_SEC = 5                  # لو مر أكثر من كذا ثانية بين صفقتين، تنقطع السلسلة
 ALGO_BIG_MAX_SYMBOLS = int(os.environ.get("ALGO_BIG_MAX_SYMBOLS", "200"))   # الأنشط أول
@@ -277,7 +279,7 @@ ALGO_BIG_REALERT_MIN = 15                 # ما يعيد التنبيه لنف�
 # نفس أسهم (6ب) (ناسداك مليار وفوق) ونفس الصفقات اللي تنسحب لها، فما يزيد طلبات على ألباكا
 # مثال: 1، 1، 1 ... (من سهم إلى 10 أسهم) كلها على نفس السعر ورا بعض، وما بينها ولا صفقة ثانية
 ALGO_ICE = os.environ.get("ALGO_ICE", "1") != "0"      # 0 = يطفي هالقسم (يشتغل لو (6ب) شغال)
-ALGO_ICE_MIN_STREAK = 200                 # أقل عدد صفقات متتالية
+ALGO_ICE_MIN_STREAK = 500                 # أقل عدد صفقات متتالية
 ALGO_ICE_MIN_SIZE = 1                     # أقل حجم للصفقة: سهم واحد
 ALGO_ICE_MAX_SIZE = 10                    # أعلى حجم للصفقة: 10 أسهم
 ALGO_ICE_MAX_GAP_SEC = 2                  # "وقت قصير": أكثر من كذا ثانية بين صفقتين = تنقطع السلسلة
@@ -717,10 +719,20 @@ def check_pattern_4h(c):
     res = check_pattern(c)
     if not res:
         return None
+    res["candles"] = c.iloc[-4:]
     if res["gap_top"] - res["gap_bottom"] <= GAP4H_MIN_SIZE:
         return None
     c1, c2, c3, c4 = (c.iloc[i] for i in (-4, -3, -2, -1))
     bull = res["side"] == "bull"
+
+    # بيانات كاملة: ياهو في ما قبل الفتح وبعد الإغلاق ينقصه شموع ربع ساعة كثير، فتطلع الشمعة
+    # أصغر من الحقيقة في تريدنج فيو ويبان "جاب" وهو مو موجود. نرفض أي شمعة بياناتها ناقصة
+    if "n" in c and "end" in c:
+        for i in (-4, -3, -2, -1):
+            row = c.iloc[i]
+            expected = (pd.Timestamp(row["end"]) - pd.Timestamp(c.index[i])).total_seconds() / (GAP_BASE_MIN * 60)
+            if expected > 0 and row["n"] / expected < GAP4H_MIN_FILL:
+                return None
 
     # ما بينها فراغ: ذيول الشموع المتجاورة تلتقي
     for a, b in ((c1, c2), (c2, c3)):
@@ -761,12 +773,21 @@ def _gap_message(t, res, frame):
         head = f"🔴 Inversion Gap هبوطي - {frame}"
         line = f"الشمعة قفلت تحت أسفل الـ Inversion Gap ({lo})"
     closed_at = pd.Timestamp(res["end"]).tz_convert(LOCAL_TZ)
-    return (f"{head}\n"
-            f"السهم: {t}\n"
-            f"Inversion Gap: {lo} ← {hi}  (حجمه {hi - lo:.2f}$)\n"
-            f"{line}\n"
-            f"سعر الإغلاق: {px}\n"
-            f"وقت الإغلاق: {closed_at:%H:%M} (توقيتك)")
+    msg = (f"{head}\n"
+           f"السهم: {t}\n"
+           f"Inversion Gap: {lo} ← {hi}  (حجمه {hi - lo:.2f}$)\n"
+           f"{line}\n"
+           f"سعر الإغلاق: {px}\n"
+           f"وقت الإغلاق: {closed_at:%H:%M} (توقيتك)")
+    cs = res.get("candles")
+    if GAP_SHOW_CANDLES and cs is not None:
+        rows = []
+        for k, (ts, r) in enumerate(cs.iterrows(), 1):
+            lt = pd.Timestamp(ts).tz_convert(LOCAL_TZ)
+            col = "🟢" if r["Close"] > r["Open"] else "🔴"
+            rows.append(f"{k}) {lt:%m/%d %H:%M} {col} أعلى {r['High']:.2f} | أقل {r['Low']:.2f}")
+        msg += "\nالشموع (بتوقيتك):\n" + "\n".join(rows)
+    return msg
 
 
 # ---------- الجلسة الليلية من Tiingo (8 بالليل - 4 الفجر نيويورك) ----------
@@ -1789,7 +1810,7 @@ def _ts_sec(t):
 class StreakDetector:
     """يعد الصفقات المتتالية بنفس الحجم لكل سهم: أي صفقة بحجم مختلف (أو فاصل أكثر من
     ALGO_BIG_MAX_GAP_SEC ثانية) تقطع السلسلة وتبدأ وحدة جديدة.
-    ينبه عند ALGO_BIG_MIN_STREAK، ثم كل ما تتضاعف (600، 1200، 2400 ...).
+    ينبه عند ALGO_BIG_MIN_STREAK، ثم كل ما تتضاعف (1000، 2000، 4000 ...).
     same_price=True = لازم نفس السعر بعد (الآيس بيرغ)."""
     def __init__(self, min_streak=None, min_size=0, max_size=None, max_gap=None,
                  realert_min=None, same_price=False):
@@ -1991,44 +2012,44 @@ def algo_self_test():
     print("ALGO TEST OK: 300 / 600 same-size trades")
     print(_algo_message("TEST", alerts[-1], 12_300_000))
 
-    # (6ب) الكبيرة: 700 صفقة متتالية بحجم 100 (كل 3 ورا بعض بنفس اللحظة)، ثم صفقة بحجم ثاني تقطعها
+    # (6ب) الكبيرة: 1100 صفقة متتالية بحجم 100 (كل 3 ورا بعض بنفس اللحظة)، ثم صفقة بحجم ثاني تقطعها
     det = StreakDetector(); big = []
-    for k in range(700):
+    for k in range(1100):
         tr = {"i": k + 1, "s": 1, "p": 180.00 - (k // 50) * 0.01,
               "t": (t0 + pd.Timedelta(milliseconds=(k // 3) * 40)).strftime("%Y-%m-%dT%H:%M:%S.%f000Z")}
         a = det.add("BIGCAP", tr)
         if a: big.append(a)
-    assert det.add("BIGCAP", {"i": 701, "s": 1, "p": 180, "t": "2026-01-02T15:00:00.000000000Z"}) is None  # مكرر
+    assert det.add("BIGCAP", {"i": 1101, "s": 1, "p": 180, "t": "2026-01-02T15:00:00.000000000Z"}) is None  # مكرر
     det.add("BIGCAP", {"i": 9999, "s": 37, "p": 179.9, "t": "2026-01-02T15:00:10Z"})   # حجم ثاني = تنقطع
-    for k in range(599):          # 599 ما توصل الحد
+    for k in range(999):          # 999 ما توصل الحد
         a = det.add("BIGCAP", {"i": 10000 + k, "s": 1, "p": 179.9, "t": t0 + pd.Timedelta(seconds=11 + k * 0.01)})
         assert a is None
-    assert [a["count"] for a in big] == [600], [a["count"] for a in big]
+    assert [a["count"] for a in big] == [1000], [a["count"] for a in big]
     for k in range(1300):         # حجم 100 (أكبر من 10) = يتجاهل
         assert det.add("BIG100", {"i": k + 1, "s": 100, "p": 50, "t": t0 + pd.Timedelta(milliseconds=k * 10)}) is None
     assert big[0]["max_same"] == 3
-    print("ALGO BIG TEST OK: 600 consecutive same-size trades")
+    print("ALGO BIG TEST OK: 1000 consecutive same-size trades")
 
-    # (6د) آيس بيرغ: 250 صفقة × سهم واحد على 228.15 ورا بعض (بعد صفقة أقل سعر = شراء)
+    # (6د) آيس بيرغ: 600 صفقة × سهم واحد على 228.15 ورا بعض (بعد صفقة أقل سعر = شراء)
     ice = StreakDetector(ALGO_ICE_MIN_STREAK, ALGO_ICE_MIN_SIZE, ALGO_ICE_MAX_SIZE,
                          ALGO_ICE_MAX_GAP_SEC, ALGO_ICE_REALERT_MIN, same_price=True)
     ice.add("NVDA", {"i": 1, "s": 13, "p": 228.10, "t": t0})
-    got = [a for k in range(250) if (a := ice.add("NVDA", {"i": k + 2, "s": 1, "p": 228.15,
+    got = [a for k in range(600) if (a := ice.add("NVDA", {"i": k + 2, "s": 1, "p": 228.15,
                                                          "t": t0 + pd.Timedelta(milliseconds=50 * k)}))]
-    assert [a["count"] for a in got] == [200] and got[0]["buys"] == 200, got
+    assert [a["count"] for a in got] == [500] and got[0]["buys"] == 500, got
     # حجم 70 (أكبر من 10) = يتجاهل
     for k in range(300):
         assert ice.add("MSFT", {"i": k, "s": 70, "p": 400, "t": t0 + pd.Timedelta(milliseconds=50 * k)}) is None
     # نفس الحجم بس السعر تغير = تنقطع
     ice2 = StreakDetector(ALGO_ICE_MIN_STREAK, ALGO_ICE_MIN_SIZE, ALGO_ICE_MAX_SIZE,
                           ALGO_ICE_MAX_GAP_SEC, ALGO_ICE_REALERT_MIN, same_price=True)
-    for k in range(400):
+    for k in range(1000):
         assert ice2.add("AMD", {"i": k, "s": 1, "p": 150 + (k % 2) * 0.01,
                                 "t": t0 + pd.Timedelta(milliseconds=50 * k)}) is None
     # فاصل أكثر من ثانيتين = تنقطع
-    for k in range(400):
+    for k in range(1000):
         assert ice2.add("AAPL", {"i": k, "s": 1, "p": 200, "t": t0 + pd.Timedelta(seconds=3 * k)}) is None
-    print("ICEBERG TEST OK: 200 same-size same-price trades (1-10 shares)")
+    print("ICEBERG TEST OK: 500 same-size same-price trades (1-10 shares)")
     print(_ice_message("NVDA", got[0], 5_500_000_000_000))
     print(_big_message("BIGCAP", big[0], 45_600_000_000))
 
