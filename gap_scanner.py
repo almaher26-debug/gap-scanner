@@ -82,6 +82,7 @@
 (6ج) خوارزميات البني ستوك - نفس منطق (6) بالضبط
     - الأسهم: ناسداك من 1$ إلى 5$ وقيمتها السوقية 40 مليون دولار وتحت (أنشط 300)
     - ALGO_PENNY=0 يطفيه
+    - تنبيه واحد بس لكل سهم كل 24 ساعة (ALGO_PENNY_ONCE_HOURS، ونفسه للتجزئة العكسية ALGO_SMALL_ONCE_HOURS)
 
 (6د) الآيس بيرغ - نفس أسهم (6ب) (ناسداك مليار وفوق)
     - 500 صفقة أو أكثر ورا بعض بنفس الحجم ونفس السعر بالضبط، والفاصل بين كل صفقتين ثانيتين أو أقل
@@ -248,12 +249,15 @@ ALGO_MAX_SIZE = 10                    # الأحجام الصغيرة بس: صف
 ALGO_WINDOW_MIN = 5                   # يعد الصفقات المتكررة خلال آخر كذا دقيقة
 ALGO_MIN_STREAK = 300                 # تنبيه عند 300 صفقة بنفس الحجم
 ALGO_STRONG_STREAK = 600              # تنبيه قوي عند 600 أو أكثر
+ALGO_SMALL_ONCE_HOURS = 24            # قسم التجزئة العكسية (1$-15$): تنبيه واحد لكل سهم كل كذا ساعة (0 = بدون حد)
+ALGO_ONCE_FILE = "algo_once.txt"      # يحفظ وقت آخر تنبيه لكل سهم عشان ما يعيده لو البوت أعاد التشغيل
 ALGO_REALERT_MIN = 15                 # ما يعيد نفس مستوى التنبيه لنفس السهم والحجم قبل كذا دقيقة
 
 # ---- (6ج) خوارزميات البني ستوك: من 1$ إلى 5$ وقيمتها السوقية 40 مليون وتحت ----
 # نفس منطق القسم (6) بالضبط: صفقات 10 أسهم وأقل بنفس الحجم، تنبيه 300 وقوي 600 خلال 5 دقايق
 # السهم اللي داخل قائمة التجزئة العكسية (6) ما يتكرر هنا
 ALGO_PENNY = os.environ.get("ALGO_PENNY", "1") != "0"   # 0 = يطفي هالقسم
+ALGO_PENNY_ONCE_HOURS = 24            # تنبيه واحد بس لكل سهم، وبعدها يسكت عنه كذا ساعة (0 = بدون حد)
 ALGO_PENNY_MIN_PRICE = 1
 ALGO_PENNY_MAX_PRICE = 5
 ALGO_PENNY_MAX_MARKET_CAP = 40_000_000
@@ -1737,11 +1741,28 @@ def get_bigcaps():
         return {}
 
 
-def algo_loop(name, section, get_universe, fixed=None, exclude=None):
+def _once_load(tag):
+    """آخر تنبيه لكل سهم في هالقسم: {الرمز: الوقت}."""
+    out = {}
+    for line in _load_set(ALGO_ONCE_FILE):
+        try:
+            t, sym, ts = line.split("|")
+            if t == tag:
+                ts = pd.Timestamp(ts)
+                out[sym] = max(ts, out.get(sym, ts))
+        except Exception:
+            continue
+    return out
+
+
+def algo_loop(name, section, get_universe, fixed=None, exclude=None, once_hours=0):
     """يشتغل بخيط لحاله في الخلفية، عشان ما يتأخر بسبب الفحوصات الثانية الطويلة.
     get_universe يرجع {الرمز: (القيمة السوقية، ملاحظة)} - تتجدد مرة باليوم.
-    exclude = دالة ترجع أسهم ما نراقبها هنا (موجودة بقسم ثاني)."""
+    exclude = دالة ترجع أسهم ما نراقبها هنا (موجودة بقسم ثاني).
+    once_hours = تنبيه واحد بس لكل سهم، وبعدها يسكت عنه كذا ساعة (0 = بدون حد)."""
     det = AlgoDetector()
+    once_tag = section
+    once_last = _once_load(once_tag) if once_hours else {}
     last_end = None
     was_on = None
     caps, caps_day = {}, None
@@ -1788,6 +1809,13 @@ def algo_loop(name, section, get_universe, fixed=None, exclude=None):
                     for tr in sorted(trades, key=lambda x: x.get("t", "")):
                         res = det.add(sym, tr)
                         if res:
+                            if once_hours:
+                                now_utc = pd.Timestamp.now(tz="UTC")
+                                prev = once_last.get(sym)
+                                if prev is not None and now_utc - prev < pd.Timedelta(hours=once_hours):
+                                    continue        # جاه تنبيه خلال آخر 24 ساعة، يسكت
+                                once_last[sym] = now_utc
+                                _append_line(ALGO_ONCE_FILE, f"{once_tag}|{sym}|{now_utc.isoformat()}")
                             cap, note = caps.get(sym, (None, ""))
                             send_telegram(_algo_message(sym, res, cap, section, note), kind="algo")
         except Exception as e:
@@ -1987,13 +2015,14 @@ def start_algo_thread():
         sec = (f"{ALGO_MIN_PRICE:g}$-{ALGO_MAX_PRICE:g}$"
                + (f" + تجزئة عكسية آخر {ALGO_RSPLIT_DAYS} يوم" if ALGO_RSPLIT_DAYS else ""))
         threading.Thread(target=algo_loop, daemon=True, name="algo",
-                         args=("كشف الخوارزميات (تجزئة عكسية)", sec, get_microcaps, ALGO_SYMBOLS)).start()
+                         args=("كشف الخوارزميات (تجزئة عكسية)", sec, get_microcaps, ALGO_SYMBOLS,
+                               None, ALGO_SMALL_ONCE_HOURS)).start()
     if ALGO_PENNY:
         sec = (f"بني ستوك {ALGO_PENNY_MIN_PRICE:g}$-{ALGO_PENNY_MAX_PRICE:g}$ وقيمتها "
                f"{ALGO_PENNY_MAX_MARKET_CAP / 1e6:g} مليون وتحت")
         threading.Thread(target=algo_loop, daemon=True, name="algo_penny",
                          args=("خوارزميات البني ستوك", sec, get_pennies, None,
-                               lambda: RSPLIT_ALGO_SYMS)).start()
+                               lambda: RSPLIT_ALGO_SYMS, ALGO_PENNY_ONCE_HOURS)).start()
     if ALGO_BIG:
         threading.Thread(target=algo_big_loop, daemon=True, name="algo_big").start()
 
