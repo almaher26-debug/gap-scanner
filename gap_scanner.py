@@ -4,7 +4,7 @@
 
 (1) نموذج الـ Inversion Gap - ثلاث فريمات: يومي + 4 ساعات + ساعة
     اليومي: يفحص مرة باليوم بعد إغلاق السوق (4:20 العصر نيويورك = 11:20 بالليل بتوقيتك)
-    الأسهم: كل أسهم ناسداك اللي قيمتها السوقية 2 مليار دولار وفوق (ميد كاب وأعلى)
+    الأسهم: كل أسهم ناسداك + بورصة نيويورك (GAP_EXCHANGES) اللي قيمتها السوقية 2 مليار دولار وفوق
     ⚠️ لون الشموع الثلاث ما يهم - المهم إن ذيل الشمعة الأولى والثالثة ما يلتقون
 
     🟢 صعودي (جاب تحت):
@@ -24,6 +24,12 @@
         تحتاج مفتاح Tiingo (باقة Power + إضافة BOATS). بدونه يشتغل على 4 الفجر - 8 بالليل بس
 
     فلتر: السهم سعره فوق 10$ ، وحجم الجاب (الفرق بين الحدين) 0.50$ أو أكثر
+
+    ⭐ فريم 4 ساعات له شروط أشد (check_pattern_4h):
+      - الجاب أكبر من 2$ (GAP4H_MIN_SIZE)
+      - الشموع الثلاث متراصة هابطة وما بينها فراغ (ذيل كل وحدة يلمس اللي قبلها)
+      - لونها ما يهم (GAP4H_REQUIRE_RED = True يخليها لازم حمراء)
+      - الرابعة خضراء وتقفل فوق قاع الأولى (والهبوطي بالعكس)
 
 (1ج) Inversion Gap فريم 15 دقيقة - قسم جديد (الساعة والأربع ساعات ما تغيروا)
     - نفس الأسهم: ناسداك 2 مليار وفوق، وسعر السهم 10$ وفوق
@@ -133,6 +139,11 @@ TIINGO_WORKERS = 8
 GAP_MIN_STOCK_PRICE = 10         # يتجاهل الأسهم اللي سعرها أقل من كذا (لفريم 4 ساعات والساعة)
 GAP_MIN_SIZE = 0.50              # يتجاهل الجاب اللي حجمه أقل من كذا (دولار)
 ENABLE_GAP_4H = True             # فريم 4 ساعات - ينبه عند إغلاق الشمعة
+# ---- شروط فريم 4 ساعات (خاصة فيه، الساعة واليومي ما تغيروا) ----
+GAP4H_MIN_SIZE = 2.00            # الجاب لازم يكون أكبر من 2$ (من قمة الثالثة لقاع الأولى)
+GAP4H_REQUIRE_RED = False        # True = الشموع الثلاث لازم حمراء | False = لونها ما يهم
+GAP4H_REQUIRE_STEP = True        # الشموع الثلاث متراصة: كل وحدة أنزل من اللي قبلها (صعودي) وأعلى (هبوطي)
+GAP4H_REQUIRE_COLOR4 = True      # الرابعة خضراء (صعودي) أو حمراء (هبوطي)
 ENABLE_GAP_1H = True             # فريم ساعة - ينبه عند إغلاق الشمعة
 ENABLE_GAP_15M = False           # فريم 15 دقيقة - مطفي
 ENABLE_GAP_1D = True             # فريم يومي - ينبه بعد إغلاق السوق كل يوم
@@ -469,7 +480,9 @@ def us_market_open(now=None):
     """السوق مفتوح حسب الجلسة المختارة (+ دقايق بعد الإغلاق عشان نلحق نفحص آخر شمعة)."""
     now = now or pd.Timestamp.now(tz=NY)
     wd, m = now.weekday(), now.hour * 60 + now.minute
-    buf = max(GAP_SCAN_AFTER_CLOSE_MIN) + 2
+    # 20 دقيقة: ياهو أحياناً ما يعطي كل شموع الربع ساعة بعد الإغلاق، فالشمعة تعتبر مقفلة
+    # بعد 15 دقيقة (only_closed). لو الوقت أقصر من كذا تضيع آخر شمعة باليوم (4-8 بالليل)
+    buf = max(max(GAP_SCAN_AFTER_CLOSE_MIN) + 2, 20)
     if GAP_OVERNIGHT:                 # من الأحد 8 بالليل إلى الجمعة 8 بالليل
         if wd == 5:
             return False
@@ -546,6 +559,35 @@ def get_nasdaq_midcap_plus():
         log("قائمة ناسداك رجعت فاضية تقريباً، أستخدم الاحتياطية")
     except Exception as e:
         log("ما قدرت أجيب القيم السوقية من ناسداك، أستخدم الاحتياطية:", e)
+    return FALLBACK_TICKERS
+
+
+GAP_EXCHANGES = ("nasdaq", "nyse")   # بورصات أسهم الجاب: احذف "nyse" لو تبي ناسداك بس
+
+
+def get_gap_universe():
+    """أسهم الجاب (4 ساعات، ساعة، يومي): كل البورصات في GAP_EXCHANGES
+    اللي قيمتها السوقية MIN_MARKET_CAP وفوق، من سكرينر ناسداك الرسمي."""
+    out = set()
+    for ex in GAP_EXCHANGES:
+        url = ("https://api.nasdaq.com/api/screener/stocks"
+               f"?tableonly=true&limit=10000&exchange={ex}&download=true")
+        try:
+            r = requests.get(url, headers={**HEADERS, "Accept": "application/json"}, timeout=30)
+            data = r.json().get("data") or {}
+            rows = data.get("rows") or (data.get("table") or {}).get("rows") or []
+            n = 0
+            for row in rows:
+                sym = str(row.get("symbol", "")).strip().upper()
+                if sym.isalpha() and len(sym) <= 5 and _to_number(row.get("marketCap")) >= MIN_MARKET_CAP:
+                    out.add(sym)
+                    n += 1
+            log(f"الجاب: {ex.upper()} - {n} سهم")
+        except Exception as e:
+            log(f"ما قدرت أجيب أسهم {ex.upper()}:", e)
+    if len(out) > 50:
+        return sorted(out)
+    log("قائمة أسهم الجاب رجعت فاضية تقريباً، أستخدم الاحتياطية")
     return FALLBACK_TICKERS
 
 
@@ -664,6 +706,52 @@ def check_pattern_clean(c):
     return None
 
 
+def check_pattern_4h(c):
+    """فريم 4 ساعات - الشروط:
+    🟢 صعودي:
+      1) ثلاث شموع متراصة هابطة: كل شمعة قاعها وقمتها أنزل من اللي قبلها
+      2) ما بينها فراغ: ذيل كل شمعة يلمس اللي قبلها (الأولى مع الثانية، والثانية مع الثالثة)
+      3) قاع الأولى ما يلتقي مع قمة الثالثة، والفرق بينهم (الجاب) أكبر من 2$
+      4) الشمعة الرابعة خضراء وتقفل فوق قاع الأولى (أعلى الجاب)
+    🔴 هبوطي: نفس الشي بالعكس (متراصة طالعة، والرابعة حمراء تقفل تحت قمة الأولى)."""
+    res = check_pattern(c)
+    if not res:
+        return None
+    if res["gap_top"] - res["gap_bottom"] <= GAP4H_MIN_SIZE:
+        return None
+    c1, c2, c3, c4 = (c.iloc[i] for i in (-4, -3, -2, -1))
+    bull = res["side"] == "bull"
+
+    # ما بينها فراغ: ذيول الشموع المتجاورة تلتقي
+    for a, b in ((c1, c2), (c2, c3)):
+        if b["Low"] > a["High"] or b["High"] < a["Low"]:
+            return None
+
+    # متراصة: هابطة للصعودي، طالعة للهبوطي
+    if GAP4H_REQUIRE_STEP:
+        if bull and not (c2["Low"] < c1["Low"] and c3["Low"] < c2["Low"]
+                         and c2["High"] < c1["High"] and c3["High"] < c2["High"]):
+            return None
+        if not bull and not (c2["High"] > c1["High"] and c3["High"] > c2["High"]
+                             and c2["Low"] > c1["Low"] and c3["Low"] > c2["Low"]):
+            return None
+
+    # لون الشموع الثلاث (اختياري)
+    if GAP4H_REQUIRE_RED:
+        want_down = bull
+        for x in (c1, c2, c3):
+            if (x["Close"] < x["Open"]) != want_down:
+                return None
+
+    # الرابعة: خضراء تقفل فوق الجاب (صعودي) / حمراء تقفل تحته (هبوطي)
+    if GAP4H_REQUIRE_COLOR4:
+        if bull and not c4["Close"] > c4["Open"]:
+            return None
+        if not bull and not c4["Close"] < c4["Open"]:
+            return None
+    return res
+
+
 def _gap_message(t, res, frame):
     lo, hi, px = (round(float(res[k]), 2) for k in ("gap_bottom", "gap_top", "price"))
     if res["side"] == "bull":
@@ -734,7 +822,8 @@ def scan_gap(tickers, already_sent, frames=None, min_price=None, max_price=None,
     hits = 0
     now = pd.Timestamp.now(tz=NY)
     if frames is None:
-        frames = [(ENABLE_GAP_4H, 240, "4h", "فريم 4 ساعات"), (ENABLE_GAP_1H, 60, "1h", "فريم ساعة")]
+        frames = [(ENABLE_GAP_4H, 240, "4h", "فريم 4 ساعات", check_pattern_4h),
+                  (ENABLE_GAP_1H, 60, "1h", "فريم ساعة")]
     min_price = GAP_MIN_STOCK_PRICE if min_price is None else min_price
     min_size = GAP_MIN_SIZE if min_size is None else min_size
     boats = load_boats(tickers, now) if GAP_OVERNIGHT else {}
@@ -1984,8 +2073,9 @@ def main():
             gap_last = slot or now_ny
             today = pd.Timestamp.now(tz=NY).date()
             if gap_day != today or not gap_tickers:
-                gap_tickers = get_nasdaq_midcap_plus()
-                log(f"الجاب: {len(gap_tickers)} سهم ناسداك قيمتها السوقية {MIN_MARKET_CAP/1e9:.0f} مليار وفوق")
+                gap_tickers = get_gap_universe()
+                log(f"الجاب: {len(gap_tickers)} سهم ({' + '.join(e.upper() for e in GAP_EXCHANGES)}) "
+                    f"قيمتها السوقية {MIN_MARKET_CAP/1e9:.0f} مليار وفوق")
                 if ENABLE_GAP_15M:
                     gap15_tickers = build_universe("الجاب 15 دقيقة", GAP15_MIN_PRICE,
                                                    GAP15_MAX_PRICE, GAP15_MIN_AVG_VOLUME,
@@ -2011,7 +2101,7 @@ def main():
         if ENABLE_GAP and ENABLE_GAP_1D and gap1d_day != now_ny.date() and (
                 once or (now_ny.weekday() < 5 and (now_ny.hour, now_ny.minute) >= GAP_1D_AFTER_NY)):
             if gap_day != now_ny.date() or not gap_tickers:
-                gap_tickers = get_nasdaq_midcap_plus()
+                gap_tickers = get_gap_universe()
                 gap_day = now_ny.date()
             scan_gap_daily(gap_tickers, gap_sent)
             gap1d_day = now_ny.date()
