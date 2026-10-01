@@ -25,6 +25,15 @@
 
     فلتر: السهم سعره فوق 10$ ، وحجم الجاب (الفرق بين الحدين) 0.50$ أو أكثر
 
+(1ج) Inversion Gap فريم 15 دقيقة - قسم جديد (الساعة والأربع ساعات ما تغيروا)
+    - نفس الأسهم: ناسداك 2 مليار وفوق، وسعر السهم 10$ وفوق
+    - نفس النموذج بالضبط (صعودي وهبوطي) + شرط: الشموع الثلاث ما بينها فراغ
+        * ورا بعض بالوقت (ما فيه قفزة بين جلستين)
+        * كل شمعة تفتح عند إغلاق اللي قبلها، وذيولها تلتقي
+    - الرابعة تقفل فوق أعلى الجاب (صعودي) أو تحت أسفله (هبوطي) - لونها ما يهم
+    - حجم الجاب 2$ أو أكثر
+    - ENABLE_GAP_15M_CLEAN = False يطفيه
+
 (2) ماسح السيولة (البني ستوك) - كل 5 دقايق وقت السوق الرسمي
     - أسهم ناسداك من 1$ إلى 5$
     - الشروط كلها مع بعض:
@@ -135,6 +144,11 @@ GAP15_MIN_PRICE = 1              # أقل سعر لأسهم فريم 15 دقيق
 GAP15_MAX_PRICE = 15             # أعلى سعر لأسهم فريم 15 دقيقة
 GAP15_MIN_AVG_VOLUME = 100_000   # يشيل الأسهم الميتة اللي ما عليها تداول
 GAP15_MIN_SIZE = 0.05            # الجاب على الأسهم الرخيصة أصغر، فحجم أقل
+# ---- (1ج) جاب 15 دقيقة "النظيف": نفس أسهم الساعة والأربع ساعات (ناسداك 2 مليار وفوق، سعر 10$ وفوق) ----
+#   الشرط الزايد: الشموع الثلاث ما بينها فراغ، والجاب دولارين أو أكثر
+ENABLE_GAP_15M_CLEAN = True      # True = شغال | False = مطفي
+GAP15C_MIN_SIZE = 2.00           # أقل حجم للجاب (دولار)
+GAP15C_OPEN_TOL = 0.01           # سماحية فرق الافتتاح عن إغلاق الشمعة اللي قبلها (سنت واحد)
 GAP_REQUIRE_MIDDLE_COVER = True  # الشمعة الثانية لازم تغطي الجاب كامل (من قمة الثالثة لقاع الأولى)
 GAP_BASE_MIN = 15                # البيانات تنحمّل بشموع 15 دقيقة، وكل الفريمات تنبني منها
 GAP_SCAN_AFTER_CLOSE_MIN = (1, 5, 12)   # يفحص بعد الإغلاق بكذا دقيقة (الأولى هي الأساسية)
@@ -623,6 +637,33 @@ def check_pattern(c):
     return None
 
 
+def no_void_between(c, n=3):
+    """(1ج) يتأكد إن الشموع الثلاث الأولى (قبل الرابعة) ما بينها فراغ:
+    - ورا بعض بالوقت: ما فيه شمعة ناقصة ولا قفزة بين جلستين
+    - كل شمعة تفتح عند إغلاق اللي قبلها (بسماحية GAP15C_OPEN_TOL)
+    - ذيول الشموع المتجاورة تلتقي (مدى كل وحدة يلمس اللي قبلها)"""
+    if len(c) < n + 1:
+        return False
+    rows = c.iloc[-(n + 1):-1]                   # الأولى والثانية والثالثة
+    for i in range(1, n):
+        prev, cur = rows.iloc[i - 1], rows.iloc[i]
+        if "end" in rows and pd.Timestamp(prev["end"]) != pd.Timestamp(rows.index[i]):
+            return False                         # فيه فراغ بالوقت
+        if abs(cur["Open"] - prev["Close"]) > GAP15C_OPEN_TOL:
+            return False                         # فتحت بفجوة عن إغلاق اللي قبلها
+        if cur["Low"] > prev["High"] or cur["High"] < prev["Low"]:
+            return False                         # الذيول ما التقت
+    return True
+
+
+def check_pattern_clean(c):
+    """نفس check_pattern بالضبط + شرط إن الشموع الثلاث ما بينها فراغ."""
+    res = check_pattern(c)
+    if res and no_void_between(c):
+        return res
+    return None
+
+
 def _gap_message(t, res, frame):
     lo, hi, px = (round(float(res[k]), 2) for k in ("gap_bottom", "gap_top", "price"))
     if res["side"] == "bull":
@@ -716,10 +757,12 @@ def scan_gap(tickers, already_sent, frames=None, min_price=None, max_price=None,
                 continue
             last_bar = df.index.max()
 
-            for enabled, minutes, tag, label in frames:
+            for fr in frames:
+                enabled, minutes, tag, label = fr[:4]
+                checker = fr[4] if len(fr) > 4 else check_pattern
                 if not enabled:
                     continue
-                res = check_pattern(only_closed(to_frame(df, minutes), last_bar, now))
+                res = checker(only_closed(to_frame(df, minutes), last_bar, now))
                 if not res or res["gap_top"] - res["gap_bottom"] < min_size:
                     continue
                 if (now - res["end"]).total_seconds() / 60 > GAP_MAX_ALERT_DELAY_MIN:
@@ -1951,6 +1994,11 @@ def main():
             # (أ) فريم 4 ساعات والساعة - أسهم الملياري دولار وسعر 10$ وفوق
             if ENABLE_GAP_4H or ENABLE_GAP_1H:
                 scan_gap(gap_tickers, gap_sent)
+            # (ج) فريم 15 دقيقة النظيف - نفس أسهم الساعة، الشموع الثلاث بدون فراغ، والجاب 2$ وفوق
+            if ENABLE_GAP_15M_CLEAN:
+                scan_gap(gap_tickers, gap_sent,
+                         frames=[(True, 15, "15mc", "فريم 15 دقيقة (بدون فراغ)", check_pattern_clean)],
+                         min_size=GAP15C_MIN_SIZE, tag_label=" (15 دقيقة بدون فراغ)")
             # (ب) فريم 15 دقيقة - أسهم من 1$ إلى 15$ بدون شرط القيمة السوقية
             if ENABLE_GAP_15M and gap15_tickers:
                 scan_gap(gap15_tickers, gap_sent,
