@@ -96,6 +96,14 @@
     - يوضح كم صفقة منها نزلت بنفس اللحظة، والمدة، والقيمة، وتقدير شراء/بيع
     - لو السلسلة كملت يرسل تحديث عند 2000 ثم 4000 ...
     - نفس مفاتيح ألباكا | ALGO_BIG=0 يطفيه | ALGO_SMALL=0 يطفي القسم (6)
+
+(7) الأخبار الإيجابية - من ألباكا (نفس المفاتيح) - 24 ساعة، كل دقيقة
+    - اندماج/استحواذ، موافقة FDA، نتائج دراسة إيجابية، عقود وشراكات، نتائج قوية ورفع توقعات،
+      ترقية محلل، إعادة شراء وتوزيعات
+    - يتجاهل الخبر لو فيه كلمة سلبية (طرح أسهم، تجزئة عكسية، دعوى، تخفيض، إفلاس، إلغاء ...)
+    - الأسهم: سعرها من 1$ إلى 15$ وقيمتها السوقية أقل من 100 مليون دولار
+    - NEWS=0 يطفيه
+    - python gap_scanner.py --newstest   # يجرب التصنيف (بدون نت)
 """
 
 import gc
@@ -289,6 +297,18 @@ ALGO_ICE_MAX_SIZE = 10                    # أعلى حجم للصفقة: 10 أ�
 ALGO_ICE_MAX_GAP_SEC = 2                  # "وقت قصير": أكثر من كذا ثانية بين صفقتين = تنقطع السلسلة
 ALGO_ICE_REALERT_MIN = 5                  # ما يعيد التنبيه لنفس السهم ونفس الحجم والسعر قبل كذا دقيقة
 
+# ---- (7) الأخبار الإيجابية - من ألباكا (نفس المفاتيح) ----
+# اندماج، استحواذ، موافقة FDA، عقود وشراكات، نتائج قوية، رفع توقعات، ترقية، إعادة شراء ...
+NEWS = os.environ.get("NEWS", "1") != "0"   # 0 = يطفي هالقسم
+NEWS_POLL_SEC = 60                    # كل كم ثانية يسحب الأخبار الجديدة (24 ساعة، كل الأيام)
+NEWS_MAX_AGE_MIN = 30                 # يتجاهل الخبر اللي عمره أكثر من كذا دقيقة (عشان ما يرسل قديم أول ما يشتغل)
+NEWS_MAX_SYMBOLS = 3                  # يتجاهل الخبر اللي فيه أكثر من كذا سهم (ملخصات السوق العامة)
+NEWS_MIN_PRICE = 1                    # أقل سعر سهم (0 = بدون حد)
+NEWS_MAX_PRICE = 15                   # أعلى سعر سهم (0 = بدون حد)
+NEWS_MAX_MARKET_CAP = 100_000_000     # القيمة السوقية أقل من 100 مليون دولار (0 = بدون حد)
+NEWS_EXCHANGES = ("nasdaq", "nyse", "amex")   # البورصات اللي تنجاب منها القيم السوقية
+NEWS_SENT_FILE = "news_sent.txt"      # عشان ما يعيد نفس الخبر لو البوت أعاد التشغيل
+
 # ---- المحتوى التعليمي ----
 ADD_EDUCATION = True             # يضيف شرح تعليمي قصير للنموذج تحت كل تنبيه
 ADD_DISCLAIMER = True            # يضيف سطر إخلاء المسؤولية تحت كل رسالة
@@ -457,6 +477,9 @@ EDUCATION = {
                  "في سهم كبير عليه آلاف المتداولين، إن مئات الصفقات تجي ورا بعض بنفس الحجم بالضبط "
                  "وبدون ولا صفقة ثانية بينها = غالباً برنامج واحد (TWAP/VWAP أو آيس بيرغ) ينفذ أمر كبير.\n"
                  "ما يوضح مين وراه، وتقدير الشراء/البيع من اتجاه السعر تقريبي."),
+    "news": ("📚 للتعلّم - الأخبار:\n"
+             "التصنيف \"إيجابي\" آلي من كلمات العنوان، مو قراءة للخبر كامل، فاقرأ الخبر قبل أي قرار.\n"
+             "كثير من حركة السعر تصير قبل وصول الخبر، وأحياناً السهم ينزل رغم إن الخبر إيجابي."),
 }
 
 
@@ -778,7 +801,7 @@ def _gap_message(t, res, frame):
         line = f"الشمعة قفلت تحت أسفل الـ Inversion Gap ({lo})"
     closed_at = pd.Timestamp(res["end"]).tz_convert(LOCAL_TZ)
     msg = (f"{head}\n"
-           f"السهم: {t}\n"
+           f"السهم: ${t}\n"
            f"Inversion Gap: {lo} ← {hi}  (حجمه {hi - lo:.2f}$)\n"
            f"{line}\n"
            f"سعر الإغلاق: {px}\n"
@@ -1071,7 +1094,7 @@ def check_flow(df):
 
 def _flow_message(t, r, flt):
     return (f"💰 دخول سيولة + اختراق\n"
-            f"السهم: {t}\n"
+            f"السهم: ${t}\n"
             f"السعر: {r['close']:.2f}$ ({r['change'] * 100:+.1f}% عن إغلاق أمس)\n"
             f"الحجم النسبي: {r['rvol']:.1f} ضعف متوسط {FLOW_AVG_DAYS} يوم\n"
             f"حجم اليوم: {int(r['vol']):,} سهم (≈ {r['dollar']:,.0f}$)\n"
@@ -1220,7 +1243,7 @@ def _scan_patterns_frame(tickers):
             for code, name, i, neck in check_daily_patterns(df, DAILY_LOOKBACK_DAYS):
                 day = pd.Timestamp(df.index[i]).strftime("%Y-%m-%d")
                 chg = (last / neck - 1) * 100
-                row = (day, f"• {t} | الاختراق: {day} | خط العنق: {neck:.2f} | "
+                row = (day, f"• ${t} | الاختراق: {day} | خط العنق: {neck:.2f} | "
                             f"السعر الحين: {last:.2f} ({chg:+.1f}%)")
                 found.setdefault(name, {})
                 if t not in found[name] or day > found[name][t][0]:
@@ -1321,7 +1344,7 @@ def scan_short(tickers, already_sent):
             prior_txt = f"{int(prior):,}" if prior is not None else "غير معروف"
             send_telegram(
                 f"🩳 الشورت صفر\n"
-                f"السهم: {t}\n"
+                f"السهم: ${t}\n"
                 f"السعر: {price}\n"
                 f"الشورت الحالي: 0\n"
                 f"الشورت الشهر اللي قبله: {prior_txt}\n"
@@ -1356,7 +1379,7 @@ def load_rsplits(tickers):
 
 def _rsplit_line(t, info, split):
     d, ratio, opn = split
-    return (f"• {t}\n"
+    return (f"• ${t}\n"
             f"   تاريخ التجزئة: {d:%Y-%m-%d} | النسبة: كل {1 / ratio:g} أسهم = سهم\n"
             f"   افتتح بعد التجزئة على: {opn:.2f}$ | السعر الحين: {info['last']:.2f}$\n"
             f"   عدد التجزئات العكسية آخر سنة: {len(info['splits'])}")
@@ -1415,7 +1438,7 @@ def scan_rsplit_short(new, already_sent):
                 d = pd.Timestamp(int(date), unit="s").strftime("%Y-%m-%d") if date else "غير معروف"
                 send_telegram(
                     f"🔻 تجزئة عكسية + شورت صفر\n"
-                    f"السهم: {t}\n"
+                    f"السهم: ${t}\n"
                     f"السعر: {price or info['last']:.2f}$\n"
                     f"التجزئة العكسية: {sdate:%Y-%m-%d} (كل {1 / ratio:g} أسهم = سهم)\n"
                     f"الشورت الحالي: 0\n"
@@ -1608,7 +1631,7 @@ def _algo_message(sym, a, cap=None, section="", note=""):
     b, s_, total = a["buys"], a["sells"], a["count"]
     return (f"🤖 خوارزمية تقطيع محتملة — {strength}\n"
             + (f"القسم: {section}\n" if section else "")
-            + f"السهم: {sym}\n"
+            + f"السهم: ${sym}\n"
             f"السعر: ${a['last']:.4g} (من {a['low']:.4g} إلى {a['high']:.4g})\n"
             f"الحجم المتكرر: {a['size']:g} سهم\n"
             f"التكرار: {total} صفقة خلال {mins:.1f} دقيقة\n"
@@ -1917,7 +1940,7 @@ def _ice_message(sym, a, cap=None):
     head = ("🔁 تحديث: الآيس بيرغ مستمر" if a["update"] else
             "🧊 آيس بيرغ — صفقات متتالية بنفس الحجم ونفس السعر")
     return (f"{head}\n"
-            f"السهم: {sym}\n"
+            f"السهم: ${sym}\n"
             + (f"القيمة السوقية: {_cap_txt(cap)}\n" if cap else "")
             + f"الحجم: {a['size']:g} سهم × {total:,} صفقة ورا بعض\n"
             f"السعر: {a['last']:.2f} (نفس السعر كلها)\n"
@@ -1937,7 +1960,7 @@ def _big_message(sym, a, cap=None):
     head = ("🔁 تحديث: السلسلة مستمرة" if a["update"] else
             "🏦🤖 خوارزمية على سهم كبير — صفقات متتالية بنفس الحجم")
     return (f"{head}\n"
-            f"السهم: {sym}\n"
+            f"السهم: ${sym}\n"
             + (f"القيمة السوقية: {_cap_txt(cap)}\n" if cap else "")
             + f"الحجم المتكرر: {a['size']:g} سهم\n"
             f"عدد الصفقات المتتالية: {total:,} (ولا صفقة بحجم ثاني بينها)\n"
@@ -2083,6 +2106,240 @@ def algo_self_test():
     print(_big_message("BIGCAP", big[0], 45_600_000_000))
 
 
+# ================== (7) الأخبار الإيجابية - ألباكا ==================
+import re
+
+NEWS_URL = "https://data.alpaca.markets/v1beta1/news"
+SNAP_URL = "https://data.alpaca.markets/v2/stocks/snapshots"
+
+# (الاسم، الكلمات) - أول تصنيف ينطبق على العنوان هو اللي يطلع بالتنبيه
+NEWS_POSITIVE = [
+    ("🤝 اندماج / استحواذ", r"\bmerger\b|\bmerge\b|\bto merge\b|\bacquir|\bacquisition\b|\bbuyout\b|"
+                            r"\btakeover\b|\bdefinitive agreement\b|\btender offer\b|\bgo(ing)? private\b|"
+                            r"\bto be acquired\b|\bbusiness combination\b"),
+    ("💊 موافقة FDA", r"\bfda\b.*\b(approv|clear|grant)|\bapproval\b|\bapproved\b|\bclearance\b|"
+                     r"\bbreakthrough therapy\b|\bfast track\b|\borphan drug\b|\bpriority review\b"),
+    ("🧪 نتائج دراسة إيجابية", r"\bpositive (topline|results|data|phase)|\bmet (its |the )?primary endpoint|"
+                              r"\bstatistically significant\b"),
+    ("📝 عقد / شراكة", r"\bcontract\b|\bawarded\b|\bwins\b.*\b(order|deal|contract)|\bpartnership\b|"
+                      r"\bpartners with\b|\bcollaboration\b|\bstrategic alliance\b|\bselected by\b|"
+                      r"\bpurchase order\b|\blicens(e|ing) agreement\b|\bsupply agreement\b"),
+    ("📈 نتائج / توقعات قوية", r"\bbeats?\b|\btops?\b.*\bestimates\b|\brecord (revenue|quarter|sales|results)|"
+                              r"\braises?\b.*\b(guidance|outlook|forecast)|\bboosts?\b.*\b(guidance|outlook)|"
+                              r"\bexceeds?\b.*\b(expectations|estimates)"),
+    ("⬆️ ترقية محلل", r"\bupgrades?\b|\bupgraded\b|\braises?\b.*\bprice target\b|\binitiates?\b.*\b(buy|outperform|overweight)"),
+    ("💵 إعادة شراء / توزيعات", r"\bbuyback\b|\b(share|stock) repurchase\b|\bspecial dividend\b|"
+                               r"\b(raises|increases|boosts) (quarterly )?dividend\b"),
+]
+# لو العنوان فيه أي وحدة من هذي، يتجاهل الخبر حتى لو فيه كلمة إيجابية
+NEWS_NEGATIVE = (r"\boffering\b|\bdilut|\bpriced\b|\bregistered direct\b|\bprivate placement\b|\bwarrants?\b|"
+                 r"\breverse (stock )?split\b|\blawsuit\b|\bclass action\b|\binvestigat|\bshareholder alert\b|"
+                 r"\blaw firm\b|\bfair to\b|\bdowngrad|\bmiss(es|ed)?\b|\b(cuts|lowers|slashes|withdraws)\b|"
+                 r"\bbankrupt|\bchapter 11\b|\bdelist|\bterminat|\bhalt|\bwarning\b|\bfalls?\b|\bplunge|"
+                 r"\bslump|\btumble|\bsinks?\b|\bshort (seller|report)\b|\bsec charges\b|\brecall\b|"
+                 r"\bcomplete response letter\b|\bcrl\b|\brejects?\b|\bdenied\b|\bfails?\b|\bdelay")
+_NEWS_POS = [(name, re.compile(rx, re.I)) for name, rx in NEWS_POSITIVE]
+_NEWS_NEG = re.compile(NEWS_NEGATIVE, re.I)
+
+
+def classify_news(headline):
+    """يرجع اسم التصنيف لو الخبر إيجابي، وإلا None."""
+    h = headline or ""
+    if _NEWS_NEG.search(h):
+        return None
+    for name, rx in _NEWS_POS:
+        if rx.search(h):
+            return name
+    return None
+
+
+def _alpaca_headers():
+    return {"APCA-API-KEY-ID": ALPACA_KEY, "APCA-API-SECRET-KEY": ALPACA_SECRET}
+
+
+def fetch_news(start):
+    """كل الأخبار من وقت start لين الحين (كل الأسهم). يرجع قائمة أو None لو فشل."""
+    params = {"start": start.strftime("%Y-%m-%dT%H:%M:%SZ"), "limit": 50, "sort": "asc",
+              "include_content": "false"}
+    out = []
+    for _ in range(10):
+        _alpaca_wait()
+        try:
+            r = requests.get(NEWS_URL, headers=_alpaca_headers(), params=params, timeout=20)
+        except Exception as e:
+            log("الأخبار: فشل الاتصال -", e)
+            return None
+        if r.status_code == 429:
+            time.sleep(10)
+            continue
+        if r.status_code != 200:
+            log(f"الأخبار: خطأ {r.status_code} - {r.text[:200]}")
+            return None
+        data = r.json()
+        out.extend(data.get("news") or [])
+        token = data.get("next_page_token")
+        if not token:
+            break
+        params["page_token"] = token
+    return out
+
+
+def fetch_prices(symbols):
+    """آخر سعر لكل سهم من ألباكا: {الرمز: السعر}."""
+    if not symbols:
+        return {}
+    _alpaca_wait()
+    try:
+        r = requests.get(SNAP_URL, headers=_alpaca_headers(),
+                         params={"symbols": ",".join(symbols), "feed": ALGO_FEED}, timeout=15)
+        if r.status_code != 200:
+            return {}
+        out = {}
+        for sym, snap in (r.json() or {}).items():
+            snap = snap or {}
+            px = ((snap.get("latestTrade") or {}).get("p")
+                  or (snap.get("dailyBar") or {}).get("c"))
+            if px:
+                out[sym] = float(px)
+        return out
+    except Exception:
+        return {}
+
+
+_news_caps = {"day": None, "caps": {}}
+
+
+def news_caps():
+    """{الرمز: القيمة السوقية} للأسهم اللي قيمتها تحت NEWS_MAX_MARKET_CAP. تتجدد مرة باليوم."""
+    today = pd.Timestamp.now(tz=NY).date()
+    if _news_caps["day"] == today and _news_caps["caps"]:
+        return _news_caps["caps"]
+    caps = {}
+    for ex in NEWS_EXCHANGES:
+        url = ("https://api.nasdaq.com/api/screener/stocks"
+               f"?tableonly=true&limit=10000&exchange={ex}&download=true")
+        try:
+            r = requests.get(url, headers={**HEADERS, "Accept": "application/json"}, timeout=30)
+            data = r.json().get("data") or {}
+            rows = data.get("rows") or (data.get("table") or {}).get("rows") or []
+            for row in rows:
+                sym = str(row.get("symbol", "")).strip().upper()
+                cap = _to_number(row.get("marketCap"))
+                if sym.isalpha() and len(sym) <= 5 and 0 < cap < NEWS_MAX_MARKET_CAP:
+                    caps[sym] = cap
+        except Exception as e:
+            log(f"الأخبار: ما قدرت أجيب القيم السوقية من {ex.upper()} -", e)
+    if caps:
+        _news_caps.update(day=today, caps=caps)
+        log(f"الأخبار: {len(caps)} سهم قيمتها السوقية أقل من {NEWS_MAX_MARKET_CAP / 1e6:g} مليون")
+    return caps
+
+
+def _news_message(item, cat, syms, prices, caps=None):
+    t = pd.Timestamp(item.get("created_at")).tz_convert(LOCAL_TZ)
+    lines = []
+    for s in syms:
+        px = prices.get(s)
+        lines.append(f"${s} ({px:.2f}$)" if px else f"${s}")
+    return (f"📰 خبر إيجابي — {cat}\n"
+            f"السهم: {' | '.join(lines)}\n"
+            + (f"القيمة السوقية: {' | '.join(_cap_txt(caps[s]) for s in syms if s in caps)}\n"
+               if caps and any(s in caps for s in syms) else "")
+            + f"العنوان: {item.get('headline', '').strip()}\n"
+            f"المصدر: {item.get('source') or item.get('author') or 'غير معروف'}\n"
+            f"الوقت: {t:%H:%M} (توقيتك)\n"
+            + (f"الرابط: {item['url']}" if item.get("url") else ""))
+
+
+def news_loop():
+    """يشتغل بخيط لحاله: يسحب الأخبار كل NEWS_POLL_SEC ثانية ويرسل الإيجابي بس."""
+    sent = _load_set(NEWS_SENT_FILE)
+    last = pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=NEWS_MAX_AGE_MIN)
+    log("الأخبار: بدأ المراقبة (ألباكا) - "
+        + (f"أسهم سعرها {NEWS_MIN_PRICE or 0:g}$-{NEWS_MAX_PRICE:g}$" if NEWS_MAX_PRICE else "كل الأسعار")
+        + (f" وقيمتها أقل من {NEWS_MAX_MARKET_CAP / 1e6:g} مليون$" if NEWS_MAX_MARKET_CAP else ""))
+    while True:
+        try:
+            now = pd.Timestamp.now(tz="UTC")
+            items = fetch_news(last - pd.Timedelta(minutes=2))   # نرجع شوي عشان الأخبار المتأخرة
+            if items is not None:
+                last = now
+                hits = []
+                for it in items:
+                    key = str(it.get("id"))
+                    if key in sent:
+                        continue
+                    created = pd.Timestamp(it.get("created_at"))
+                    if (now - created).total_seconds() / 60 > NEWS_MAX_AGE_MIN:
+                        continue
+                    syms = [s for s in (it.get("symbols") or []) if s.isalpha() and len(s) <= 5]
+                    if not syms or len(syms) > NEWS_MAX_SYMBOLS:
+                        continue
+                    cat = classify_news(it.get("headline"))
+                    if not cat:
+                        continue
+                    if NEWS_MAX_MARKET_CAP:
+                        caps = news_caps()
+                        if not caps:
+                            continue            # ما قدر يجيب القيم السوقية، ما يرسل بدون فلتر
+                        syms = [x for x in syms if x in caps]
+                        if not syms:
+                            continue
+                    sent.add(key)
+                    _append_line(NEWS_SENT_FILE, key)
+                    hits.append((it, cat, syms))
+                prices = fetch_prices(sorted({s for _, _, ss in hits for s in ss})) if hits else {}
+                for it, cat, syms in hits:
+                    if NEWS_MIN_PRICE or NEWS_MAX_PRICE:
+                        ok = [s for s in syms if s in prices
+                              and prices[s] >= NEWS_MIN_PRICE
+                              and (not NEWS_MAX_PRICE or prices[s] <= NEWS_MAX_PRICE)]
+                        if not ok:
+                            continue
+                        syms = ok
+                    send_telegram(_news_message(it, cat, syms, prices, _news_caps["caps"]), kind="news")
+        except Exception as e:
+            log("الأخبار: خطأ -", e)
+        time.sleep(NEWS_POLL_SEC)
+
+
+def start_news_thread():
+    if not NEWS:
+        log("الأخبار: مطفي (NEWS=0)")
+        return
+    if not (ALPACA_KEY and ALPACA_SECRET):
+        log("الأخبار: مطفي (يحتاج ALPACAAPIKEY و ALPACASECRETKEY في Railway)")
+        return
+    threading.Thread(target=news_loop, daemon=True, name="news").start()
+
+
+def news_self_test():
+    cases = [
+        ("Acme Corp To Acquire Beta Inc For $2.1B In Cash", True),
+        ("XYZ Announces Definitive Merger Agreement With ABC", True),
+        ("BioCo Receives FDA Approval For Lead Drug", True),
+        ("BioCo Announces Positive Topline Results From Phase 3 Trial", True),
+        ("TechCo Awarded $50M Contract By US Army", True),
+        ("RetailCo Q3 EPS Beats Estimates, Raises FY Guidance", True),
+        ("Morgan Stanley Upgrades NVDA To Overweight", True),
+        ("SmallCap Announces $10M Registered Direct Offering", False),
+        ("Halper Sadeh Investigating Whether Sale Of XYZ Is Fair To Shareholders", False),
+        ("BioCo Receives Complete Response Letter From FDA", False),
+        ("RetailCo Misses Estimates, Cuts Guidance", False),
+        ("Acme Terminates Merger Agreement With Beta", False),
+        ("Analyst Downgrades AAPL To Neutral", False),
+        ("Stocks Moving In Thursday's Pre-Market Session", False),
+    ]
+    bad = [(h, want) for h, want in cases if bool(classify_news(h)) != want]
+    for h, want in cases:
+        print(("✅" if (h, want) not in bad else "❌"), classify_news(h) or "-", "|", h)
+    assert not bad, bad
+    print("NEWS TEST OK")
+    print(_news_message({"headline": cases[0][0], "source": "benzinga",
+                         "created_at": "2026-10-02T13:05:00Z", "url": "https://example.com"},
+                        classify_news(cases[0][0]), ["ACME"], {"ACME": 4.12}, {"ACME": 62_500_000}))
+
+
 def main():
     if "--test" in sys.argv:
         self_test()
@@ -2090,12 +2347,16 @@ def main():
     if "--algotest" in sys.argv:
         algo_self_test()
         return
+    if "--newstest" in sys.argv:
+        news_self_test()
+        return
     once = "--once" in sys.argv
     _load_chats()
     discover_groups()
     log(f"التنبيهات بتروح لـ {len(CHATS)} محادثة: {', '.join(CHATS) or 'ولا وحدة'}")
     if not once:
         start_algo_thread()
+        start_news_thread()
 
     gap_tickers, gap_day, gap_last = [], None, None
     gap15_tickers = []
