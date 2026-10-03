@@ -9,7 +9,7 @@
      والمنطقة هذي "مقابل" الشمعة الخضراء (نفس منطقتها السعرية)
 
 الفلاتر:
-  - أسهم ناسداك + نيويورك + أمكس، قيمة سوقية مليار دولار وفوق (من ياهو)
+  - أسهم ناسداك + نيويورك + أمكس، قيمة سوقية مليار دولار وفوق (من سكرينر ناسداك)
   - فريم ساعة للجلسة الرسمية (9:30، 10:30 ... مثل تريدنج فيو)
 
 الجدول:
@@ -32,7 +32,7 @@ import requests
 # ------------------------------------------------------------------ الإعدادات
 FEED = os.getenv("WEEKLY_IFVG_FEED", "sip")
 MIN_MCAP = float(os.getenv("WEEKLY_IFVG_MIN_MCAP", "1000000000"))   # مليار دولار
-MIN_PRICE = 3.0                 # نتجاهل الأسهم تحت 3$ قبل ما نسأل عن القيمة السوقية
+MIN_PRICE = 3.0                 # نتجاهل الأسهم تحت 3$
 HISTORY_DAYS = 21               # كم يوم نسحب (عشان القيعان والـ ATR)
 EXCHANGES = {"NASDAQ", "NYSE", "AMEX"}
 
@@ -47,7 +47,6 @@ STATE_FILE = os.getenv("WEEKLY_IFVG_STATE", "/data/weekly_ifvg_state.json" if os
 NY = ZoneInfo("America/New_York")
 RIYADH = ZoneInfo("Asia/Riyadh")
 DATA = "https://data.alpaca.markets/v2/stocks/bars"
-ASSETS = "https://api.alpaca.markets/v2/assets"
 REQ_GAP_SEC = 1.0               # بين كل طلب وطلب (عشان ما نزاحم باقي السكانرات على حد ألباكا)
 
 
@@ -76,10 +75,30 @@ def _get(url, params):
 
 # ------------------------------------------------------------------ البيانات
 def universe():
-    js = _get(ASSETS, {"status": "active", "asset_class": "us_equity"})
-    return sorted(a["symbol"] for a in js
-                  if a.get("tradable") and a.get("exchange") in EXCHANGES
-                  and "." not in a["symbol"] and "/" not in a["symbol"])
+    """{رمز: قيمة سوقية} من سكرينر ناسداك الرسمي (نفس مصدر باقي السكانرات) - مليار وفوق بس."""
+    out = {}
+    for ex in ("nasdaq", "nyse", "amex"):
+        url = ("https://api.nasdaq.com/api/screener/stocks"
+               f"?tableonly=true&limit=10000&exchange={ex}&download=true")
+        try:
+            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}, timeout=30)
+            data = r.json().get("data") or {}
+            rows = data.get("rows") or (data.get("table") or {}).get("rows") or []
+            for row in rows:
+                sym = str(row.get("symbol", "")).strip().upper()
+                cap = _num(row.get("marketCap"))
+                if sym.isalpha() and len(sym) <= 5 and cap >= MIN_MCAP:
+                    out[sym] = cap
+        except Exception as e:
+            log(f"ما قدرت أجيب أسهم {ex.upper()}: {e}")
+    return out
+
+
+def _num(x):
+    try:
+        return float(str(x).replace("$", "").replace(",", "").strip())
+    except Exception:
+        return 0.0
 
 
 def fetch_hourly(symbols, start, end):
@@ -125,20 +144,6 @@ def to_session_hours(bars30):
     if cur:
         out.append(cur)
     return out
-
-
-def market_caps(symbols):
-    import yfinance as yf
-    caps = {}
-    for s in symbols:
-        try:
-            fi = yf.Ticker(s).fast_info
-            cap = getattr(fi, "market_cap", None) or fi.get("marketCap")
-            caps[s] = float(cap) if cap else None
-        except Exception:
-            caps[s] = None
-        time.sleep(0.3)
-    return caps
 
 
 # ------------------------------------------------------------------ النموذج
@@ -259,8 +264,11 @@ def build_messages(friday, rows):
 def weekly_report(friday, send):
     win_start, win_end = week_window(friday)
     log(f"أفحص أسبوع {win_start:%m-%d} ← {friday:%m-%d}")
-    syms = universe()
-    log(f"{len(syms)} سهم، أسحب الشموع...")
+    caps = universe()
+    if len(caps) < 50:
+        raise RuntimeError(f"قائمة الأسهم من ناسداك رجعت {len(caps)} بس - بعيد المحاولة بعد شوي")
+    syms = sorted(caps)
+    log(f"{len(syms)} سهم (مليار وفوق)، أسحب الشموع...")
     data = fetch_hourly(syms, win_start - timedelta(days=HISTORY_DAYS - 5),
                         min(win_end, datetime.now(timezone.utc) - timedelta(minutes=16)))
     hits = {}
@@ -270,11 +278,8 @@ def weekly_report(friday, send):
         ev = detect(bars, win_start, win_end)
         if ev:
             hits[s] = ev
-    log(f"{len(hits)} سهم سوى النموذج، أشيك على القيمة السوقية...")
-    caps = market_caps(sorted(hits))
-    rows = sorted(((s, caps[s], ev) for s, ev in hits.items() if caps.get(s) and caps[s] >= MIN_MCAP),
-                  key=lambda r: -r[1])
-    log(f"{len(rows)} سهم بعد فلتر المليار")
+    rows = sorted(((s, caps[s], ev) for s, ev in hits.items()), key=lambda r: -r[1])
+    log(f"{len(rows)} سهم سوى النموذج")
     for m in build_messages(friday, rows):
         send(m)
     return len(rows)
