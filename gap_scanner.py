@@ -2506,6 +2506,12 @@ def main():
     if not once:
         start_algo_thread()
         start_news_thread()
+        try:   # قائمة IFVG الأسبوعية (كل جمعة)
+            import weekly_ifvg
+            threading.Thread(target=weekly_ifvg.run_forever, kwargs={"send": send_telegram},
+                             daemon=True, name="weekly_ifvg").start()
+        except Exception as e:
+            log(f"IFVG الأسبوعي: ما اشتغل: {e}")
 
     gap_tickers, gap_day, gap_last = [], None, None
     gap15_tickers = []
