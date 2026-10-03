@@ -23,6 +23,8 @@
       - ⚠️ ياهو ما عنده بيانات الجلسة الليلية (8 بالليل - 4 الفجر)، فعشان الـ24 ساعة
         تحتاج مفتاح Tiingo (باقة Power + إضافة BOATS). بدونه يشتغل على 4 الفجر - 8 بالليل بس
 
+    📦 صناديق SPY و QQQ داخلة في فريم الساعة والأربع ساعات بس (GAP_ETFS)
+
     فلتر: السهم سعره فوق 10$ ، وحجم الجاب (الفرق بين الحدين) 1$ أو أكثر (الساعة والأربع ساعات)
 
     ⭐ فريم 4 ساعات له شروط أشد (check_pattern_4h):
@@ -39,6 +41,14 @@
     - الرابعة تقفل فوق أعلى الجاب (صعودي) أو تحت أسفله (هبوطي) - لونها ما يهم
     - حجم الجاب 2$ أو أكثر
     - ENABLE_GAP_15M_CLEAN = False يطفيه
+
+(1د) سحب سيولة دعمين - الفريم اليومي
+    - الأسهم: ناسداك + نيويورك اللي قيمتها السوقية 2 مليار دولار وفوق، وسعرها 5$ وفوق
+    - الدعم = قاع يومي سابق (أنزل من 3 شموع قبله و3 بعده) خلال آخر 60 يوم،
+      وما قفلت ولا شمعة تحته من يوم تكوّن (يعني الدعم لسا صامد)
+    - الشرط: شمعة اليوم ذيلها نزل تحت دعمين أو أكثر، وقفلت فوقهم كلهم
+    - يفحص مرة باليوم بعد الإغلاق (4:20 العصر نيويورك = 11:20 بالليل بتوقيتك)
+    - ENABLE_SWEEP = False يطفيه | python gap_scanner.py --sweeptest يجربه بدون نت
 
 (2) ماسح السيولة (البني ستوك) - كل 5 دقايق وقت السوق الرسمي
     - أسهم ناسداك من 1$ إلى 5$
@@ -176,6 +186,17 @@ GAP_BASE_MIN = 15                # البيانات تنحمّل بشموع 15 �
 GAP_SCAN_AFTER_CLOSE_MIN = (1, 5, 12)   # يفحص بعد الإغلاق بكذا دقيقة (الأولى هي الأساسية)
 GAP_MAX_ALERT_DELAY_MIN = 30     # ما ينبه على شمعة قفلت من أكثر من كذا دقيقة (عشان ما يرسل قديم أول ما يشتغل)
 GAP_SENT_FILE = "gap_sent.txt"   # عشان ما يعيد نفس التنبيه لو البوت أعاد التشغيل
+
+# ---- (1د) سحب سيولة دعمين - الفريم اليومي ----
+#   شمعة اليوم ذيلها نزل تحت دعمين (قاعين سابقين) وقفلت فوقهم الاثنين
+ENABLE_SWEEP = True              # True = شغال | False = مطفي
+SWEEP_MIN_MARKET_CAP = 2_000_000_000   # القيمة السوقية 2 مليار دولار وفوق (ناسداك + نيويورك)
+SWEEP_MIN_SUPPORTS = 2           # كم دعم لازم ينسحب بنفس الشمعة
+SWEEP_PIVOT_BARS = 3             # الدعم = قاع أنزل من 3 شموع قبله و3 بعده
+SWEEP_LOOKBACK = 60              # يدور على الدعوم خلال آخر 60 يوم تداول (3 شهور تقريباً)
+SWEEP_MERGE_PCT = 0.003          # دعمين الفرق بينهم أقل من 0.3% = نفس الدعم (ما ينحسبون اثنين)
+SWEEP_MIN_PRICE = 5              # يتجاهل الأسهم اللي سعرها أقل من كذا
+SWEEP_AFTER_NY = (16, 20)        # يفحص بعد الإغلاق: 4:20 العصر نيويورك = 11:20 بالليل بتوقيتك
 
 USE_PRICE_FILTER = False         # True = يطبق فلتر السعر تحت مع فلتر القيمة السوقية
 MIN_PRICE = 50
@@ -449,6 +470,10 @@ EDUCATION = {
             "Inversion Gap بين ذيل الشمعة الأولى والثالثة. لما تقفل الشمعة الرابعة وراه، ينقلب "
             "من مقاومة لدعم (أو العكس)، وكثير يراقبون إعادة اختبارها.\n"
             "يضعف لو رجع السعر وقفل داخل الـ Inversion Gap، أو كان الحجم ضعيف."),
+    "sweep": ("📚 للتعلّم - سحب السيولة:\n"
+              "تحت كل قاع واضح تتجمع أوامر وقف خسارة. لما السعر ينزل تحتها ويضربها ثم يرجع ويقفل "
+              "فوقها، يعني اللي نزّله أخذ السيولة وما قدر يثبّت تحت.\n"
+              "يضعف لو رجع السعر وقفل تحت الدعوم، أو كان حجم شمعة السحب ضعيف."),
     "flow": ("📚 للتعلّم - دخول السيولة:\n"
              "الحجم النسبي يقارن تداول اليوم بمعدّله. حجم أضعاف المعتاد مع اختراق قمة وفلوت صغير "
              "يعني طلب غير عادي على سهم قليل المعروض، فالحركة تكون عنيفة.\n"
@@ -592,6 +617,8 @@ def get_nasdaq_midcap_plus():
 
 
 GAP_EXCHANGES = ("nasdaq", "nyse")   # بورصات أسهم الجاب: احذف "nyse" لو تبي ناسداك بس
+# صناديق تنضاف لفحص الجاب على فريم الساعة والأربع ساعات بس (صعودي وهبوطي، الجاب 1$ وفوق)
+GAP_ETFS = ["SPY", "QQQ"]
 
 
 def get_gap_universe():
@@ -949,6 +976,114 @@ def scan_gap_daily(tickers, already_sent):
     log(f"[{datetime.now():%H:%M}] الجاب اليومي: خلص الفحص - {hits} تنبيه جديد")
 
 
+# ================== (1د) سحب سيولة دعمين - يومي ==================
+def check_sweep(df):
+    """df = شموع يومية (آخر شمعة = اليوم). يرجع التفاصيل لو ذيل اليوم نزل تحت
+    SWEEP_MIN_SUPPORTS دعم أو أكثر وقفل فوقهم كلهم، وإلا None."""
+    df = df.dropna(subset=OHLC)
+    n = SWEEP_PIVOT_BARS
+    if len(df) < 2 * n + 3:
+        return None
+    df = df.iloc[-(SWEEP_LOOKBACK + 1):]
+    lo, cl = df["Low"].astype(float).values, df["Close"].astype(float).values
+    t = len(df) - 1
+    low_t, close_t = lo[t], cl[t]
+
+    # القيعان المؤكدة قبل اليوم (لازم 3 شموع بعدها قبل اليوم)
+    supports = []
+    for i in range(n, t - n):
+        win = lo[i - n:i + n + 1]
+        if lo[i] != win.min():
+            continue
+        lvl = lo[i]
+        # الدعم لسا صامد: ما قفلت ولا شمعة تحته بعد ما تكوّن (قبل اليوم)
+        if (cl[i + 1:t] < lvl).any():
+            continue
+        # ذيل اليوم تحته والإغلاق فوقه
+        if low_t < lvl < close_t:
+            supports.append((i, lvl))
+
+    # دمج الدعوم المتقاربة (نفس المستوى تقريباً)
+    supports.sort(key=lambda x: x[1])
+    merged = []
+    for i, lvl in supports:
+        if merged and (lvl - merged[-1][1]) / merged[-1][1] < SWEEP_MERGE_PCT:
+            continue
+        merged.append((i, lvl))
+    if len(merged) < SWEEP_MIN_SUPPORTS:
+        return None
+
+    vol_rel = None
+    if "Volume" in df:
+        v = df["Volume"].astype(float).values
+        avg = v[max(0, t - 20):t].mean() if t > 0 else 0
+        if avg > 0:
+            vol_rel = v[t] / avg
+    return {"supports": [(df.index[i], lvl) for i, lvl in sorted(merged, key=lambda x: -x[1])],
+            "low": low_t, "close": close_t, "open": float(df["Open"].iloc[-1]),
+            "high": float(df["High"].iloc[-1]), "vol_rel": vol_rel}
+
+
+def _sweep_message(t, r):
+    lines = [f"  • {lvl:.2f}  (قاع {pd.Timestamp(d):%Y-%m-%d})" for d, lvl in r["supports"]]
+    deepest = min(lvl for _, lvl in r["supports"])
+    msg = (f"💧 سحب سيولة {len(r['supports'])} دعوم - فريم يومي\n"
+           f"السهم: ${t}\n"
+           f"الدعوم اللي انسحبت:\n" + "\n".join(lines) + "\n"
+           f"أقل سعر اليوم: {r['low']:.2f}  ({(r['low'] / deepest - 1) * 100:.1f}% تحت أنزل دعم)\n"
+           f"الإغلاق: {r['close']:.2f}  (فوق الدعوم كلها ✅)\n"
+           f"شمعة اليوم: فتح {r['open']:.2f} | أعلى {r['high']:.2f} | "
+           f"{'🟢 خضراء' if r['close'] > r['open'] else '🔴 حمراء'}")
+    if r.get("vol_rel"):
+        msg += f"\nالحجم: {r['vol_rel']:.1f} ضعف متوسط 20 يوم"
+    return msg
+
+
+def scan_sweep_daily(tickers, already_sent):
+    """يفحص شمعة اليوم بعد الإغلاق لكل الأسهم."""
+    hits = 0
+    today = pd.Timestamp.now(tz=NY).date()
+    for t, df in download_batches(tickers, 200, period="6mo", interval="1d", prepost=False):
+        try:
+            if pd.Timestamp(df.index[-1]).date() != today:
+                continue                          # ما فيه شمعة اليوم
+            if float(df["Close"].iloc[-1]) < SWEEP_MIN_PRICE:
+                continue
+            r = check_sweep(df)
+            if not r:
+                continue
+            key = f"{t}-sweep-{today}"
+            if key in already_sent:
+                continue
+            already_sent.add(key)
+            _append_line(GAP_SENT_FILE, key)
+            hits += 1
+            send_telegram(_sweep_message(t, r), kind="sweep")
+        except Exception as e:
+            log(f"{t}: خطأ سحب السيولة - {e}")
+    free_memory()
+    log(f"[{datetime.now():%H:%M}] سحب سيولة الدعوم (يومي): خلص الفحص - {hits} تنبيه جديد")
+
+
+def sweep_self_test():
+    """يجرب كشف سحب السيولة على بيانات مصطنعة (بدون نت)."""
+    days = pd.bdate_range("2026-06-01", periods=40, tz=NY)
+    # سعر يتذبذب ويكوّن قاعين: 95 (يوم 10) و 97 (يوم 22)، واليوم ينزل لـ 94 ويقفل 99
+    lows = [100 - (i % 7) * 0.3 for i in range(40)]
+    lows[10], lows[22] = 95.0, 97.0
+    rows = []
+    for i, l in enumerate(lows):
+        rows.append((l + 1.0, l + 2.5, l, l + 1.5, 1_000_000))
+    rows[-1] = (98.0, 100.0, 94.0, 99.0, 3_000_000)   # شمعة السحب
+    df = pd.DataFrame(rows, index=days, columns=OHLC + ["Volume"])
+    r = check_sweep(df)
+    print(_sweep_message("TEST", r) if r else "ما فيه تنبيه ❌")
+    print()
+    df2 = df.copy()
+    df2.iloc[-1, 3] = 96.0                             # قفل فوق دعم واحد بس
+    print("قفل فوق دعم واحد بس:", "تنبيه ❌ (غلط)" if check_sweep(df2) else "ما فيه تنبيه ✅ (صح)")
+
+
 def gap_scan_due(now, last_run):
     """بعد إغلاق كل شمعة بدقيقة (وإعادة بعد 5 و16 دقيقة). يرجع وقت الجولة لو جا وقتها."""
     step = f"{GAP_BASE_MIN}min"          # كل ربع ساعة تقفل شمعة (15 دقيقة)
@@ -1280,6 +1415,17 @@ def nasdaq_above_cap(min_cap):
     MIN_MARKET_CAP = min_cap
     try:
         return set(get_nasdaq_midcap_plus())
+    finally:
+        MIN_MARKET_CAP = old
+
+
+def nasdaq_nyse_above_cap(min_cap):
+    """رموز ناسداك + نيويورك اللي قيمتها السوقية فوق الحد (نفس مصدر أسهم الجاب)."""
+    global MIN_MARKET_CAP
+    old = MIN_MARKET_CAP
+    MIN_MARKET_CAP = min_cap
+    try:
+        return set(get_gap_universe())
     finally:
         MIN_MARKET_CAP = old
 
@@ -2350,6 +2496,9 @@ def main():
     if "--newstest" in sys.argv:
         news_self_test()
         return
+    if "--sweeptest" in sys.argv:
+        sweep_self_test()
+        return
     once = "--once" in sys.argv
     _load_chats()
     discover_groups()
@@ -2361,6 +2510,7 @@ def main():
     gap_tickers, gap_day, gap_last = [], None, None
     gap15_tickers = []
     gap1d_day = None
+    sweep_day, sweep_tickers, sweep_tickers_day = None, [], None
     log("الجاب: " + ("24 ساعة (مع الجلسة الليلية من Tiingo)" if GAP_OVERNIGHT else
                      "الجلسة الممتدة 4 الفجر - 8 بالليل نيويورك (ياهو مجاناً)" if GAP_EXTENDED else
                      "الجلسة الرسمية بس"))
@@ -2393,8 +2543,9 @@ def main():
                                                    include_nyse=False)
                 gap_day = today
             # (أ) فريم 4 ساعات والساعة - أسهم الملياري دولار وسعر 10$ وفوق
+            # + صناديق SPY و QQQ (الساعة والأربع ساعات بس)
             if ENABLE_GAP_4H or ENABLE_GAP_1H:
-                scan_gap(gap_tickers, gap_sent)
+                scan_gap(gap_tickers + [e for e in GAP_ETFS if e not in gap_tickers], gap_sent)
             # (ج) فريم 15 دقيقة النظيف - نفس أسهم الساعة، الشموع الثلاث بدون فراغ، والجاب 2$ وفوق
             if ENABLE_GAP_15M_CLEAN:
                 scan_gap(gap_tickers, gap_sent,
@@ -2416,6 +2567,18 @@ def main():
                 gap_day = now_ny.date()
             scan_gap_daily(gap_tickers, gap_sent)
             gap1d_day = now_ny.date()
+
+        # (1د) سحب سيولة دعمين - يومي، مرة باليوم بعد الإغلاق
+        now_ny = pd.Timestamp.now(tz=NY)
+        if ENABLE_SWEEP and sweep_day != now_ny.date() and (
+                once or (now_ny.weekday() < 5 and (now_ny.hour, now_ny.minute) >= SWEEP_AFTER_NY)):
+            if not sweep_tickers or sweep_tickers_day != now_ny.date():
+                sweep_tickers = sorted(nasdaq_nyse_above_cap(SWEEP_MIN_MARKET_CAP))
+                sweep_tickers_day = now_ny.date()
+                log(f"سحب السيولة: {len(sweep_tickers)} سهم قيمتها السوقية "
+                    f"{SWEEP_MIN_MARKET_CAP / 1e9:.0f} مليار وفوق")
+            scan_sweep_daily(sweep_tickers, gap_sent)
+            sweep_day = now_ny.date()
 
         # (2) ماسح السيولة - وقت السوق الرسمي، كل 5 دقايق
         if ENABLE_FLOW and (regular_session_open() or once) \
