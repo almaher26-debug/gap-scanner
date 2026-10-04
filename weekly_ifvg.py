@@ -2,14 +2,16 @@
 """
 قائمة IFVG الأسبوعية — فريم ساعة — بوت سافونا
 -------------------------------------------
-النموذج (بالترتيب):
-  1) 🟢 شمعة خضراء فيها فير فاليو جاب (FVG): قاع الشمعة اللي بعدها فوق قمة الشمعة اللي قبلها
-  2) سحب سيولة: السعر ينزل ويكسر قاع سابق
-  3) IFVG: فجوة هابطة تكونت أثناء النزول، وشمعة تقفل فوقها كاملة،
-     والمنطقة هذي "مقابل" الشمعة الخضراء (نفس منطقتها السعرية)
+النموذج: فجوة هابطة (FVG) تنقلب بشمعة خضراء تقفل فوقها كاملة (IFVG)، في واحدة من الحالتين:
+  أ) منطقة سيولة:
+     1) 🟢 شمعة خضراء فيها فير فاليو جاب: قاع الشمعة اللي بعدها فوق قمة الشمعة اللي قبلها
+     2) سحب سيولة: السعر ينزل ويكسر قاع سابق
+     3) IFVG مقابل الشمعة الخضراء (نفس منطقتها السعرية)
+  ب) عند دعم: منطقة الـ IFVG على/فوق قاع سابق صامد (ما انكسر بإغلاق)
 
 الفلاتر:
-  - أسهم ناسداك + نيويورك + أمكس، قيمة سوقية مليار دولار وفوق (من سكرينر ناسداك)
+  - أسهم ناسداك + نيويورك + أمكس، قيمة سوقية 10 مليار دولار وفوق (من سكرينر ناسداك)
+  - شمعة الانعكاس لازم تكون خضراء (الإغلاق أعلى من الافتتاح)
   - فريم ساعة للجلسة الرسمية (9:30، 10:30 ... مثل تريدنج فيو)
 
 الجدول:
@@ -31,7 +33,7 @@ import requests
 
 # ------------------------------------------------------------------ الإعدادات
 FEED = os.getenv("WEEKLY_IFVG_FEED", "sip")
-MIN_MCAP = float(os.getenv("WEEKLY_IFVG_MIN_MCAP", "1000000000"))   # مليار دولار
+MIN_MCAP = float(os.getenv("WEEKLY_IFVG_MIN_MCAP", "10000000000"))  # 10 مليار دولار
 MIN_PRICE = 3.0                 # نتجاهل الأسهم تحت 3$
 HISTORY_DAYS = 21               # كم يوم نسحب (عشان القيعان والـ ATR)
 EXCHANGES = {"NASDAQ", "NYSE", "AMEX"}
@@ -41,6 +43,8 @@ MIN_GAP_ATR = 0.10              # أقل حجم للفجوة = 0.10 × ATR
 PIVOT_LEFT, PIVOT_RIGHT = 3, 2  # تأكيد القاع
 FVG_TO_INV_MAX = 60             # أقصى عدد شموع بين الشمعة الخضراء والانعكاس
 INV_MAX_AGE = 30                # أقصى عمر للفجوة الهابطة قبل ما تنقلب
+SUPPORT_LOOKBACK = 60           # نبحث عن الدعم في آخر 60 شمعة قبل الانعكاس
+SUPPORT_ATR = 0.5               # الدعم داخل المنطقة أو تحتها بمسافة ≤ 0.5 × ATR
 
 STATE_FILE = os.getenv("WEEKLY_IFVG_STATE", "/data/weekly_ifvg_state.json" if os.path.isdir("/data")
                        else "weekly_ifvg_state.json")
@@ -165,9 +169,44 @@ def _pivot_lows(bars):
     return piv
 
 
+def _liquidity(bars, atr, piv, f, inv, z_lo, z_hi):
+    """الحالة أ: شمعة خضراء فيها FVG قبل الفجوة الهابطة ومقابلها، وسحب سيولة بينها وبين الانعكاس.
+       يرجع مستوى القاع المكسور أو None."""
+    for k in range(f - 3, max(1, inv - FVG_TO_INV_MAX) - 1, -1):
+        a, g, c = bars[k - 2], bars[k - 1], bars[k]
+        if not (g["c"] > g["o"] and c["l"] > a["h"] and c["l"] - a["h"] >= MIN_GAP_ATR * atr[k]):
+            continue
+        if z_hi < g["l"] or z_lo > g["h"]:     # لازم تكون بنفس منطقة الشمعة الخضراء
+            continue
+        sweep = None
+        for s in range(k + 1, inv + 1):
+            cands = [p for p in piv if p[0] >= k - 10 and p[0] + PIVOT_RIGHT < s]
+            if cands and bars[s]["l"] < cands[-1][1]:
+                sweep = cands[-1][1]
+        if sweep is not None:
+            return sweep
+    return None
+
+
+def _support(bars, atr, piv, inv, z_lo, z_hi):
+    """الحالة ب: قاع سابق مؤكد قبل الانعكاس، داخل المنطقة أو تحتها بشوي، وما انكسر بإغلاق.
+       يرجع مستوى الدعم (الأقرب للمنطقة) أو None."""
+    best = None
+    for pi, pp in piv:
+        if pi + PIVOT_RIGHT >= inv or inv - pi > SUPPORT_LOOKBACK:
+            continue
+        if not (z_lo - SUPPORT_ATR * atr[inv] <= pp <= z_hi):
+            continue
+        if any(bars[j]["c"] < pp for j in range(pi + 1, inv + 1)):
+            continue
+        if best is None or pp > best:
+            best = pp
+    return best
+
+
 def detect(bars, win_start, win_end):
     """يرجع آخر حدث بالأسبوع أو None:
-       {inv_idx, green_idx, zone, sweep_level, close, t}"""
+       {inv_idx, zone, reason ('sweep'|'support'), level, close, t}"""
     n = len(bars)
     if n < 30:
         return None
@@ -175,43 +214,32 @@ def detect(bars, win_start, win_end):
     piv = _pivot_lows(bars)
     found = None
 
-    for k in range(2, n):
-        a, g, c = bars[k - 2], bars[k - 1], bars[k]
-        # (1) شمعة خضراء فيها FVG
-        if not (g["c"] > g["o"] and c["l"] > a["h"] and c["l"] - a["h"] >= MIN_GAP_ATR * atr[k]):
+    for f in range(2, n):
+        fa, fc = bars[f - 2], bars[f]
+        # فجوة هابطة
+        if not (fc["h"] < fa["l"] and fa["l"] - fc["h"] >= MIN_GAP_ATR * atr[f]):
             continue
-        g_lo, g_hi = g["l"], g["h"]
+        z_lo, z_hi = fc["h"], fa["l"]
+        # الانعكاس: أول شمعة تقفل فوق الفجوة كاملة، ولازم تكون خضراء
+        inv = next((j for j in range(f + 1, min(n, f + 1 + INV_MAX_AGE)) if bars[j]["c"] > z_hi), None)
+        if inv is None or bars[inv]["c"] <= bars[inv]["o"]:
+            continue
+        t = bars[inv]["t"]
+        if not (win_start <= t <= win_end):
+            continue
+        if found is not None and inv <= found["inv_idx"]:
+            continue
 
-        # (3) فجوة هابطة بعدها، مقابل الشمعة الخضراء، وتنقلب
-        for f in range(k + 3, min(n, k + FVG_TO_INV_MAX)):
-            fa, fc = bars[f - 2], bars[f]
-            if not (fc["h"] < fa["l"] and fa["l"] - fc["h"] >= MIN_GAP_ATR * atr[f]):
-                continue
-            z_lo, z_hi = fc["h"], fa["l"]
-            if z_hi < g_lo or z_lo > g_hi:       # لازم تكون بنفس منطقة الشمعة الخضراء
-                continue
-            inv = next((j for j in range(f + 1, min(n, f + 1 + INV_MAX_AGE)) if bars[j]["c"] > z_hi), None)
-            if inv is None or inv - k > FVG_TO_INV_MAX:
-                continue
+        level = _liquidity(bars, atr, piv, f, inv, z_lo, z_hi)
+        reason = "sweep"
+        if level is None:
+            level = _support(bars, atr, piv, inv, z_lo, z_hi)
+            reason = "support"
+        if level is None:
+            continue
 
-            # (2) سحب سيولة بين الشمعة الخضراء والانعكاس
-            sweep = None
-            for s in range(k + 1, inv + 1):
-                cands = [p for p in piv if p[0] >= k - 10 and p[0] + PIVOT_RIGHT < s]
-                if cands and bars[s]["l"] < cands[-1][1]:
-                    sweep = cands[-1][1]
-            if sweep is None:
-                continue
-
-            t = bars[inv]["t"]
-            if not (win_start <= t <= win_end):
-                continue
-            ev = {"inv_idx": inv, "green_idx": k - 1, "zone": (round(z_lo, 2), round(z_hi, 2)),
-                  "sweep_level": round(sweep, 2), "close": round(bars[inv]["c"], 2), "t": t,
-                  "green_t": g["t"]}
-            if found is None or inv > found["inv_idx"]:
-                found = ev
-            break
+        found = {"inv_idx": inv, "zone": (round(z_lo, 2), round(z_hi, 2)), "reason": reason,
+                 "level": round(level, 2), "close": round(bars[inv]["c"], 2), "t": t}
     return found
 
 
@@ -242,14 +270,16 @@ def build_messages(friday, rows):
     start, _ = week_window(friday)
     head = (f"📋 قائمة IFVG الأسبوعية — فريم ساعة\n"
             f"الأسبوع: {start:%m-%d} ← {friday:%m-%d}\n"
-            f"النموذج: 🟢 شمعة فيها FVG ← سحب سيولة ← IFVG مقابلها\n"
-            f"الأسهم (قيمة سوقية مليار وفوق): {len(rows)}\n")
+            f"النموذج: IFVG بشمعة خضراء — في منطقة سيولة أو عند دعم\n"
+            f"الأسهم (قيمة سوقية {_fmt_cap(MIN_MCAP)} وفوق): {len(rows)}\n")
     if not rows:
         return [head + "\nما فيه أسهم سوت النموذج هالأسبوع."]
     lines = []
     for i, (sym, cap, ev) in enumerate(rows, 1):
+        where = (f"سحب السيولة: {ev['level']}" if ev["reason"] == "sweep"
+                 else f"عند دعم: {ev['level']}")
         lines.append(f"{i}) 🟢 ${sym} ({_fmt_cap(cap)})\n"
-                     f"   IFVG: {ev['zone'][0]} - {ev['zone'][1]} | سحب السيولة: {ev['sweep_level']}\n"
+                     f"   IFVG: {ev['zone'][0]} - {ev['zone'][1]} | {where}\n"
                      f"   الإغلاق: {ev['close']} | {ev['t'].astimezone(RIYADH):%m-%d %H:%M} (توقيتك)")
     msgs, cur = [], head + "\n"
     for ln in lines:
@@ -268,7 +298,7 @@ def weekly_report(friday, send):
     if len(caps) < 50:
         raise RuntimeError(f"قائمة الأسهم من ناسداك رجعت {len(caps)} بس - بعيد المحاولة بعد شوي")
     syms = sorted(caps)
-    log(f"{len(syms)} سهم (مليار وفوق)، أسحب الشموع...")
+    log(f"{len(syms)} سهم ({_fmt_cap(MIN_MCAP)} وفوق)، أسحب الشموع...")
     data = fetch_hourly(syms, win_start - timedelta(days=HISTORY_DAYS - 5),
                         min(win_end, datetime.now(timezone.utc) - timedelta(minutes=16)))
     hits = {}
