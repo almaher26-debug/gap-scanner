@@ -181,6 +181,15 @@ GAP15_MIN_SIZE = 0.05            # الجاب على الأسهم الرخيصة
 ENABLE_GAP_15M_CLEAN = True      # True = شغال | False = مطفي
 GAP15C_MIN_SIZE = 2.00           # أقل حجم للجاب (دولار)
 GAP15C_OPEN_TOL = 0.01           # سماحية فرق الافتتاح عن إغلاق الشمعة اللي قبلها (سنت واحد)
+# ---- (1هـ) قائمة المراقبة الخاصة: IFVG على 15 دقيقة + ساعة + 4 ساعات، بدون شرط حجم الجاب ----
+#   أي جاب مهما كان صغير يطلع تنبيه. الأسهم هذي تنشال من الفحص العادي عشان ما يجيك تنبيهين
+ENABLE_WATCH = True              # True = شغال | False = مطفي
+WATCH_SYMBOLS = [
+    "TSLA", "AAPL", "NVDA", "MSFT", "INTC", "MSTR", "COIN", "SPCX", "CRCL", "OKTA",
+    "META", "AVGO", "NOW", "ORCL", "LLY", "CRWD", "GOOGL", "ADBE", "SNDK", "AMD",
+    "MU", "DELL", "QCOM", "RKLB", "CRDO",
+]
+WATCH_MIN_SIZE = 0               # حجم الجاب: 0 = بدون شرط
 GAP_REQUIRE_MIDDLE_COVER = True  # الشمعة الثانية لازم تغطي الجاب كامل (من قمة الثالثة لقاع الأولى)
 GAP_BASE_MIN = 15                # البيانات تنحمّل بشموع 15 دقيقة، وكل الفريمات تنبني منها
 GAP_SCAN_AFTER_CLOSE_MIN = (1, 5, 12)   # يفحص بعد الإغلاق بكذا دقيقة (الأولى هي الأساسية)
@@ -844,6 +853,17 @@ def _gap_message(t, res, frame):
     return msg
 
 
+def _watch_message(t, res, frame):
+    """رسالة قائمة المراقبة: IFVG بس، بدون صعودي/هبوطي."""
+    lo, hi, px = (round(float(res[k]), 2) for k in ("gap_bottom", "gap_top", "price"))
+    closed_at = pd.Timestamp(res["end"]).tz_convert(LOCAL_TZ)
+    return (f"📍 IFVG - {frame}\n"
+            f"السهم: ${t}\n"
+            f"IFVG: {lo} ← {hi}  (حجمه {hi - lo:.2f}$)\n"
+            f"سعر الإغلاق: {px}\n"
+            f"وقت الإغلاق: {closed_at:%H:%M} (توقيتك)")
+
+
 # ---------- الجلسة الليلية من Tiingo (8 بالليل - 4 الفجر نيويورك) ----------
 _boats_cache = {}   # الرمز -> (وقت الجلب، البيانات)
 
@@ -892,7 +912,7 @@ def load_boats(tickers, now):
 
 
 def scan_gap(tickers, already_sent, frames=None, min_price=None, max_price=None,
-             min_size=None, tag_label=""):
+             min_size=None, tag_label="", msg_fn=None):
     """frames = الفريمات اللي يفحصها. لو ما انعطت، يفحص 4 ساعات والساعة بس."""
     hits = 0
     now = pd.Timestamp.now(tz=NY)
@@ -937,7 +957,7 @@ def scan_gap(tickers, already_sent, frames=None, min_price=None, max_price=None,
                 already_sent.add(key)
                 _append_line(GAP_SENT_FILE, key)
                 hits += 1
-                send_telegram(_gap_message(t, res, label), kind="gap")
+                send_telegram((msg_fn or _gap_message)(t, res, label), kind="gap")
         except Exception as e:
             log(f"{t}: خطأ - {e}")
     free_memory()
@@ -2550,11 +2570,21 @@ def main():
                 gap_day = today
             # (أ) فريم 4 ساعات والساعة - أسهم الملياري دولار وسعر 10$ وفوق
             # + صناديق SPY و QQQ (الساعة والأربع ساعات بس)
+            watch = set(WATCH_SYMBOLS) if ENABLE_WATCH else set()
+            normal = [t for t in gap_tickers if t not in watch]
             if ENABLE_GAP_4H or ENABLE_GAP_1H:
-                scan_gap(gap_tickers + [e for e in GAP_ETFS if e not in gap_tickers], gap_sent)
+                scan_gap(normal + [e for e in GAP_ETFS if e not in normal], gap_sent)
+            # (هـ) قائمة المراقبة - IFVG على 15 دقيقة وساعة و4 ساعات، أي حجم جاب
+            if ENABLE_WATCH and WATCH_SYMBOLS:
+                scan_gap(WATCH_SYMBOLS, gap_sent,
+                         frames=[(True, 15, "w15", "فريم 15 دقيقة"),
+                                 (True, 60, "w1h", "فريم ساعة"),
+                                 (True, 240, "w4h", "فريم 4 ساعات")],
+                         min_price=0, min_size=WATCH_MIN_SIZE,
+                         tag_label=" (قائمة المراقبة)", msg_fn=_watch_message)
             # (ج) فريم 15 دقيقة النظيف - نفس أسهم الساعة، الشموع الثلاث بدون فراغ، والجاب 2$ وفوق
             if ENABLE_GAP_15M_CLEAN:
-                scan_gap(gap_tickers, gap_sent,
+                scan_gap(normal, gap_sent,
                          frames=[(True, 15, "15mc", "فريم 15 دقيقة (بدون فراغ)", check_pattern_clean)],
                          min_size=GAP15C_MIN_SIZE, tag_label=" (15 دقيقة بدون فراغ)")
             # (ب) فريم 15 دقيقة - أسهم من 1$ إلى 15$ بدون شرط القيمة السوقية
