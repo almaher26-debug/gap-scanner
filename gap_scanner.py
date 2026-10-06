@@ -832,10 +832,10 @@ def check_pattern_4h(c):
 def _gap_message(t, res, frame):
     lo, hi, px = (round(float(res[k]), 2) for k in ("gap_bottom", "gap_top", "price"))
     if res["side"] == "bull":
-        head = f"🟢 IFVG - {frame}"
+        head = f"🟢 Inversion Gap - {frame}"
         line = f"الشمعة قفلت فوق أعلى الـ IFVG ({hi})"
     else:
-        head = f"🔴 IFVG - {frame}"
+        head = f"🔴 Inversion Gap - {frame}"
         line = f"الشمعة قفلت تحت أسفل الـ IFVG ({lo})"
     closed_at = pd.Timestamp(res["end"]).tz_convert(LOCAL_TZ)
     msg = (f"{head}\n"
@@ -860,9 +860,9 @@ def _watch_message(t, res, frame):
     lo, hi, px = (round(float(res[k]), 2) for k in ("gap_bottom", "gap_top", "price"))
     closed_at = pd.Timestamp(res["end"]).tz_convert(LOCAL_TZ)
     if res["side"] == "bull":
-        head, side = "🟢 IFVG صعودي", f"الشمعة قفلت فوق أعلى الـ IFVG ({hi})"
+        head, side = "🟢 Inversion Gap", f"الشمعة قفلت فوق أعلى الـ IFVG ({hi})"
     else:
-        head, side = "🔴 IFVG هبوطي", f"الشمعة قفلت تحت أسفل الـ IFVG ({lo})"
+        head, side = "🔴 Inversion Gap", f"الشمعة قفلت تحت أسفل الـ IFVG ({lo})"
     return (f"{head} - {frame}\n"
             f"السهم: ${t}\n"
             f"IFVG: {lo} ← {hi}  (حجمه {hi - lo:.2f}$)\n"
