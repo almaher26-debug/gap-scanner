@@ -28,7 +28,8 @@
     فلتر: السهم سعره فوق 10$ ، وحجم الجاب (الفرق بين الحدين) 1$ أو أكثر (الساعة والأربع ساعات)
 
     ⭐ فريم 4 ساعات له شروط أشد (check_pattern_4h):
-      - الجاب 30 سنت أو أكثر (GAP4H_MIN_SIZE)
+      - بدون شرط حجم الجاب (GAP4H_MIN_SIZE = 0)
+      - أسهم ناسداك بس، قيمتها السوقية 2 مليار وفوق (GAP4H_NASDAQ_ONLY)
       - الشموع الثلاث متراصة هابطة وما بينها فراغ (ذيل كل وحدة يلمس اللي قبلها)
       - لونها ما يهم (GAP4H_REQUIRE_RED = True يخليها لازم حمراء)
       - الرابعة خضراء وتقفل فوق قاع الأولى (والهبوطي بالعكس)
@@ -166,7 +167,7 @@ GAP_MIN_STOCK_PRICE = 10         # يتجاهل الأسهم اللي سعرها
 GAP_MIN_SIZE = 1.00              # فريم الساعة والأربع ساعات: يتجاهل الجاب اللي حجمه أقل من 1$
 ENABLE_GAP_4H = True             # فريم 4 ساعات - ينبه عند إغلاق الشمعة
 # ---- شروط فريم 4 ساعات (خاصة فيه، الساعة واليومي ما تغيروا) ----
-GAP4H_MIN_SIZE = 0.30            # فريم 4 ساعات: الجاب 30 سنت أو أكثر (من قمة الثالثة لقاع الأولى)
+GAP4H_MIN_SIZE = 0               # فريم 4 ساعات: بدون شرط حجم الجاب
 GAP4H_REQUIRE_RED = False        # True = الشموع الثلاث لازم حمراء | False = لونها ما يهم
 GAP4H_REQUIRE_STEP = True        # الشموع الثلاث متراصة: كل وحدة أنزل من اللي قبلها (صعودي) وأعلى (هبوطي)
 GAP4H_REQUIRE_COLOR4 = True      # الرابعة خضراء (صعودي) أو حمراء (هبوطي)
@@ -646,6 +647,8 @@ def get_nasdaq_midcap_plus():
 GAP_EXCHANGES = ("nasdaq", "nyse")   # بورصات أسهم الجاب: احذف "nyse" لو تبي ناسداك بس
 # صناديق تنضاف لفحص الجاب على فريم الساعة والأربع ساعات بس (صعودي وهبوطي، الجاب 1$ وفوق)
 GAP_ETFS = ["SPY", "QQQ"]
+GAP4H_NASDAQ_ONLY = True   # فريم 4 ساعات: أسهم ناسداك بس (الساعة واليومي وسحب السيولة ما تغيروا)
+GAP_NASDAQ_SET = set()     # تتعبى لحالها من سكرينر ناسداك
 
 
 def get_gap_universe():
@@ -664,6 +667,8 @@ def get_gap_universe():
                 sym = str(row.get("symbol", "")).strip().upper()
                 if sym.isalpha() and len(sym) <= 5 and _to_number(row.get("marketCap")) >= MIN_MARKET_CAP:
                     out.add(sym)
+                    if ex == "nasdaq":
+                        GAP_NASDAQ_SET.add(sym)
                     n += 1
             log(f"الجاب: {ex.upper()} - {n} سهم")
         except Exception as e:
@@ -969,6 +974,9 @@ def scan_gap(tickers, already_sent, frames=None, min_price=None, max_price=None,
                 checker = fr[4] if len(fr) > 4 else check_pattern
                 if not enabled:
                     continue
+                if (tag == "4h" and GAP4H_NASDAQ_ONLY and GAP_NASDAQ_SET
+                        and t not in GAP_NASDAQ_SET and t not in GAP_ETFS):
+                    continue                    # فريم 4 ساعات: ناسداك بس
                 res = checker(only_closed(to_frame(df, minutes), last_bar, now))
                 # فريم 4 ساعات له حده الخاص (GAP4H_MIN_SIZE) ينفحص داخل check_pattern_4h
                 need = min(min_size, GAP4H_MIN_SIZE) if tag == "4h" else min_size
