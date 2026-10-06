@@ -111,7 +111,7 @@
     - اندماج/استحواذ، موافقة FDA، نتائج دراسة إيجابية، عقود وشراكات، نتائج قوية ورفع توقعات،
       ترقية محلل، إعادة شراء وتوزيعات
     - يتجاهل الخبر لو فيه كلمة سلبية (طرح أسهم، تجزئة عكسية، دعوى، تخفيض، إفلاس، إلغاء ...)
-    - الأسهم: سعرها من 1$ إلى 15$ وقيمتها السوقية أقل من 100 مليون دولار
+    - الأسهم: سعرها من 1$ إلى 15$ وقيمتها السوقية من 5 مليون إلى 100 مليون دولار
     - NEWS=0 يطفيه
     - python gap_scanner.py --newstest   # يجرب التصنيف (بدون نت)
 """
@@ -336,13 +336,14 @@ NEWS_MAX_SYMBOLS = 3                  # يتجاهل الخبر اللي فيه 
 NEWS_MIN_PRICE = 1                    # أقل سعر سهم (0 = بدون حد)
 NEWS_MAX_PRICE = 15                   # أعلى سعر سهم (0 = بدون حد)
 NEWS_MAX_MARKET_CAP = 100_000_000     # القيمة السوقية أقل من 100 مليون دولار (0 = بدون حد)
+NEWS_MIN_MARKET_CAP = 5_000_000       # القيمة السوقية 5 مليون دولار وفوق
 NEWS_EXCHANGES = ("nasdaq", "nyse", "amex")   # البورصات اللي تنجاب منها القيم السوقية
 NEWS_SENT_FILE = "news_sent.txt"      # عشان ما يعيد نفس الخبر لو البوت أعاد التشغيل
 
 # ---- المحتوى التعليمي ----
 ADD_EDUCATION = True             # يضيف شرح تعليمي قصير للنموذج تحت كل تنبيه
 ADD_DISCLAIMER = True            # يضيف سطر إخلاء المسؤولية تحت كل رسالة
-DISCLAIMER = "⚠️ محتوى تعليمي فقط، وليس توصية بيع أو شراء. القرار مسؤوليتك."
+DISCLAIMER = "⚠️ محتوى تعليمي فقط، وليس توصية بيع أو شراء."
 
 SENT_KEEP_LINES = 20000             # ملفات "المرسل" تنقص لآخر كذا سطر عشان ما تكبر للأبد
 UNIVERSE_BATCH = 200                # حجم دفعة التحميل لما يفلتر كل الأسهم (أصغر = ذاكرة أقل)
@@ -518,6 +519,7 @@ EDUCATION = {
 
 
 def send_telegram(text, kind=None):
+    text = "للمتابعة\n" + text
     if ADD_EDUCATION and kind in EDUCATION:
         text += "\n\n" + EDUCATION[kind]
     if ADD_DISCLAIMER:
@@ -2398,7 +2400,7 @@ def news_caps():
             for row in rows:
                 sym = str(row.get("symbol", "")).strip().upper()
                 cap = _to_number(row.get("marketCap"))
-                if sym.isalpha() and len(sym) <= 5 and 0 < cap < NEWS_MAX_MARKET_CAP:
+                if sym.isalpha() and len(sym) <= 5 and max(0, NEWS_MIN_MARKET_CAP) < cap < NEWS_MAX_MARKET_CAP:
                     caps[sym] = cap
         except Exception as e:
             log(f"الأخبار: ما قدرت أجيب القيم السوقية من {ex.upper()} -", e)
