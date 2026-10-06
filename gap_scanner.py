@@ -28,7 +28,7 @@
     فلتر: السهم سعره فوق 10$ ، وحجم الجاب (الفرق بين الحدين) 1$ أو أكثر (الساعة والأربع ساعات)
 
     ⭐ فريم 4 ساعات له شروط أشد (check_pattern_4h):
-      - الجاب 1$ أو أكثر (GAP4H_MIN_SIZE)
+      - الجاب 30 سنت أو أكثر (GAP4H_MIN_SIZE)
       - الشموع الثلاث متراصة هابطة وما بينها فراغ (ذيل كل وحدة يلمس اللي قبلها)
       - لونها ما يهم (GAP4H_REQUIRE_RED = True يخليها لازم حمراء)
       - الرابعة خضراء وتقفل فوق قاع الأولى (والهبوطي بالعكس)
@@ -159,7 +159,7 @@ GAP_MIN_STOCK_PRICE = 10         # يتجاهل الأسهم اللي سعرها
 GAP_MIN_SIZE = 1.00              # فريم الساعة والأربع ساعات: يتجاهل الجاب اللي حجمه أقل من 1$
 ENABLE_GAP_4H = True             # فريم 4 ساعات - ينبه عند إغلاق الشمعة
 # ---- شروط فريم 4 ساعات (خاصة فيه، الساعة واليومي ما تغيروا) ----
-GAP4H_MIN_SIZE = 1.00            # فريم 4 ساعات: الجاب 1$ أو أكثر (من قمة الثالثة لقاع الأولى)
+GAP4H_MIN_SIZE = 0.30            # فريم 4 ساعات: الجاب 30 سنت أو أكثر (من قمة الثالثة لقاع الأولى)
 GAP4H_REQUIRE_RED = False        # True = الشموع الثلاث لازم حمراء | False = لونها ما يهم
 GAP4H_REQUIRE_STEP = True        # الشموع الثلاث متراصة: كل وحدة أنزل من اللي قبلها (صعودي) وأعلى (هبوطي)
 GAP4H_REQUIRE_COLOR4 = True      # الرابعة خضراء (صعودي) أو حمراء (هبوطي)
@@ -952,7 +952,9 @@ def scan_gap(tickers, already_sent, frames=None, min_price=None, max_price=None,
                 if not enabled:
                     continue
                 res = checker(only_closed(to_frame(df, minutes), last_bar, now))
-                if not res or round(res["gap_top"] - res["gap_bottom"], 2) < min_size:
+                # فريم 4 ساعات له حده الخاص (GAP4H_MIN_SIZE) ينفحص داخل check_pattern_4h
+                need = min(min_size, GAP4H_MIN_SIZE) if tag == "4h" else min_size
+                if not res or round(res["gap_top"] - res["gap_bottom"], 2) < need:
                     continue
                 if (now - res["end"]).total_seconds() / 60 > GAP_MAX_ALERT_DELAY_MIN:
                     continue                    # شمعة قديمة، مو إغلاق جديد
