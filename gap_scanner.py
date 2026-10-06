@@ -50,6 +50,13 @@
     - يفحص مرة باليوم بعد الإغلاق (4:20 العصر نيويورك = 11:20 بالليل بتوقيتك)
     - ENABLE_SWEEP = False يطفيه | python gap_scanner.py --sweeptest يجربه بدون نت
 
+(1و) سحب سيولة دعمين - الفريم الأسبوعي
+    - الأسهم: ناسداك + نيويورك اللي قيمتها السوقية 10 مليار دولار وفوق
+    - الدعم = قاع أسبوعي سابق (أنزل من شمعتين قبله وشمعتين بعده) خلال آخر سنة، ولسا صامد
+    - الشرط: شمعة الأسبوع ذيلها نزل تحت دعمين أو أكثر، وقفلت فوقهم كلهم
+    - يفحص كل جمعة بعد الإغلاق (4:20 العصر نيويورك = 11:20 بالليل بتوقيتك)
+    - ENABLE_WSWEEP = False يطفيه | python gap_scanner.py --wsweeptest يجربه بدون نت
+
 (2) ماسح السيولة (البني ستوك) - كل 5 دقايق وقت السوق الرسمي
     - أسهم ناسداك من 1$ إلى 5$
     - الشروط كلها مع بعض:
@@ -206,6 +213,15 @@ SWEEP_LOOKBACK = 60              # يدور على الدعوم خلال آخر 
 SWEEP_MERGE_PCT = 0.003          # دعمين الفرق بينهم أقل من 0.3% = نفس الدعم (ما ينحسبون اثنين)
 SWEEP_MIN_PRICE = 5              # يتجاهل الأسهم اللي سعرها أقل من كذا
 SWEEP_AFTER_NY = (16, 20)        # يفحص بعد الإغلاق: 4:20 العصر نيويورك = 11:20 بالليل بتوقيتك
+
+# ---- (1و) سحب سيولة دعمين - الفريم الأسبوعي ----
+ENABLE_WSWEEP = True             # True = شغال | False = مطفي
+WSWEEP_MIN_MARKET_CAP = 10_000_000_000   # القيمة السوقية 10 مليار دولار وفوق (ناسداك + نيويورك)
+WSWEEP_PIVOT_BARS = 2            # الدعم الأسبوعي = قاع أنزل من شمعتين قبله وشمعتين بعده
+WSWEEP_LOOKBACK = 52             # يدور على الدعوم خلال آخر 52 أسبوع (سنة)
+WSWEEP_WEEKDAY = 4               # الجمعة
+WSWEEP_AFTER_NY = (16, 20)       # بعد الإغلاق: 4:20 العصر نيويورك = 11:20 بالليل بتوقيتك
+WSWEEP_WEEK_FILE = "wsweep_week.txt"   # عشان ما يرسل مرتين بنفس الأسبوع لو البوت أعاد التشغيل
 
 USE_PRICE_FILTER = False         # True = يطبق فلتر السعر تحت مع فلتر القيمة السوقية
 MIN_PRICE = 50
@@ -1006,14 +1022,15 @@ def scan_gap_daily(tickers, already_sent):
 
 
 # ================== (1د) سحب سيولة دعمين - يومي ==================
-def check_sweep(df):
-    """df = شموع يومية (آخر شمعة = اليوم). يرجع التفاصيل لو ذيل اليوم نزل تحت
+def check_sweep(df, pivot_bars=None, lookback=None):
+    """df = شموع يومية أو أسبوعية (آخر شمعة = الحالية). يرجع التفاصيل لو ذيلها نزل تحت
     SWEEP_MIN_SUPPORTS دعم أو أكثر وقفل فوقهم كلهم، وإلا None."""
     df = df.dropna(subset=OHLC)
-    n = SWEEP_PIVOT_BARS
+    n = SWEEP_PIVOT_BARS if pivot_bars is None else pivot_bars
+    lookback = SWEEP_LOOKBACK if lookback is None else lookback
     if len(df) < 2 * n + 3:
         return None
-    df = df.iloc[-(SWEEP_LOOKBACK + 1):]
+    df = df.iloc[-(lookback + 1):]
     lo, cl = df["Low"].astype(float).values, df["Close"].astype(float).values
     t = len(df) - 1
     low_t, close_t = lo[t], cl[t]
@@ -1053,18 +1070,18 @@ def check_sweep(df):
             "high": float(df["High"].iloc[-1]), "vol_rel": vol_rel}
 
 
-def _sweep_message(t, r):
+def _sweep_message(t, r, frame="فريم يومي", bar="اليوم", unit="يوم"):
     lines = [f"  • {lvl:.2f}  (قاع {pd.Timestamp(d):%Y-%m-%d})" for d, lvl in r["supports"]]
     deepest = min(lvl for _, lvl in r["supports"])
-    msg = (f"💧 سحب سيولة {len(r['supports'])} دعوم - فريم يومي\n"
+    msg = (f"💧 سحب سيولة {len(r['supports'])} دعوم - {frame}\n"
            f"السهم: ${t}\n"
            f"الدعوم اللي انسحبت:\n" + "\n".join(lines) + "\n"
-           f"أقل سعر اليوم: {r['low']:.2f}  ({(r['low'] / deepest - 1) * 100:.1f}% تحت أنزل دعم)\n"
+           f"أقل سعر {bar}: {r['low']:.2f}  ({(r['low'] / deepest - 1) * 100:.1f}% تحت أنزل دعم)\n"
            f"الإغلاق: {r['close']:.2f}  (فوق الدعوم كلها ✅)\n"
-           f"شمعة اليوم: فتح {r['open']:.2f} | أعلى {r['high']:.2f} | "
+           f"شمعة {bar}: فتح {r['open']:.2f} | أعلى {r['high']:.2f} | "
            f"{'🟢 خضراء' if r['close'] > r['open'] else '🔴 حمراء'}")
     if r.get("vol_rel"):
-        msg += f"\nالحجم: {r['vol_rel']:.1f} ضعف متوسط 20 يوم"
+        msg += f"\nالحجم: {r['vol_rel']:.1f} ضعف متوسط 20 {unit}"
     return msg
 
 
@@ -1111,6 +1128,47 @@ def sweep_self_test():
     df2 = df.copy()
     df2.iloc[-1, 3] = 96.0                             # قفل فوق دعم واحد بس
     print("قفل فوق دعم واحد بس:", "تنبيه ❌ (غلط)" if check_sweep(df2) else "ما فيه تنبيه ✅ (صح)")
+
+
+def scan_sweep_weekly(tickers, already_sent):
+    """(1و) يفحص شمعة الأسبوع (بعد إغلاق الجمعة): سحب دعمين أسبوعيين والإغلاق فوقهم."""
+    hits = 0
+    now = pd.Timestamp.now(tz=NY)
+    week_start = (now - pd.Timedelta(days=now.weekday())).date()     # اثنين هالأسبوع
+    iso = now.isocalendar()
+    wk = f"{iso[0]}-W{iso[1]:02d}"
+    for t, df in download_batches(tickers, 200, period="2y", interval="1wk", prepost=False):
+        try:
+            df = df.dropna(subset=OHLC)
+            df = df[~df.index.duplicated(keep="last")]
+            if df.empty or pd.Timestamp(df.index[-1]).date() < week_start:
+                continue                          # ما فيه شمعة هالأسبوع
+            r = check_sweep(df, WSWEEP_PIVOT_BARS, WSWEEP_LOOKBACK)
+            if not r:
+                continue
+            key = f"{t}-wsweep-{wk}"
+            if key in already_sent:
+                continue
+            already_sent.add(key)
+            _append_line(GAP_SENT_FILE, key)
+            hits += 1
+            send_telegram(_sweep_message(t, r, "فريم أسبوعي", "الأسبوع", "أسبوع"), kind="sweep")
+        except Exception as e:
+            log(f"{t}: خطأ سحب السيولة الأسبوعي - {e}")
+    free_memory()
+    log(f"[{datetime.now():%H:%M}] سحب سيولة الدعوم (أسبوعي): خلص الفحص - {hits} تنبيه جديد")
+
+
+def wsweep_self_test():
+    """يجرب السحب الأسبوعي على بيانات مصطنعة (بدون نت)."""
+    weeks = pd.date_range("2025-10-06", periods=40, freq="W-MON", tz=NY)
+    lows = [100 - (i % 5) * 0.4 for i in range(40)]
+    lows[12], lows[25] = 95.0, 97.0
+    rows = [(l + 1.0, l + 3.0, l, l + 2.0, 5_000_000) for l in lows]
+    rows[-1] = (98.0, 101.0, 94.0, 99.5, 12_000_000)
+    df = pd.DataFrame(rows, index=weeks, columns=OHLC + ["Volume"])
+    r = check_sweep(df, WSWEEP_PIVOT_BARS, WSWEEP_LOOKBACK)
+    print(_sweep_message("TEST", r, "فريم أسبوعي", "الأسبوع", "أسبوع") if r else "ما فيه تنبيه ❌")
 
 
 def gap_scan_due(now, last_run):
@@ -2525,6 +2583,9 @@ def main():
     if "--newstest" in sys.argv:
         news_self_test()
         return
+    if "--wsweeptest" in sys.argv:
+        wsweep_self_test()
+        return
     if "--sweeptest" in sys.argv:
         sweep_self_test()
         return
@@ -2546,6 +2607,11 @@ def main():
     gap15_tickers = []
     gap1d_day = None
     sweep_day, sweep_tickers, sweep_tickers_day = None, [], None
+    try:
+        with open(WSWEEP_WEEK_FILE, encoding="utf-8") as f:
+            wsweep_week = f.read().strip() or None
+    except FileNotFoundError:
+        wsweep_week = None
     log("الجاب: " + ("24 ساعة (مع الجلسة الليلية من Tiingo)" if GAP_OVERNIGHT else
                      "الجلسة الممتدة 4 الفجر - 8 بالليل نيويورك (ياهو مجاناً)" if GAP_EXTENDED else
                      "الجلسة الرسمية بس"))
@@ -2624,6 +2690,24 @@ def main():
                     f"{SWEEP_MIN_MARKET_CAP / 1e9:.0f} مليار وفوق")
             scan_sweep_daily(sweep_tickers, gap_sent)
             sweep_day = now_ny.date()
+
+        # (1و) سحب سيولة دعمين - أسبوعي، كل جمعة بعد الإغلاق
+        now_ny = pd.Timestamp.now(tz=NY)
+        iso = now_ny.isocalendar()
+        wk = f"{iso[0]}-W{iso[1]:02d}"
+        if ENABLE_WSWEEP and wsweep_week != wk and (
+                once or (now_ny.weekday() == WSWEEP_WEEKDAY
+                         and (now_ny.hour, now_ny.minute) >= WSWEEP_AFTER_NY)):
+            wtick = sorted(nasdaq_nyse_above_cap(WSWEEP_MIN_MARKET_CAP))
+            log(f"سحب السيولة الأسبوعي: {len(wtick)} سهم قيمتها السوقية "
+                f"{WSWEEP_MIN_MARKET_CAP / 1e9:.0f} مليار وفوق")
+            scan_sweep_weekly(wtick, gap_sent)
+            wsweep_week = wk
+            try:
+                with open(WSWEEP_WEEK_FILE, "w", encoding="utf-8") as f:
+                    f.write(wk + "\n")
+            except Exception:
+                pass
 
         # (2) ماسح السيولة - وقت السوق الرسمي، كل 5 دقايق
         if ENABLE_FLOW and (regular_session_open() or once) \
