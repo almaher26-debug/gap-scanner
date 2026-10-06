@@ -101,10 +101,10 @@
 
 (6ب) خوارزميات الأسهم الكبيرة - صفقات متتالية بنفس الحجم - من ألباكا
     - الأسهم: أسهم ناسداك اللي قيمتها السوقية مليار دولار وفوق (أنشط 200)
-    - صفقات حجمها 10 أسهم وأقل: تنبيه لما تجي 1000 صفقة أو أكثر ورا بعض بنفس الحجم بالضبط،
+    - صفقات حجمها 10 أسهم وأقل: تنبيه لما تجي 600 صفقة أو أكثر ورا بعض بنفس الحجم بالضبط،
       وما بينها ولا صفقة بحجم ثاني، والفاصل بين كل صفقتين 5 ثواني أو أقل
     - يوضح كم صفقة منها نزلت بنفس اللحظة، والمدة، والقيمة، وتقدير شراء/بيع
-    - لو السلسلة كملت يرسل تحديث عند 2000 ثم 4000 ...
+    - لو السلسلة كملت يرسل تحديث عند 1200 ثم 2400 ...
     - نفس مفاتيح ألباكا | ALGO_BIG=0 يطفيه | ALGO_SMALL=0 يطفي القسم (6)
 
 (7) الأخبار الإيجابية - من ألباكا (نفس المفاتيح) - 24 ساعة، كل دقيقة
@@ -303,11 +303,11 @@ ALGO_PENNY_MAX_SYMBOLS = 300          # الأنشط أول
 
 # ---- (6ب) خوارزميات الأسهم الكبيرة: صفقات متتالية بنفس الحجم ----
 # أسهم ناسداك اللي قيمتها السوقية مليار دولار وفوق
-# ينبه لما تجي 1000 صفقة أو أكثر ورا بعض بنفس الحجم بالضبط، وما بينها ولا صفقة بحجم ثاني
+# ينبه لما تجي 600 صفقة أو أكثر ورا بعض بنفس الحجم بالضبط، وما بينها ولا صفقة بحجم ثاني
 # الأحجام الصغيرة بس: 10 أسهم وأقل (1، 1، 1 ... أو 5، 5، 5 ...)
 ALGO_BIG = os.environ.get("ALGO_BIG", "1") != "0"      # 0 = يطفي هالقسم
 ALGO_BIG_MIN_MARKET_CAP = 1_000_000_000   # مليار دولار وفوق
-ALGO_BIG_MIN_STREAK = 1000                # أقل عدد صفقات متتالية بنفس الحجم
+ALGO_BIG_MIN_STREAK = 600                 # أقل عدد صفقات متتالية بنفس الحجم
 ALGO_BIG_MAX_SIZE = 10                    # حجم الصفقة 10 أسهم أو أقل
 ALGO_BIG_MAX_GAP_SEC = 5                  # لو مر أكثر من كذا ثانية بين صفقتين، تنقطع السلسلة
 ALGO_BIG_MAX_SYMBOLS = int(os.environ.get("ALGO_BIG_MAX_SYMBOLS", "200"))   # الأنشط أول
@@ -2032,7 +2032,7 @@ def _ts_sec(t):
 class StreakDetector:
     """يعد الصفقات المتتالية بنفس الحجم لكل سهم: أي صفقة بحجم مختلف (أو فاصل أكثر من
     ALGO_BIG_MAX_GAP_SEC ثانية) تقطع السلسلة وتبدأ وحدة جديدة.
-    ينبه عند ALGO_BIG_MIN_STREAK، ثم كل ما تتضاعف (1000، 2000، 4000 ...).
+    ينبه عند ALGO_BIG_MIN_STREAK، ثم كل ما تتضاعف (600، 1200، 2400 ...).
     same_price=True = لازم نفس السعر بعد (الآيس بيرغ)."""
     def __init__(self, min_streak=None, min_size=0, max_size=None, max_gap=None,
                  realert_min=None, same_price=False):
@@ -2244,14 +2244,14 @@ def algo_self_test():
         if a: big.append(a)
     assert det.add("BIGCAP", {"i": 1101, "s": 1, "p": 180, "t": "2026-01-02T15:00:00.000000000Z"}) is None  # مكرر
     det.add("BIGCAP", {"i": 9999, "s": 37, "p": 179.9, "t": "2026-01-02T15:00:10Z"})   # حجم ثاني = تنقطع
-    for k in range(999):          # 999 ما توصل الحد
+    for k in range(599):          # 599 ما توصل الحد
         a = det.add("BIGCAP", {"i": 10000 + k, "s": 1, "p": 179.9, "t": t0 + pd.Timedelta(seconds=11 + k * 0.01)})
         assert a is None
-    assert [a["count"] for a in big] == [1000], [a["count"] for a in big]
+    assert [a["count"] for a in big] == [600], [a["count"] for a in big]
     for k in range(1300):         # حجم 100 (أكبر من 10) = يتجاهل
         assert det.add("BIG100", {"i": k + 1, "s": 100, "p": 50, "t": t0 + pd.Timedelta(milliseconds=k * 10)}) is None
     assert big[0]["max_same"] == 3
-    print("ALGO BIG TEST OK: 1000 consecutive same-size trades")
+    print("ALGO BIG TEST OK: 600 consecutive same-size trades")
 
     # (6د) آيس بيرغ: 600 صفقة × سهم واحد على 228.15 ورا بعض (بعد صفقة أقل سعر = شراء)
     ice = StreakDetector(ALGO_ICE_MIN_STREAK, ALGO_ICE_MIN_SIZE, ALGO_ICE_MAX_SIZE,
