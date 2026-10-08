@@ -83,7 +83,7 @@
     - وتنبيه لو سهم جديد منها سعره 5$ أو أقل والشورت عنده صفر
 
 التشغيل:
-  pip install yfinance pandas requests lxml
+  pip install yfinance pandas requests lxml pillow
   python gap_scanner.py          # يشتغل باستمرار
   python gap_scanner.py --once   # فحص مرة وحدة بس
   python gap_scanner.py --test   # يجرب نموذج الجاب على مثال NVDA (بدون نت)
@@ -122,6 +122,18 @@
     - الأسهم: سعرها من 1$ إلى 15$ وقيمتها السوقية من 5 مليون إلى 100 مليون دولار
     - NEWS=0 يطفيه
     - python gap_scanner.py --newstest   # يجرب التصنيف (بدون نت)
+
+(8) صياد العقود THE LEGENDARY 🗽⚡️ - داخل هذا الملف (قسم 8 تحت قبل main)
+    - يشتغل في Thread لحاله وقت السوق الرسمي (9:30 - 4 نيويورك)
+    - 20 سهم: AXON COIN T CRWD SWKS MU HOOD TSLA META AAPL
+              SPCX HPE VST MET INTC AMD AVGO PLTR NFLX ORCL
+      (تغيرها بمتغير LEGENDARY_SYMBOLS في Railway)
+    - يتوقع منطقة الارتداد قبل ما يوصلها السعر: طالع لمنطقة رفض = PUT، نازل لمنطقة دعم = CALL
+    - يختار العقد (السترايك + الانتهاء)، يرسل التنبيه مع صورة، ويتابع العقد لين يوصل الهدف
+    - البيانات: Polygon (POLYGON_API_KEY) + Tradier اختياري للعقود (TRADIER_API_TOKEN)
+    - التنبيهات تروح لنفس قروبات السكانر. LEGENDARY_OWN_TG=1 يرجعها لقناة البوت الأصلية
+    - pip install pillow (للصورة بس؛ بدونه يرسل التنبيه بدون صورة)
+    - LEGENDARY=0 يطفيه | python gap_scanner.py --optionstest يجرب الإرسال والتشغيل
 """
 
 import gc
@@ -132,10 +144,20 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+import csv
+import math
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from typing import Optional, Dict, List, Tuple
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
+
+try:   # لصورة عقد صياد العقود (اختياري)
+    from PIL import Image, ImageDraw, ImageFont
+except Exception:
+    Image = ImageDraw = ImageFont = None
 
 # ================== الإعدادات ==================
 # على السيرفر تنحط كمتغيرات (Variables) عشان ما تنكشف في جيتهب
@@ -357,6 +379,10 @@ NEWS_MIN_MARKET_CAP = 5_000_000       # القيمة السوقية 5 مليون
 NEWS_EXCHANGES = ("nasdaq", "nyse", "amex")   # البورصات اللي تنجاب منها القيم السوقية
 NEWS_SENT_FILE = "news_sent.txt"      # عشان ما يعيد نفس الخبر لو البوت أعاد التشغيل
 
+# ---- (8) صياد العقود THE LEGENDARY - الكود كامل في قسم (8) تحت ----
+ENABLE_LEGENDARY = os.environ.get("LEGENDARY", "1") != "0"     # 0 = يطفي صياد العقود
+LEGENDARY_OWN_TG = os.environ.get("LEGENDARY_OWN_TG", "0") == "1"   # 1 = يرسل لقناة البوت الأصلية بدل قروبات السكانر
+
 # ---- المحتوى التعليمي ----
 ADD_EDUCATION = True             # يضيف شرح تعليمي قصير للنموذج تحت كل تنبيه
 ADD_DISCLAIMER = True            # يضيف سطر إخلاء المسؤولية تحت كل رسالة
@@ -546,6 +572,55 @@ def send_telegram(text, kind=None):
         return  # ما حطيت التوكن، يطبع بالشاشة بس
     for chat_id in list(CHATS):
         _send_one(chat_id, text)
+
+
+def send_options_alert(message, image_path=None):
+    """إرسال تنبيهات صياد العقود لنفس قروبات السكانر: النص بتنسيق Markdown + صورة العقد."""
+    text = message.strip()
+    if ADD_DISCLAIMER:
+        text += "\n\n" + DISCLAIMER
+    log(text)
+    if "ضع_" in TELEGRAM_TOKEN:
+        return  # ما حطيت التوكن، يطبع بالشاشة بس
+    for chat_id in list(CHATS):
+        try:
+            r = requests.post(f"{TG_API}/sendMessage",
+                              data={"chat_id": chat_id, "text": text, "parse_mode": "Markdown",
+                                    "disable_web_page_preview": True}, timeout=10).json()
+            if not r.get("ok"):          # لو التنسيق خرب، يرسله نص عادي
+                _send_one(chat_id, text.replace("*", "").replace("`", ""))
+            if image_path and os.path.exists(image_path):
+                with open(image_path, "rb") as ph:
+                    requests.post(f"{TG_API}/sendPhoto", data={"chat_id": chat_id},
+                                  files={"photo": ph}, timeout=15)
+        except Exception as e:
+            log(f"صياد العقود: فشل الإرسال لـ {chat_id}:", e)
+
+
+def start_legendary_thread():
+    global EXTERNAL_SENDER
+    if not ENABLE_LEGENDARY:
+        log("صياد العقود: مطفي (LEGENDARY=0)")
+        return
+    send = None if LEGENDARY_OWN_TG else send_options_alert
+    threading.Thread(target=run_forever, kwargs={"send": send},
+                     daemon=True, name="legendary").start()
+    log(f"صياد العقود: شغال على {len(TARGET_ASSETS)} سهم: {' '.join(TARGET_ASSETS)}"
+        + ("" if Image is not None else "  (بدون صور: pillow مو منزّل)"))
+
+
+def legendary_self_test():
+    """يجرب صياد العقود بدون ما يرسل تيليجرام: الصورة وصياغة الرسالة ومسار الإرسال."""
+    global EXTERNAL_SENDER
+    sent = []
+    EXTERNAL_SENDER = lambda m, img=None: sent.append((m, img))
+    img = generate_card_image("TSLA", "CALL", 250, "2026-10-16", mode="PRE-HUNT")
+    send_telegram_alert("🗽⚡️ *تجربة صياد العقود*", img)
+    EXTERNAL_SENDER = None
+    log(f"الأسهم ({len(TARGET_ASSETS)}): {' '.join(TARGET_ASSETS)}")
+    log(f"الصورة: {img or 'بدون (pillow مو منزّل)'} | الرسالة وصلت لدالة السكانر: {bool(sent)}")
+    log("✅ صياد العقود جاهز" if sent else "❌ فيه مشكلة")
+    return bool(sent)
 
 
 def _session():
@@ -2581,6 +2656,1878 @@ def news_self_test():
                         classify_news(cases[0][0]), ["ACME"], {"ACME": 4.12}, {"ACME": 62_500_000}))
 
 
+# ======================================================================
+# (8) صياد العقود THE LEGENDARY 🗽⚡️ (كان ملف bot 2 / legendary_options.py)
+# ======================================================================
+# THE LEGENDARY 🗽⚡️
+# Adaptive Pre-Hunt Options Explosion Hunter V2 — No Alert Cap
+#
+# Design:
+# - Stocks only; SPX intentionally excluded.
+# - 30-stock universe.
+# - The core goal is EARLY prediction of a future decision/turning zone,
+#   not chasing a move after it has already started.
+# - Rising into a future rejection/absorption zone -> hunt PUT early.
+# - Falling into a future rejection/absorption zone -> hunt CALL early.
+# - Early alert is a WATCH, not an entry confirmation.
+# - 15m = structural map, 5m = approach, 1m = trigger only for near-zone candidates.
+# - Fib + volume profile + prior session levels + price/volume behaviour are fused.
+# - Rejection, continuation and absorption are measured as behaviour, not single candles.
+# - Strike + expiry are selected together; premium < $3 is a preference, not a filter.
+# - Potential/reachability are scenario estimates, not guarantees.
+# - Target reachability is separate from signal/entry timing.
+# - +100% potential is the minimum contract scenario; +1000%+ is exceptional 🏌🏼‍♂️.
+# - Central adaptive API limiter/cache/backoff. Options are queried only for qualified candidates.
+# - Lower-timeframe requests are staged; 1m is reserved for near-trigger candidates.
+# - A short stale-bar fallback protects structural scanning during temporary 429s.
+# - One centralized contract monitor loop avoids one thread/request stream per alert.
+# - Every alert is logged; there is no alert-count cap.
+
+# Connection settings from the supplied bot source.
+# Keep these private.
+# ⚠️ الأفضل تحطها كمتغيرات في Railway (POLYGON_API_KEY, LEGENDARY_TG_TOKEN, LEGENDARY_TG_CHAT)
+POLYGON_API_KEY = os.getenv("POLYGON_API_KEY", "SjxOZh1bBhcXuLjv6fSX2KQbhgnLWRQT").strip()
+TELEGRAM_BOT_TOKEN = os.getenv("LEGENDARY_TG_TOKEN", "8517634702:AAFIQ9ntnSQQlnchs16-GSYsEnzmBvurosg").strip()
+LEGENDARY_TG_CHAT_ID = os.getenv("LEGENDARY_TG_CHAT", "@marbot92").strip()
+
+# لما يشتغل داخل السكانر، السكانر يحط هنا دالة الإرسال حقته (نفس قروبات السكانر)
+# الدالة تاخذ (message, image_path). None = يرسل بتوكن وقناة البوت الأصلية فوق
+EXTERNAL_SENDER = None
+
+# Optional live options provider.
+# Stock/structure data remains on Polygon. When a Tradier production token is
+# configured, options discovery/monitoring can use Tradier first, with Polygon
+# retained as a fallback. No hunt/scoring/alert logic is changed.
+TRADIER_API_TOKEN = os.getenv("TRADIER_API_TOKEN", "").strip()
+TRADIER_BASE_URL = os.getenv("TRADIER_BASE_URL", "https://api.tradier.com/v1").rstrip("/")
+TRADIER_MIN_INTERVAL = float(os.getenv("TRADIER_MIN_INTERVAL", "0.20"))
+TRADIER_EXPIRATIONS_CACHE_SECONDS = int(os.getenv("TRADIER_EXPIRATIONS_CACHE_SECONDS", "300"))
+TRADIER_CHAIN_CACHE_SECONDS = int(os.getenv("TRADIER_CHAIN_CACHE_SECONDS", "20"))
+TRADIER_MAX_EXPIRIES = int(os.getenv("TRADIER_MAX_EXPIRIES", "4"))
+TRADIER_MAX_DTE = int(os.getenv("TRADIER_MAX_DTE", "45"))
+
+
+TARGET_ASSETS = [
+    "AXON","COIN","T","CRWD","SWKS","MU","HOOD","TSLA","META","AAPL",
+    "SPCX","HPE","VST","MET","INTC","AMD","AVGO","PLTR","NFLX","ORCL"
+]
+# تقدر تغير القائمة من Railway بمتغير LEGENDARY_SYMBOLS (بينها فاصلة)
+_env_syms = [x.strip().upper() for x in os.getenv("LEGENDARY_SYMBOLS", "").split(",") if x.strip()]
+if _env_syms:
+    TARGET_ASSETS = _env_syms
+
+# API/load controls.
+REQUEST_MIN_INTERVAL = float(os.getenv("REQUEST_MIN_INTERVAL", "0.35"))
+MAX_BACKOFF_SECONDS = int(os.getenv("MAX_BACKOFF_SECONDS", "60"))
+SCAN_INTERVAL_SECONDS = int(os.getenv("SCAN_INTERVAL_SECONDS", "75"))
+MONITOR_INTERVAL_SECONDS = int(os.getenv("MONITOR_INTERVAL_SECONDS", "90"))
+OPTIONS_CACHE_SECONDS = int(os.getenv("OPTIONS_CACHE_SECONDS", "25"))
+MAX_ACTIVE_MONITORS = int(os.getenv("MAX_ACTIVE_MONITORS", "8"))
+
+# Smart search scheduling. This changes request timing/order only; it does not
+# change hunt, scoring, direction, contract, or alert thresholds.
+MAX_STRUCTURAL_SCANS_PER_CYCLE = int(os.getenv("MAX_STRUCTURAL_SCANS_PER_CYCLE", "2"))
+NORMAL_SCAN_COOLDOWN_SECONDS = int(os.getenv("NORMAL_SCAN_COOLDOWN_SECONDS", "600"))
+ACTIVE_SCAN_COOLDOWN_SECONDS = int(os.getenv("ACTIVE_SCAN_COOLDOWN_SECONDS", "150"))
+HOT_SCAN_COOLDOWN_SECONDS = int(os.getenv("HOT_SCAN_COOLDOWN_SECONDS", "75"))
+
+
+# Adaptive API traffic controls. These change request scheduling only;
+# hunt/scoring thresholds remain unchanged.
+ADAPTIVE_MIN_INTERVAL = max(REQUEST_MIN_INTERVAL, float(os.getenv("ADAPTIVE_MIN_INTERVAL", "0.35")))
+ADAPTIVE_MAX_INTERVAL = float(os.getenv("ADAPTIVE_MAX_INTERVAL", "1.50"))
+ADAPTIVE_RECOVERY_STEP = float(os.getenv("ADAPTIVE_RECOVERY_STEP", "0.05"))
+RATE_LIMIT_BACKOFF_BASE = int(os.getenv("RATE_LIMIT_BACKOFF_BASE", "5"))
+STALE_BAR_FALLBACK_SECONDS = int(os.getenv("STALE_BAR_FALLBACK_SECONDS", "120"))
+
+# Scoring.
+MIN_POTENTIAL_RETURN = 100.0
+EXCEPTIONAL_RETURN = 1000.0
+PREFERRED_MAX_CONTRACT_PRICE = 3.00
+
+# Early-zone controls.
+EARLY_ZONE_MIN_SCORE = 64.0
+EARLY_ZONE_NEAR_SCORE = 72.0
+ZONE_LOOKAHEAD_BARS = 20          # 5 hours on 15m map
+ZONE_MIN_DISTANCE_ATR = 0.35
+ZONE_MAX_DISTANCE_ATR = 5.0
+APPROACH_DISTANCE_ATR = 1.35
+TRIGGER_DISTANCE_ATR = 0.55
+
+# Memory/cache.
+_cache = {}
+_cache_lock = threading.Lock()
+_request_lock = threading.Lock()
+_last_request_time = 0.0
+_backoff_until = 0.0
+_adaptive_interval = ADAPTIVE_MIN_INTERVAL
+_last_429_time = 0.0
+_stale_cache = {}
+
+_tradier_request_lock = threading.Lock()
+_tradier_last_request_time = 0.0
+_tradier_disabled_until = 0.0
+_tradier_auth_logged = False
+
+
+# Per-ticker state. This is deliberately small: it is behaviour memory,
+# not a second indicator engine.
+behavior_memory: Dict[str, Dict] = {}
+active_monitors: Dict[str, Dict] = {}
+alerted = {}
+
+# Search scheduler state: keeps the full universe but avoids hammering every
+# ticker with deep requests on every cycle.
+search_state: Dict[str, Dict] = {}
+
+LOG_PATH = Path(os.getenv("LEGENDARY_LOG_PATH", "legendary_alerts.csv"))
+LOG_FIELDS = [
+    "timestamp","stock","mode","direction","trigger",
+    "stock_price","zone_low","zone_high","zone_distance_pct",
+    "zone_score","rejection_score","absorption_score",
+    "continuation_score","exhaustion_score","effort_result",
+    "trend_score","fib_confluence","profile_confluence",
+    "expected_move_pct","eta_minutes","time_fit",
+    "strike","expiry","dte","contract_price",
+    "potential_pct","estimated_target_price","reachability","score",
+    "volume","open_interest","volume_oi","spread_pct",
+    "exceptional","contract_ticker","timing_class","move_consumed_pct"
+]
+
+
+def cache_get(key, ttl):
+    now = time.time()
+    with _cache_lock:
+        item = _cache.get(key)
+        if item and now - item[0] <= ttl:
+            return item[1]
+    return None
+
+
+def cache_set(key, value):
+    with _cache_lock:
+        _cache[key] = (time.time(), value)
+
+
+def api_get(url, cache_key=None, cache_ttl=0, allow_stale_on_429=False):
+    """Single controlled gateway for Polygon requests.
+
+    Adaptive behavior: normal traffic stays fast; repeated 429 responses
+    increase spacing and backoff temporarily, then recover gradually.
+    The market-hunt logic and its thresholds are not changed here.
+    """
+    global _last_request_time, _backoff_until, _adaptive_interval, _last_429_time
+
+    if cache_key and cache_ttl:
+        cached = cache_get(cache_key, cache_ttl)
+        if cached is not None:
+            return cached
+
+    with _request_lock:
+        now = time.time()
+        if now < _backoff_until:
+            # Do not freeze the whole scanner after a 429; keep the pause short
+            # and let stale caches + smart rotation protect the request budget.
+            time.sleep(min(2.0, _backoff_until - now))
+
+        wait = _adaptive_interval - (time.time() - _last_request_time)
+        if wait > 0:
+            time.sleep(wait)
+
+        try:
+            res = requests.get(url, timeout=15)
+            _last_request_time = time.time()
+        except requests.RequestException as exc:
+            logging.error("API connection error: %s", exc)
+            return None
+
+        if res.status_code == 429:
+            now = time.time()
+            # Exponentially increase the spacing, but cap it so recovery
+            # remains quick after the API cools down.
+            _adaptive_interval = min(
+                ADAPTIVE_MAX_INTERVAL,
+                max(ADAPTIVE_MIN_INTERVAL, _adaptive_interval * 1.5)
+            )
+
+            retry_after = res.headers.get("Retry-After")
+            try:
+                server_delay = float(retry_after) if retry_after else 0.0
+            except (TypeError, ValueError):
+                server_delay = 0.0
+
+            previous = max(0, int(_backoff_until - now))
+            delay = max(2, server_delay, min(previous * 2, RATE_LIMIT_BACKOFF_BASE))
+            delay = min(15, MAX_BACKOFF_SECONDS, delay)
+            _backoff_until = now + delay
+            _last_429_time = now
+            logging.warning(
+                "429 rate limit. Adaptive interval=%.2fs; pausing Polygon traffic for %ss.",
+                _adaptive_interval, int(delay)
+            )
+
+            # Bars can safely use a very short stale fallback during a rate
+            # limit event, preventing one 429 from erasing a qualified
+            # structural candidate. Options are deliberately not given this
+            # fallback because contract quotes are more sensitive to staleness.
+            if allow_stale_on_429 and cache_key:
+                stale = _stale_cache.get(cache_key)
+                if stale and now - stale[0] <= STALE_BAR_FALLBACK_SECONDS:
+                    return stale[1]
+            return None
+
+        if res.status_code != 200:
+            logging.warning("API status %s for %s", res.status_code, url)
+            return None
+
+        # Gradually recover toward the normal request interval after clean
+        # responses; never jump instantly back to the minimum.
+        if _adaptive_interval > ADAPTIVE_MIN_INTERVAL:
+            _adaptive_interval = max(
+                ADAPTIVE_MIN_INTERVAL,
+                _adaptive_interval - ADAPTIVE_RECOVERY_STEP
+            )
+
+        if cache_key and cache_ttl:
+            cache_set(cache_key, res)
+            _stale_cache[cache_key] = (time.time(), res)
+        return res
+
+
+def is_us_market_open():
+    et = datetime.now(ZoneInfo("America/New_York"))
+    if et.weekday() >= 5:
+        return False
+    open_time = et.replace(hour=9, minute=30, second=0, microsecond=0)
+    close_time = et.replace(hour=16, minute=0, second=0, microsecond=0)
+    return open_time <= et <= close_time
+
+
+def get_market_phase():
+    et = datetime.now(ZoneInfo("America/New_York"))
+    open_dt = et.replace(hour=9, minute=30, second=0, microsecond=0)
+    diff = (et - open_dt).total_seconds() / 60
+    if diff < 60:
+        return "OPENING"
+    if diff > 330:
+        return "POWER_HOUR"
+    return "MIDDAY"
+
+
+def send_telegram_alert(message, image_path=None):
+    if EXTERNAL_SENDER is not None:
+        try:
+            EXTERNAL_SENDER(message, image_path)
+        except Exception:
+            logging.exception("External sender failed")
+        return
+    if not TELEGRAM_BOT_TOKEN or not LEGENDARY_TG_CHAT_ID:
+        logging.warning("Telegram credentials are not configured.")
+        return
+
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        requests.post(url, data={
+            "chat_id": LEGENDARY_TG_CHAT_ID,
+            "text": message,
+            "parse_mode": "Markdown"
+        }, timeout=15)
+
+        if image_path and os.path.exists(image_path):
+            photo_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+            with open(image_path, "rb") as photo:
+                requests.post(photo_url,
+                              data={"chat_id": LEGENDARY_TG_CHAT_ID},
+                              files={"photo": photo},
+                              timeout=15)
+    except requests.RequestException as exc:
+        logging.error("Telegram error: %s", exc)
+
+
+def generate_card_image(ticker, option_type, strike, expiry_date,
+                        output_path="signal_card.png", mode="PRE-HUNT"):
+    if Image is None:          # pillow مو منزّل: التنبيه يروح بدون صورة
+        return None
+    width, height = 900, 340
+    bg = (13, 27, 42)
+    border = (212, 175, 55)
+    text = (245, 245, 245)
+    gold = (225, 198, 115)
+
+    img = Image.new("RGB", (width, height), bg)
+    draw = ImageDraw.Draw(img)
+    margin = 15
+    draw.rounded_rectangle([margin, margin, width-margin, height-margin],
+                           radius=25, outline=border, width=3)
+    draw.line([(330,40),(330,height-40)], fill=(50,70,95), width=2)
+    draw.line([(630,40),(630,height-40)], fill=(50,70,95), width=2)
+
+    try:
+        f_large = ImageFont.truetype("arial.ttf", 64)
+        f_med = ImageFont.truetype("arial.ttf", 46)
+        f_small = ImageFont.truetype("arial.ttf", 28)
+    except Exception:
+        f_large = f_med = f_small = ImageFont.load_default()
+
+    draw.text((50,110), ticker, fill=gold, font=f_large)
+    is_call = option_type.upper() == "CALL"
+    dot = (34,139,34) if is_call else (178,34,34)
+    badge = (20,80,40) if is_call else (140,30,30)
+    draw.ellipse([215,135,255,175], fill=dot)
+    draw.rounded_rectangle([370,55,565,115], radius=10, fill=badge)
+    arrow = "↑" if is_call else "↓"
+    draw.text((395,63), f"{arrow} {option_type.upper()}",
+              fill=(255,255,255), font=f_small)
+    draw.text((385,135), f"{float(strike):g}", fill=gold, font=f_med)
+    draw.text((650,55), mode, fill=text, font=f_small)
+    draw.text((650,145), str(expiry_date), fill=text, font=f_small)
+    img.save(output_path)
+    return output_path
+
+
+def _bar_time(bar):
+    ts = bar.get("t")
+    if ts is None:
+        return None
+    try:
+        return datetime.fromtimestamp(float(ts) / 1000, tz=timezone.utc)
+    except Exception:
+        return None
+
+
+def _safe_float(v, default=0.0):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _clamp(v, lo=0.0, hi=100.0):
+    return max(lo, min(hi, float(v)))
+
+
+def _mean(values):
+    vals = [x for x in values if x is not None and math.isfinite(x)]
+    return sum(vals) / len(vals) if vals else 0.0
+
+
+def _median(values):
+    vals = sorted(x for x in values if x is not None and math.isfinite(x))
+    if not vals:
+        return 0.0
+    n = len(vals)
+    return vals[n // 2] if n % 2 else (vals[n//2-1] + vals[n//2]) / 2
+
+
+def _pct(a, b):
+    if not b:
+        return 0.0
+    return (a / b - 1.0) * 100.0
+
+
+def fetch_bars(ticker):
+    """
+    Daily + 15m map. Five days of 15m bars lets the engine remember
+    prior session structure without adding a second intraday request.
+    """
+    today = datetime.now(ZoneInfo("America/New_York")).date()
+    daily_start = (today - timedelta(days=90)).isoformat()
+    intraday_start = (today - timedelta(days=7)).isoformat()
+    today_s = today.isoformat()
+
+    daily_url = (
+        f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/"
+        f"{daily_start}/{today_s}?apiKey={POLYGON_API_KEY}"
+    )
+    m15_url = (
+        f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/15/minute/"
+        f"{intraday_start}/{today_s}?apiKey={POLYGON_API_KEY}"
+    )
+
+    rd = api_get(daily_url, f"daily:{ticker}", 600, allow_stale_on_429=True)
+    rm = api_get(m15_url, f"m15:{ticker}", 50, allow_stale_on_429=True)
+
+    daily = rd.json().get("results", []) if rd else []
+    m15 = rm.json().get("results", []) if rm else []
+    return daily, m15
+
+
+def fetch_lower_timeframes(ticker, include_m1=False):
+    """Fetch 5m for approach; fetch 1m only when the candidate is near trigger.
+
+    This is an API-efficiency layer only. It does not change the 15m/5m/1m
+    decision rules; it simply avoids paying for 1m data before it is needed.
+    """
+    today = datetime.now(ZoneInfo("America/New_York")).date()
+    start = (today - timedelta(days=2)).isoformat()
+    end = today.isoformat()
+
+    m5_url = (
+        f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/5/minute/"
+        f"{start}/{end}?apiKey={POLYGON_API_KEY}"
+    )
+    r5 = api_get(m5_url, f"m5:{ticker}", 35, allow_stale_on_429=True)
+    m5 = r5.json().get("results", []) if r5 else []
+
+    m1 = []
+    if include_m1:
+        m1_url = (
+            f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/minute/"
+            f"{start}/{end}?apiKey={POLYGON_API_KEY}"
+        )
+        r1 = api_get(m1_url, f"m1:{ticker}", 25, allow_stale_on_429=True)
+        m1 = r1.json().get("results", []) if r1 else []
+
+    return m5, m1
+
+
+def _session_levels(m15):
+    """Prior RTH / premarket / current RTH levels from available bars."""
+    sessions = {}
+    for b in m15:
+        dt = _bar_time(b)
+        if not dt:
+            continue
+        et = dt.astimezone(ZoneInfo("America/New_York"))
+        d = et.date()
+        hm = et.hour * 60 + et.minute
+
+        if 4 * 60 <= hm < 9 * 60 + 30:
+            key = (d, "PRE")
+        elif 9 * 60 + 30 <= hm <= 16 * 60:
+            key = (d, "RTH")
+        else:
+            continue
+
+        bucket = sessions.setdefault(key, {"high": -float("inf"), "low": float("inf")})
+        bucket["high"] = max(bucket["high"], _safe_float(b.get("h")))
+        bucket["low"] = min(bucket["low"], _safe_float(b.get("l")))
+
+    out = []
+    for (d, name), v in sorted(sessions.items()):
+        if math.isfinite(v["high"]) and math.isfinite(v["low"]):
+            out.append({"date": d, "name": name,
+                        "high": v["high"], "low": v["low"]})
+    return out
+
+
+def _volume_profile(m15, bins=28):
+    """
+    Approximate volume profile from bar typical prices.
+    It is deliberately a local structural estimate, not tick-level order flow.
+    """
+    bars = m15[-160:] if len(m15) > 160 else m15
+    if len(bars) < 20:
+        return {}
+
+    lo = min(_safe_float(b.get("l")) for b in bars)
+    hi = max(_safe_float(b.get("h")) for b in bars)
+    if hi <= lo:
+        return {}
+
+    step = (hi - lo) / bins
+    weights = [0.0] * bins
+
+    for b in bars:
+        tp = (_safe_float(b.get("h")) + _safe_float(b.get("l")) +
+              _safe_float(b.get("c"))) / 3
+        vol = max(0.0, _safe_float(b.get("v")))
+        idx = int((tp - lo) / step)
+        idx = min(bins - 1, max(0, idx))
+        weights[idx] += vol
+
+    total = sum(weights)
+    if total <= 0:
+        return {}
+
+    poc_idx = max(range(bins), key=lambda i: weights[i])
+    target = total * 0.70
+    selected = {poc_idx}
+    acc = weights[poc_idx]
+    left = poc_idx - 1
+    right = poc_idx + 1
+
+    while acc < target and (left >= 0 or right < bins):
+        lv = weights[left] if left >= 0 else -1
+        rv = weights[right] if right < bins else -1
+        if rv >= lv:
+            if right < bins:
+                selected.add(right)
+                acc += weights[right]
+                right += 1
+            else:
+                left -= 1
+        else:
+            if left >= 0:
+                selected.add(left)
+                acc += weights[left]
+                left -= 1
+
+    vah = lo + (max(selected) + 1) * step
+    val = lo + min(selected) * step
+    poc = lo + (poc_idx + 0.5) * step
+
+    return {"poc": poc, "vah": vah, "val": val, "step": step}
+
+
+def _fib_levels(m15):
+    """
+    Dynamic swing Fibonacci map. Recent structure is preferred; levels are
+    treated as zones/confluence, never as automatic buy/sell signals.
+    """
+    bars = m15[-96:] if len(m15) > 96 else m15
+    if len(bars) < 20:
+        return {}
+
+    highs = [_safe_float(b.get("h")) for b in bars]
+    lows = [_safe_float(b.get("l")) for b in bars]
+    hi = max(highs)
+    lo = min(lows)
+    rng = hi - lo
+    if rng <= 0:
+        return {}
+
+    ratios = [0.382, 0.5, 0.618, 0.707, 0.786, 1.0, 1.13, 1.272, 1.618]
+    return {r: lo + rng * r for r in ratios}
+
+
+def _atr_pct(m15, n=20):
+    bars = m15[-n:] if len(m15) >= n else m15
+    if not bars:
+        return 0.0
+    ranges = [abs(_safe_float(b.get("h")) - _safe_float(b.get("l"))) for b in bars]
+    closes = [_safe_float(b.get("c")) for b in bars]
+    atr = _mean(ranges)
+    price = closes[-1] if closes else 0
+    return (atr / price * 100) if price else 0.0
+
+
+def _atr_price(m15, n=20):
+    bars = m15[-n:] if len(m15) >= n else m15
+    return _mean([abs(_safe_float(b.get("h")) - _safe_float(b.get("l")))
+                  for b in bars])
+
+
+def _trend_state(m15):
+    if len(m15) < 12:
+        return {"direction": "FLAT", "score": 0.0}
+
+    closes = [_safe_float(x.get("c")) for x in m15]
+    recent = closes[-8:]
+    older = closes[-20:-8] if len(closes) >= 20 else closes[:-8]
+    recent_slope = _pct(recent[-1], recent[0]) if len(recent) > 1 else 0
+    older_slope = _pct(older[-1], older[0]) if len(older) > 1 else 0
+
+    up_steps = sum(1 for a, b in zip(recent, recent[1:]) if b > a)
+    down_steps = sum(1 for a, b in zip(recent, recent[1:]) if b < a)
+
+    score_up = max(0, recent_slope) + max(0, recent_slope - older_slope) * 0.5
+    score_dn = max(0, -recent_slope) + max(0, -recent_slope + older_slope) * 0.5
+
+    if up_steps >= 5 and score_up > 0.15:
+        return {"direction": "UP", "score": _clamp(50 + score_up * 20)}
+    if down_steps >= 5 and score_dn > 0.15:
+        return {"direction": "DOWN", "score": _clamp(50 + score_dn * 20)}
+    return {"direction": "FLAT", "score": 25.0}
+
+
+def _effort_result(m15):
+    """
+    Measures effort vs result:
+    high volume + weak price progress => absorption-like behaviour;
+    high volume + strong progress => continuation fuel.
+    """
+    if len(m15) < 12:
+        return {"absorption": 0, "continuation": 0, "ratio": 0}
+
+    bars = m15[-12:]
+    vols = [_safe_float(b.get("v")) for b in bars[:-1]]
+    avg_vol = _mean(vols)
+    avg_range = _mean([abs(_safe_float(b.get("h")) - _safe_float(b.get("l")))
+                       for b in bars[:-1]])
+    cur = bars[-1]
+    vol_ratio = _safe_float(cur.get("v")) / avg_vol if avg_vol else 0
+    cur_range = abs(_safe_float(cur.get("h")) - _safe_float(cur.get("l")))
+    close = _safe_float(cur.get("c"))
+    body = abs(close - _safe_float(cur.get("o")))
+    progress = body / avg_range if avg_range else 0
+
+    absorption = 0.0
+    continuation = 0.0
+    if vol_ratio >= 1.4 and progress <= 0.65:
+        absorption = _clamp((vol_ratio - 1.0) * 35 + (0.65 - progress) * 55)
+    if vol_ratio >= 1.25 and progress >= 0.75:
+        continuation = _clamp((vol_ratio - 1.0) * 30 + progress * 45)
+
+    return {"absorption": absorption,
+            "continuation": continuation,
+            "ratio": vol_ratio,
+            "progress": progress}
+
+
+def _level_interaction(m15, level, direction, atr):
+    """
+    Historical evidence that the level previously rejected/absorbed price.
+    The current approach is not counted as historical proof.
+    """
+    if level <= 0 or atr <= 0:
+        return {"rejection": 0.0, "absorption": 0.0, "touches": 0}
+
+    bars = m15[-80:-3] if len(m15) > 10 else m15[:-2]
+    tol = max(atr * 0.45, level * 0.0015)
+    rejection = 0.0
+    absorption = 0.0
+    touches = 0
+
+    ranges = [abs(_safe_float(b.get("h")) - _safe_float(b.get("l"))) for b in bars]
+    volumes = [_safe_float(b.get("v")) for b in bars]
+    avg_range = _mean(ranges)
+    avg_vol = _mean(volumes)
+
+    for b in bars:
+        h = _safe_float(b.get("h"))
+        l = _safe_float(b.get("l"))
+        o = _safe_float(b.get("o"))
+        c = _safe_float(b.get("c"))
+        v = _safe_float(b.get("v"))
+        rng = max(h - l, 1e-9)
+
+        near = min(abs(h - level), abs(l - level), abs(c - level)) <= tol
+        if not near:
+            continue
+
+        touches += 1
+        vol_ratio = v / avg_vol if avg_vol else 1
+        close_location = (c - l) / rng
+
+        if direction == "PUT":
+            # Future upper zone: upper wick / failure back below level.
+            wick = h - max(o, c)
+            if h >= level - tol and c < level:
+                rejection += 8 + min(10, vol_ratio * 3) + min(8, wick / rng * 8)
+            if vol_ratio >= 1.35 and abs(c - o) / rng <= 0.45:
+                absorption += 7
+        else:
+            # Future lower zone: lower wick / failure below level.
+            wick = min(o, c) - l
+            if l <= level + tol and c > level:
+                rejection += 8 + min(10, vol_ratio * 3) + min(8, wick / rng * 8)
+            if vol_ratio >= 1.35 and abs(c - o) / rng <= 0.45:
+                absorption += 7
+
+    return {"rejection": _clamp(rejection),
+            "absorption": _clamp(absorption),
+            "touches": touches}
+
+
+def _fib_confluence(price, level, fibs, atr):
+    if not fibs or atr <= 0:
+        return 0.0
+    near = [abs(v - level) / atr for v in fibs.values()]
+    best = min(near) if near else 99
+    return 30.0 if best <= 0.25 else 22.0 if best <= 0.5 else 12.0 if best <= 0.9 else 0.0
+
+
+def _profile_confluence(level, profile, atr):
+    if not profile or atr <= 0:
+        return 0.0
+    vals = [profile.get("poc"), profile.get("vah"), profile.get("val")]
+    d = min(abs(level - x) for x in vals if x)
+    return 25.0 if d <= 0.30 * atr else 17.0 if d <= 0.60 * atr else 8.0 if d <= atr else 0.0
+
+
+def _future_levels(stock_price, direction, m15):
+    """
+    Creates future candidate zones from multiple independent structures.
+    The zone is ahead of price, not at current price.
+    """
+    atr = _atr_price(m15)
+    fibs = _fib_levels(m15)
+    profile = _volume_profile(m15)
+    sessions = _session_levels(m15)
+
+    levels = []
+
+    def add(level, label, base=0):
+        if level > 0:
+            levels.append({"level": float(level), "label": label, "base": base})
+
+    if direction == "PUT":
+        for r, v in fibs.items():
+            if v > stock_price + ZONE_MIN_DISTANCE_ATR * atr:
+                add(v, f"FIB_{r:g}", 18)
+        if profile:
+            for k in ("vah", "poc"):
+                v = profile.get(k)
+                if v and v > stock_price + ZONE_MIN_DISTANCE_ATR * atr:
+                    add(v, k.upper(), 22)
+        for s in sessions:
+            if s["high"] > stock_price + ZONE_MIN_DISTANCE_ATR * atr:
+                add(s["high"], f"{s['name']}_HIGH", 24)
+
+        recent_high = max(_safe_float(x.get("h")) for x in m15[-48:])
+        if recent_high > stock_price + ZONE_MIN_DISTANCE_ATR * atr:
+            add(recent_high, "RECENT_HIGH", 22)
+
+    else:
+        for r, v in fibs.items():
+            if v < stock_price - ZONE_MIN_DISTANCE_ATR * atr:
+                add(v, f"FIB_{r:g}", 18)
+        if profile:
+            for k in ("val", "poc"):
+                v = profile.get(k)
+                if v and v < stock_price - ZONE_MIN_DISTANCE_ATR * atr:
+                    add(v, k.upper(), 22)
+        for s in sessions:
+            if s["low"] < stock_price - ZONE_MIN_DISTANCE_ATR * atr:
+                add(s["low"], f"{s['name']}_LOW", 24)
+
+        recent_low = min(_safe_float(x.get("l")) for x in m15[-48:])
+        if recent_low < stock_price - ZONE_MIN_DISTANCE_ATR * atr:
+            add(recent_low, "RECENT_LOW", 22)
+
+    # Cluster nearby levels into zones.
+    levels.sort(key=lambda x: x["level"])
+    clusters = []
+    for item in levels:
+        if not clusters:
+            clusters.append([item])
+            continue
+        center = _mean([x["level"] for x in clusters[-1]])
+        if abs(item["level"] - center) <= max(0.55 * atr, stock_price * 0.0015):
+            clusters[-1].append(item)
+        else:
+            clusters.append([item])
+
+    zones = []
+    for cluster in clusters:
+        vals = [x["level"] for x in cluster]
+        center = _mean(vals)
+        labels = list(dict.fromkeys(x["label"] for x in cluster))
+        base = min(35, sum(x["base"] for x in cluster))
+        zones.append({
+            "low": min(vals) - 0.18 * atr,
+            "high": max(vals) + 0.18 * atr,
+            "center": center,
+            "labels": labels,
+            "base": base
+        })
+
+    return zones, fibs, profile
+
+
+def _zone_analysis(stock_price, direction, zone, daily, m15):
+    atr = _atr_price(m15)
+    if atr <= 0:
+        return None
+
+    distance = abs(zone["center"] - stock_price)
+    distance_atr = distance / atr
+
+    if distance_atr < ZONE_MIN_DISTANCE_ATR or distance_atr > ZONE_MAX_DISTANCE_ATR:
+        return None
+
+    fibs = _fib_levels(m15)
+    profile = _volume_profile(m15)
+    interaction = _level_interaction(m15, zone["center"], direction, atr)
+
+    fib_score = _fib_confluence(stock_price, zone["center"], fibs, atr)
+    profile_score = _profile_confluence(zone["center"], profile, atr)
+
+    trend = _trend_state(m15)
+    effort = _effort_result(m15)
+
+    # For a contrarian hunt, the current trend should point INTO the future zone.
+    trend_aligned = (direction == "PUT" and trend["direction"] == "UP") or \
+                    (direction == "CALL" and trend["direction"] == "DOWN")
+    trend_score = trend["score"] if trend_aligned else 0.0
+
+    # Historical rejection/absorption are stronger than a bare level.
+    rejection = interaction["rejection"]
+    absorption = interaction["absorption"]
+
+    # Exhaustion rises when current trend is strong but effort/result degrades.
+    exhaustion = 0.0
+    if trend_aligned:
+        exhaustion += min(35, trend["score"] * 0.35)
+        exhaustion += min(35, effort["absorption"] * 0.65)
+        exhaustion += min(30, max(0, 55 - effort["continuation"]))
+
+    # Distance: early enough to act, but not so early that the zone is meaningless.
+    if distance_atr <= 0.75:
+        distance_score = 10
+    elif distance_atr <= 1.5:
+        distance_score = 18
+    elif distance_atr <= 2.5:
+        distance_score = 15
+    elif distance_atr <= 3.5:
+        distance_score = 10
+    else:
+        distance_score = 5
+
+    confluence = min(30, zone["base"] + fib_score * 0.45 + profile_score * 0.45)
+    score = (
+        confluence +
+        rejection * 0.95 +
+        absorption * 0.75 +
+        exhaustion * 0.55 +
+        trend_score * 0.22 +
+        distance_score
+    )
+    score = _clamp(score, 0, 100)
+
+    # Estimate expected move using recent ATR, daily ATR and structure distance.
+    daily_ranges = [
+        abs(_safe_float(x.get("h")) - _safe_float(x.get("l")))
+        for x in daily[-14:]
+    ]
+    daily_atr = _mean(daily_ranges)
+    expected_4h = max(atr * math.sqrt(16), daily_atr * 0.65 if daily_atr else 0)
+    expected_move_pct = (expected_4h / stock_price * 100) if stock_price else 0
+
+    bar_move = _median([
+        abs(_safe_float(b.get("c")) - _safe_float(b.get("o")))
+        for b in m15[-20:]
+    ])
+    bar_move = max(bar_move, atr * 0.25, stock_price * 0.0003)
+    eta_bars = distance / bar_move
+    eta_minutes = eta_bars * 15
+    time_fit = _clamp(100 - max(0, eta_minutes - 240) / 3.0)
+
+    return {
+        "direction": direction,
+        "zone_low": round(zone["low"], 2),
+        "zone_high": round(zone["high"], 2),
+        "zone_center": round(zone["center"], 2),
+        "distance_atr": distance_atr,
+        "distance_pct": distance / stock_price * 100,
+        "zone_score": score,
+        "rejection_score": rejection,
+        "absorption_score": absorption,
+        "continuation_score": effort["continuation"],
+        "exhaustion_score": exhaustion,
+        "effort_result": effort["ratio"],
+        "trend_score": trend_score,
+        "fib_confluence": fib_score,
+        "profile_confluence": profile_score,
+        "labels": zone["labels"],
+        "expected_move_pct": expected_move_pct,
+        "eta_minutes": eta_minutes,
+        "time_fit": time_fit,
+        "atr": atr
+    }
+
+
+def _approach_behavior(m5, m1, direction, zone_center):
+    """
+    Lower-timeframe confirmation:
+    5m reads approach quality; 1m is only used near the zone.
+    """
+    if not m5:
+        return {"approach": 0, "trigger": False, "rejection": 0, "absorption": 0}
+
+    bars = m5[-12:]
+    closes = [_safe_float(x.get("c")) for x in bars]
+    volumes = [_safe_float(x.get("v")) for x in bars[:-1]]
+    avg_vol = _mean(volumes)
+    last = bars[-1]
+    vol_ratio = _safe_float(last.get("v")) / avg_vol if avg_vol else 1
+
+    if direction == "PUT":
+        approaching = closes[-1] <= zone_center
+        near = abs(closes[-1] - zone_center)
+        body = abs(_safe_float(last.get("c")) - _safe_float(last.get("o")))
+        rng = max(_safe_float(last.get("h")) - _safe_float(last.get("l")), 1e-9)
+        wick = _safe_float(last.get("h")) - max(_safe_float(last.get("o")), _safe_float(last.get("c")))
+        rejection = 0
+        if approaching and wick / rng > 0.30 and _safe_float(last.get("c")) < zone_center:
+            rejection = _clamp(25 + vol_ratio * 12)
+    else:
+        approaching = closes[-1] >= zone_center
+        near = abs(closes[-1] - zone_center)
+        body = abs(_safe_float(last.get("c")) - _safe_float(last.get("o")))
+        rng = max(_safe_float(last.get("h")) - _safe_float(last.get("l")), 1e-9)
+        wick = min(_safe_float(last.get("o")), _safe_float(last.get("c"))) - _safe_float(last.get("l"))
+        rejection = 0
+        if approaching and wick / rng > 0.30 and _safe_float(last.get("c")) > zone_center:
+            rejection = _clamp(25 + vol_ratio * 12)
+
+    approach = 35.0 if approaching else 15.0
+    if vol_ratio >= 1.25:
+        approach += 20
+    if body / rng <= 0.5:
+        approach += 15
+
+    trigger = False
+    one_min_rejection = 0
+    one_min_absorption = 0
+    if m1:
+        recent = m1[-6:]
+        if direction == "PUT":
+            highs = [_safe_float(x.get("h")) for x in recent]
+            closes1 = [_safe_float(x.get("c")) for x in recent]
+            near1 = max(abs(h - zone_center) for h in highs) <= max(zone_center * 0.003, 0.75)
+            if near1 and closes1[-1] < zone_center:
+                one_min_rejection = 35
+                trigger = True
+        else:
+            lows = [_safe_float(x.get("l")) for x in recent]
+            closes1 = [_safe_float(x.get("c")) for x in recent]
+            near1 = max(abs(l - zone_center) for l in lows) <= max(zone_center * 0.003, 0.75)
+            if near1 and closes1[-1] > zone_center:
+                one_min_rejection = 35
+                trigger = True
+
+    return {
+        "approach": _clamp(approach),
+        "trigger": trigger,
+        "rejection": _clamp(rejection + one_min_rejection),
+        "absorption": one_min_absorption,
+        "distance": near
+    }
+
+
+
+def _tradier_cache_get(key, ttl):
+    if not ttl:
+        return None
+    return cache_get(key, ttl)
+
+
+def _tradier_cache_set(key, value):
+    cache_set(key, value)
+
+
+def _tradier_get(path, params=None, cache_key=None, cache_ttl=0):
+    """Small isolated Tradier gateway for options only.
+
+    Polygon remains the structural data source. Tradier is queried only after
+    the stock passes the hunt engine, so this adds options access without
+    multiplying the structural scan traffic.
+    """
+    global _tradier_last_request_time, _tradier_disabled_until, _tradier_auth_logged
+
+    if not TRADIER_API_TOKEN:
+        return None
+
+    if cache_key and cache_ttl:
+        cached = _tradier_cache_get(cache_key, cache_ttl)
+        if cached is not None:
+            return cached
+
+    now = time.time()
+    if now < _tradier_disabled_until:
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {TRADIER_API_TOKEN}",
+        "Accept": "application/json",
+    }
+
+    with _tradier_request_lock:
+        wait = TRADIER_MIN_INTERVAL - (time.time() - _tradier_last_request_time)
+        if wait > 0:
+            time.sleep(wait)
+
+        try:
+            res = requests.get(
+                f"{TRADIER_BASE_URL}{path}",
+                params=params or {},
+                headers=headers,
+                timeout=10,
+            )
+            _tradier_last_request_time = time.time()
+        except requests.RequestException as exc:
+            logging.warning("Tradier connection error: %s", exc)
+            return None
+
+        if res.status_code in (401, 403):
+            # Do not hammer an invalid/unavailable token on every scan.
+            _tradier_disabled_until = time.time() + 300
+            if not _tradier_auth_logged:
+                logging.warning(
+                    "Tradier options access unavailable (HTTP %s); "
+                    "keeping Polygon as fallback.",
+                    res.status_code,
+                )
+                _tradier_auth_logged = True
+            return None
+
+        if res.status_code != 200:
+            logging.warning(
+                "Tradier API status %s for %s",
+                res.status_code,
+                path,
+            )
+            return None
+
+        try:
+            payload = res.json()
+        except ValueError:
+            logging.warning("Tradier returned non-JSON data for %s", path)
+            return None
+
+        if cache_key and cache_ttl:
+            _tradier_cache_set(cache_key, payload)
+
+        return payload
+
+
+def _tradier_future_expirations(ticker):
+    """Return a small, useful expiry window instead of downloading every chain."""
+    payload = _tradier_get(
+        "/markets/options/expirations",
+        params={
+            "symbol": ticker,
+            "includeAllRoots": "false",
+            "strikes": "false",
+            "contractSize": "false",
+            "expirationType": "true",
+        },
+        cache_key=f"tradier:expirations:{ticker}",
+        cache_ttl=TRADIER_EXPIRATIONS_CACHE_SECONDS,
+    )
+    if not payload:
+        return []
+
+    node = payload.get("expirations", {})
+    dates = node.get("date", []) if isinstance(node, dict) else []
+    if isinstance(dates, str):
+        dates = [dates]
+
+    today = datetime.now(ZoneInfo("America/New_York")).date()
+    out = []
+    for value in dates or []:
+        try:
+            d = datetime.strptime(str(value), "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        dte = (d - today).days
+        if dte < 0 or dte > TRADIER_MAX_DTE:
+            continue
+        out.append(d)
+
+    out = sorted(set(out))
+    return [d.isoformat() for d in out[:max(1, TRADIER_MAX_EXPIRIES)]]
+
+
+def _normalize_tradier_chain(ticker, payload):
+    """Map Tradier option-chain fields into the existing Polygon-shaped model."""
+    if not payload:
+        return []
+
+    node = payload.get("options", {})
+    rows = node.get("option", []) if isinstance(node, dict) else []
+    if isinstance(rows, dict):
+        rows = [rows]
+
+    normalized = []
+    for opt in rows or []:
+        option_type = str(opt.get("option_type") or opt.get("type") or "").lower()
+        ctype = "C" if option_type == "call" else "P" if option_type == "put" else ""
+        if not ctype:
+            continue
+
+        symbol = opt.get("symbol") or opt.get("contract_symbol")
+        expiry = opt.get("expiration_date")
+        strike = opt.get("strike")
+        if not symbol or not expiry or strike is None:
+            continue
+
+        greeks = opt.get("greeks") or {}
+        normalized.append({
+            "details": {
+                "contract_type": ctype,
+                "expiration_date": str(expiry),
+                "strike_price": strike,
+                "ticker": symbol,
+            },
+            "greeks": {
+                "delta": greeks.get("delta", 0),
+                "gamma": greeks.get("gamma", 0),
+                "implied_volatility": (
+                    greeks.get("mid_iv")
+                    or greeks.get("smv_vol")
+                    or greeks.get("ask_iv")
+                    or greeks.get("bid_iv")
+                    or 0
+                ),
+            },
+            "day": {
+                "volume": opt.get("volume", 0),
+                "open_interest": opt.get("open_interest", 0),
+            },
+            "last_quote": {
+                "bid": opt.get("bid", 0),
+                "ask": opt.get("ask", 0),
+                "last": opt.get("last", 0),
+            },
+        })
+    return normalized
+
+
+def fetch_option_snapshot_tradier(ticker):
+    """Fetch only the nearest useful chains from Tradier, with short caching."""
+    expirations = _tradier_future_expirations(ticker)
+    if not expirations:
+        return []
+
+    all_options = []
+    for expiry in expirations:
+        payload = _tradier_get(
+            "/markets/options/chains",
+            params={
+                "symbol": ticker,
+                "expiration": expiry,
+                "greeks": "true",
+            },
+            cache_key=f"tradier:chain:{ticker}:{expiry}",
+            cache_ttl=TRADIER_CHAIN_CACHE_SECONDS,
+        )
+        if not payload:
+            continue
+        all_options.extend(_normalize_tradier_chain(ticker, payload))
+
+    return all_options
+
+
+def _fetch_options_best_source(ticker):
+    """Tradier-first options discovery with Polygon fallback."""
+    if TRADIER_API_TOKEN:
+        tradier_options = fetch_option_snapshot_tradier(ticker)
+        if tradier_options:
+            return tradier_options, "TRADIER"
+
+    polygon_options = fetch_option_snapshot(ticker)
+    if polygon_options:
+        return polygon_options, "POLYGON"
+
+    return [], "NONE"
+
+
+def fetch_option_snapshot(ticker):
+    url = f"https://api.polygon.io/v3/snapshot/options/{ticker}?apiKey={POLYGON_API_KEY}"
+    res = api_get(url, f"options:{ticker}", OPTIONS_CACHE_SECONDS)
+    return res.json().get("results", []) if res else []
+
+
+def estimate_contract_potential(stock_price, strike, premium, option_type,
+                                delta, gamma, iv, days_to_expiry,
+                                last_target_stock):
+    """
+    Scenario estimate using delta/gamma. IV/time are deliberately used as
+    context and not converted into fake precision.
+    """
+    if premium <= 0 or stock_price <= 0:
+        return None
+
+    move = last_target_stock - stock_price
+    if option_type == "PUT":
+        move = stock_price - last_target_stock
+
+    if move <= 0:
+        return None
+
+    theoretical_change = delta * move + 0.5 * max(gamma, 0) * (move ** 2)
+    estimated_price = max(0.01, premium + theoretical_change)
+    potential = (estimated_price / premium - 1) * 100
+    return max(0.0, potential), estimated_price
+
+
+def target_reachability(stock_price, last_target_stock, daily, m15, eta_minutes=None):
+    """Separate last-target reachability score, with time fit included."""
+    if stock_price <= 0 or last_target_stock <= 0:
+        return 0
+
+    distance_pct = abs(last_target_stock / stock_price - 1) * 100
+    recent = m15[-20:] if len(m15) >= 5 else m15
+    ranges = [abs(_safe_float(x.get("h")) - _safe_float(x.get("l"))) /
+              max(_safe_float(x.get("c")), 0.01) * 100 for x in recent]
+    avg_range = _mean(ranges)
+
+    daily_ranges = [
+        abs(_safe_float(x.get("h")) - _safe_float(x.get("l"))) /
+        max(_safe_float(x.get("c")), 0.01) * 100 for x in daily[-14:]
+    ]
+    daily_range = _mean(daily_ranges)
+    volatility = max(avg_range, daily_range, 0.01)
+    ratio = distance_pct / volatility
+
+    if ratio <= 1.5:
+        score = 95
+    elif ratio <= 2.5:
+        score = 85
+    elif ratio <= 4:
+        score = 70
+    elif ratio <= 6:
+        score = 50
+    elif ratio <= 9:
+        score = 30
+    else:
+        score = 10
+
+    if eta_minutes is not None:
+        if eta_minutes <= 120:
+            time_bonus = 5
+        elif eta_minutes <= 240:
+            time_bonus = 0
+        elif eta_minutes <= 480:
+            time_bonus = -10
+        else:
+            time_bonus = -20
+        score = _clamp(score + time_bonus)
+
+    return int(score)
+
+
+def _reversal_target(stock_price, direction, m15, zone_center):
+    """
+    Target after the future zone is reached and reverses.
+    Prefer meaningful structure behind the zone/current price.
+    """
+    fibs = _fib_levels(m15)
+    profile = _volume_profile(m15)
+    candidates = []
+
+    if direction == "PUT":
+        for r in (0.786, 0.707, 0.618, 0.5, 0.382):
+            v = fibs.get(r)
+            if v and v < zone_center:
+                candidates.append(v)
+        if profile:
+            for k in ("poc", "val"):
+                if profile.get(k) and profile[k] < zone_center:
+                    candidates.append(profile[k])
+        recent_low = min(_safe_float(x.get("l")) for x in m15[-48:])
+        candidates.append(recent_low)
+        below = [v for v in candidates if v < zone_center - max(0.35 * _atr_price(m15), 0.01)]
+        if below:
+            return max(below)
+    else:
+        for r in (1.0, 1.13, 1.272, 1.618):
+            v = fibs.get(r)
+            if v and v > zone_center:
+                candidates.append(v)
+        if profile and profile.get("poc") and profile["poc"] > zone_center:
+            candidates.append(profile["poc"])
+        recent_high = max(_safe_float(x.get("h")) for x in m15[-48:])
+        candidates.append(recent_high)
+        above = [v for v in candidates if v > zone_center + max(0.35 * _atr_price(m15), 0.01)]
+        if above:
+            return min(above)
+
+    return zone_center
+
+
+def choose_best_contract(ticker, direction, daily, m15,
+                         stock_target=None, zone_analysis=None):
+    options, options_provider = _fetch_options_best_source(ticker)
+    if not options:
+        return None
+
+    stock_price = _safe_float(m15[-1].get("c"))
+    phase = get_market_phase()
+    zone_center = stock_target if stock_target else stock_price
+    last_target_stock = _reversal_target(stock_price, direction, m15, zone_center)
+    eta = zone_analysis.get("eta_minutes") if zone_analysis else None
+    reach = target_reachability(stock_price, last_target_stock, daily, m15, eta)
+
+    candidates = []
+
+    for opt in options:
+        details = opt.get("details", {})
+        greeks = opt.get("greeks", {})
+        day = opt.get("day", {})
+        quote = opt.get("last_quote", {})
+
+        ctype = details.get("contract_type", "").upper()
+        if (direction == "CALL" and ctype != "C") or (direction == "PUT" and ctype != "P"):
+            continue
+
+        premium = _safe_float(quote.get("ask") or quote.get("last"))
+        bid = _safe_float(quote.get("bid"))
+        volume = _safe_float(day.get("volume"))
+        oi = _safe_float(day.get("open_interest"))
+        delta = abs(_safe_float(greeks.get("delta")))
+        gamma = abs(_safe_float(greeks.get("gamma")))
+        iv = _safe_float(greeks.get("implied_volatility"))
+        expiry = details.get("expiration_date")
+        strike = details.get("strike_price")
+
+        if not expiry or not strike or premium <= 0:
+            continue
+
+        try:
+            exp_dt = datetime.strptime(expiry, "%Y-%m-%d").date()
+            dte = max(0, (exp_dt - datetime.now(ZoneInfo("America/New_York")).date()).days)
+        except ValueError:
+            continue
+
+        spread_pct = ((premium - bid) / premium * 100) if bid > 0 else 100
+        # Liquidity filters are kept, but not used to force a cheap-premium bias.
+        if spread_pct > 35 or volume < 20:
+            continue
+
+        result = estimate_contract_potential(
+            stock_price, float(strike), float(premium), direction,
+            delta, gamma, iv, dte, float(last_target_stock)
+        )
+        if not result:
+            continue
+
+        potential, target_premium = result
+        if potential < MIN_POTENTIAL_RETURN:
+            continue
+
+        volume_oi = volume / oi if oi else 0
+        price_preference = 12 if premium <= PREFERRED_MAX_CONTRACT_PRICE else 0
+        liquidity_score = min(15, volume / 100 * 15)
+        delta_score = max(0, 15 - abs(delta - 0.30) * 40)
+        dte_score = min(15, 5 + min(dte, 20) / 20 * 10)
+        reach_score = reach
+        potential_score = min(35, potential / 30)
+        time_fit = zone_analysis.get("time_fit", 50) if zone_analysis else 50
+
+        total = _clamp(
+            price_preference + liquidity_score + delta_score +
+            dte_score + (reach_score * 0.25) +
+            potential_score + time_fit * 0.10
+        )
+
+        exceptional = potential >= EXCEPTIONAL_RETURN
+
+        candidates.append({
+            "contract_ticker": details.get("ticker"),
+            "stock": ticker,
+            "type": direction,
+            "strike": strike,
+            "expiry": expiry,
+            "price": round(float(premium), 2),
+            "potential": round(potential, 1),
+            "estimated_target_price": round(target_premium, 2),
+            "reachability": int(reach),
+            "score": int(total),
+            "exceptional": exceptional,
+            "volume": int(volume),
+            "open_interest": int(oi),
+            "volume_oi": round(volume_oi, 2),
+            "dte": dte,
+            "spread_pct": round(spread_pct, 1),
+            "phase": phase,
+            "options_provider": options_provider,
+            "last_target_stock": round(float(last_target_stock), 2),
+            "zone_center": round(float(zone_center), 2)
+        })
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda x: (
+        x["reachability"] >= 70,
+        x["potential"] >= EXCEPTIONAL_RETURN,
+        x["potential"],
+        x["reachability"],
+        x["price"] <= PREFERRED_MAX_CONTRACT_PRICE,
+        x["score"]
+    ), reverse=True)
+
+    return candidates[0]
+
+
+def _state_snapshot(ticker, m15, zone):
+    price = _safe_float(m15[-1].get("c"))
+    last = m15[-1]
+    return {
+        "timestamp": time.time(),
+        "price": price,
+        "volume": _safe_float(last.get("v")),
+        "close": price,
+        "zone": zone["center"],
+    }
+
+
+def _update_behavior_memory(ticker, m15, zone):
+    """
+    Lightweight temporal memory: compares the current approach with the
+    previous observation without storing a large history.
+    """
+    state = _state_snapshot(ticker, m15, zone)
+    previous = behavior_memory.get(ticker)
+    behavior_memory[ticker] = state
+
+    if not previous:
+        return {"price_accel": 0, "distance_change": 0, "volume_accel": 0}
+
+    price_change = _pct(state["price"], previous["price"])
+    old_dist = abs(previous["price"] - previous["zone"])
+    new_dist = abs(state["price"] - state["zone"])
+    distance_change = old_dist - new_dist
+    volume_change = _pct(state["volume"] + 1, previous["volume"] + 1)
+
+    return {
+        "price_accel": price_change,
+        "distance_change": distance_change,
+        "volume_accel": volume_change
+    }
+
+
+def _init_log():
+    if LOG_PATH.exists():
+        return
+    with LOG_PATH.open("w", newline="", encoding="utf-8") as f:
+        csv.DictWriter(f, fieldnames=LOG_FIELDS).writeheader()
+
+
+def _log_alert(opp):
+    _init_log()
+    row = {k: opp.get(k, "") for k in LOG_FIELDS}
+    with LOG_PATH.open("a", newline="", encoding="utf-8") as f:
+        csv.DictWriter(f, fieldnames=LOG_FIELDS).writerow(row)
+
+
+def scan_market_opportunity(ticker):
+    daily, m15 = fetch_bars(ticker)
+    if len(daily) < 20 or len(m15) < 30:
+        return None
+
+    trend = _trend_state(m15)
+    if trend["direction"] == "FLAT":
+        return None
+
+    # Contrarian hunt direction:
+    # up into future upper zone -> PUT; down into future lower zone -> CALL.
+    direction = "PUT" if trend["direction"] == "UP" else "CALL"
+
+    zones, fibs, profile = _future_levels(_safe_float(m15[-1].get("c")),
+                                           direction, m15)
+    if not zones:
+        return None
+
+    analyses = []
+    for zone in zones:
+        a = _zone_analysis(_safe_float(m15[-1].get("c")), direction,
+                           zone, daily, m15)
+        if a and a["zone_score"] >= EARLY_ZONE_MIN_SCORE:
+            analyses.append(a)
+
+    if not analyses:
+        return None
+
+    analyses.sort(key=lambda x: (
+        x["zone_score"],
+        x["rejection_score"] + x["absorption_score"],
+        -x["distance_atr"]
+    ), reverse=True)
+    za = analyses[0]
+
+    # We want the signal BEFORE arrival. If price is already in the zone,
+    # this function refuses to call it PRE-HUNT.
+    price = _safe_float(m15[-1].get("c"))
+    in_zone = za["zone_low"] <= price <= za["zone_high"]
+    if in_zone:
+        return None
+
+    memory_delta = _update_behavior_memory(ticker, m15,
+                                            {"center": za["zone_center"]})
+
+    # Very early warning can be generated from 15m structure alone.
+    # Lower timeframes are only requested for stronger/closer candidates.
+    mode = "PRE-HUNT"
+    trigger = "FUTURE_REJECTION_ZONE"
+
+    if za["distance_atr"] <= APPROACH_DISTANCE_ATR or za["zone_score"] >= EARLY_ZONE_NEAR_SCORE:
+        # Stage lower-timeframe requests: 5m confirms approach first; 1m is
+        # requested only when the candidate is genuinely near the trigger.
+        m5, _ = fetch_lower_timeframes(ticker, include_m1=False)
+        approach = _approach_behavior(m5, [], direction, za["zone_center"])
+
+        near_trigger = za["distance_atr"] <= TRIGGER_DISTANCE_ATR
+        if near_trigger:
+            # Preserve the original trigger behavior: every near-zone
+            # candidate still gets 1m confirmation. The saving comes from
+            # avoiding 1m requests for candidates that are not near trigger.
+            _, m1 = fetch_lower_timeframes(ticker, include_m1=True)
+            approach = _approach_behavior(m5, m1, direction, za["zone_center"])
+        za["approach_score"] = approach["approach"]
+        za["trigger_ready"] = approach["trigger"]
+        za["rejection_score"] = max(za["rejection_score"], approach["rejection"])
+        za["absorption_score"] = max(za["absorption_score"], approach["absorption"])
+
+        if approach["trigger"] and za["distance_atr"] <= TRIGGER_DISTANCE_ATR:
+            mode = "TRIGGER"
+            trigger = "EARLY_ZONE_CONFIRMED"
+        else:
+            mode = "PRE-HUNT"
+            trigger = "APPROACHING_FUTURE_ZONE"
+    else:
+        za["approach_score"] = 0
+        za["trigger_ready"] = False
+
+    # Prevent late/chasing alerts: current move must not have consumed the zone.
+    # If price has already travelled unusually far in the trend, suppress.
+    recent_start = _safe_float(m15[-8].get("c"))
+    move_from_recent = abs(_pct(price, recent_start))
+    atr_pct = _atr_pct(m15)
+    consumed = move_from_recent / max(atr_pct * 2.5, 0.10)
+    move_consumed_pct = _clamp(consumed * 100.0, 0, 200)
+
+    # A late signal is a CHASE and is rejected. The experiment is intended
+    # to measure genuine early hunting, not post-move option chasing.
+    if consumed > 1.15:
+        return None
+
+    # Options are queried only after the stock itself qualifies.
+    opp = choose_best_contract(
+        ticker, direction, daily, m15,
+        stock_target=za["zone_center"],
+        zone_analysis=za
+    )
+    if not opp:
+        return None
+
+    # Add stock-behaviour fields.
+    opp.update({
+        "alert_mode": mode,
+        "trigger": trigger,
+        "zone_low": za["zone_low"],
+        "zone_high": za["zone_high"],
+        "zone_distance_pct": round(za["distance_pct"], 2),
+        "zone_score": round(za["zone_score"], 1),
+        "rejection_score": round(za["rejection_score"], 1),
+        "absorption_score": round(za["absorption_score"], 1),
+        "continuation_score": round(za["continuation_score"], 1),
+        "exhaustion_score": round(za["exhaustion_score"], 1),
+        "effort_result": round(za["effort_result"], 2),
+        "trend_score": round(za["trend_score"], 1),
+        "fib_confluence": round(za["fib_confluence"], 1),
+        "profile_confluence": round(za["profile_confluence"], 1),
+        "expected_move_pct": round(za["expected_move_pct"], 2),
+        "eta_minutes": round(za["eta_minutes"], 1),
+        "time_fit": round(za["time_fit"], 1),
+        "labels": ",".join(za["labels"]),
+        "memory_price_accel": round(memory_delta["price_accel"], 3),
+        "memory_distance_change": round(memory_delta["distance_change"], 3),
+        "memory_volume_accel": round(memory_delta["volume_accel"], 2),
+        "timing_class": "HUNT" if mode == "PRE-HUNT" else "HUNT_CONFIRMED",
+        "move_consumed_pct": round(move_consumed_pct, 1)
+    })
+
+    # Signal score is distinct from reachability.
+    opp["score"] = int(_clamp(
+        opp["score"] * 0.55 +
+        za["zone_score"] * 0.30 +
+        za["time_fit"] * 0.15
+    ))
+    return opp
+
+
+def format_alert(opp):
+    if opp["alert_mode"] == "TRIGGER":
+        title = "⚡️ *TRIGGER*"
+    else:
+        title = "🏌🏼‍♂️ *PRE-HUNT*"
+
+    tag = "🏌🏼‍♂️ *استثنائية*" if opp["exceptional"] else "🔥 *انفجارية*"
+    direction = "🟢 CALL ↑" if opp["type"] == "CALL" else "🔴 PUT ↓"
+
+    return f"""
+🗽 *THE LEGENDARY*
+
+{title}
+📌 `{opp['stock']}` — {direction}
+🧭 Timing: `{opp['timing_class']}` | المستهلك من الحركة: `{opp['move_consumed_pct']:.0f}%`
+
+🏹 منطقة الصيد: `{opp['zone_low']}–{opp['zone_high']}`
+📍 السعر: `{opp['zone_center']}`
+📏 بُعد المنطقة: `{opp['zone_distance_pct']}%`
+⏱️ وصول تقديري: `{opp['eta_minutes']:.0f} دقيقة`
+
+{tag}
+🎯 Strike: `{opp['strike']}`
+📅 Expiry: `{opp['expiry']}` ({opp['dte']} DTE)
+💵 Contract: `${opp['price']:.2f}`
+📈 السيناريو: `+{opp['potential']:.0f}%`
+🎯 هدف العقد: `${opp['estimated_target_price']:.2f}`
+🎯 قابلية آخر هدف: `{opp['reachability']}/100`
+
+🧠 Zone: `{opp['zone_score']:.0f}/100`
+↩️ رفض: `{opp['rejection_score']:.0f}`
+🧱 امتصاص: `{opp['absorption_score']:.0f}`
+➡️ مواصلة: `{opp['continuation_score']:.0f}`
+🧭 اتجاه: `{opp['trend_score']:.0f}`
+📐 Fib: `{opp['fib_confluence']:.0f}`
+📊 Profile: `{opp['profile_confluence']:.0f}`
+⏳ عامل الوقت: `{opp['time_fit']:.0f}/100`
+
+📊 Vol: `{opp['volume']}`
+📊 OI: `{opp['open_interest']}`
+📊 Vol/OI: `{opp['volume_oi']}`
+📏 Spread: `{opp['spread_pct']}%`
+
+⚡ Trigger: `{opp['trigger']}`
+🎯 هدف السهم النهائي: `{opp['last_target_stock']}`
+"""
+
+
+def _monitor_one(opp):
+    contract = opp.get("contract_ticker")
+    if not contract:
+        return None
+
+    # Prefer the same live options source used for discovery.
+    if TRADIER_API_TOKEN:
+        payload = _tradier_get(
+            "/markets/quotes",
+            params={"symbols": contract, "greeks": "false"},
+            cache_key=f"tradier:quote:{contract}",
+            cache_ttl=OPTIONS_CACHE_SECONDS,
+        )
+        if payload:
+            quote_node = payload.get("quotes", {})
+            quote = quote_node.get("quote", {}) if isinstance(quote_node, dict) else {}
+            if isinstance(quote, list):
+                quote = quote[0] if quote else {}
+            price = _safe_float(
+                quote.get("bid") or quote.get("ask") or quote.get("last")
+            )
+            if price > 0:
+                gain = (price / opp["price"] - 1) * 100
+                return price, gain
+
+    # Keep the existing Polygon monitor as a fallback.
+    url = (
+        f"https://api.polygon.io/v3/snapshot/options/"
+        f"{opp['stock']}/{contract}?apiKey={POLYGON_API_KEY}"
+    )
+    res = api_get(url, f"monitor:{contract}", OPTIONS_CACHE_SECONDS)
+    if not res:
+        return None
+
+    result = res.json().get("results", {})
+    quote = result.get("last_quote", {})
+    price = _safe_float(quote.get("bid") or quote.get("ask") or
+                        result.get("last_trade", {}).get("price"))
+    if price <= 0:
+        return None
+
+    gain = (price / opp["price"] - 1) * 100
+    return price, gain
+
+
+def monitor_active_contracts():
+    """Centralized monitor: no one thread per alert."""
+    now = time.time()
+    finished = []
+
+    for key, opp in list(active_monitors.items()):
+        try:
+            exp = datetime.strptime(
+                opp["expiry"], "%Y-%m-%d"
+            ).replace(tzinfo=ZoneInfo("America/New_York"))
+            expiry_cutoff = exp.timestamp() + 16 * 3600
+            if now > expiry_cutoff:
+                finished.append(key)
+                continue
+
+            result = _monitor_one(opp)
+            if not result:
+                continue
+
+            price, gain = result
+            opp["peak_gain"] = max(opp.get("peak_gain", gain), gain)
+
+            # Alert once when the contract reaches its predefined target.
+            target_price = _safe_float(opp.get("estimated_target_price"))
+            if target_price > 0 and price >= target_price and not opp.get("target_hit"):
+                opp["target_hit"] = True
+                send_telegram_alert(
+                    f"""
+🎯 *TARGET ACHIEVED* ✅
+
+🗽 `{opp['stock']} {opp['type']} {opp['strike']}`
+📅 Expiry: `{opp['expiry']}`
+
+💵 العقد: `${price:.2f}`
+💵 الدخول: `${opp['price']:.2f}`
+📈 العائد: `+{gain:.0f}%`
+
+🎯 الهدف المحدد: `${target_price:.2f}`
+🏆 أعلى عائد مسجل: `+{opp['peak_gain']:.0f}%`
+"""
+                )
+
+        except Exception:
+            logging.exception("Monitor error for %s", key)
+
+    for key in finished:
+        active_monitors.pop(key, None)
+
+
+def _register_monitor(opp):
+    key = (opp["stock"], opp["contract_ticker"], opp["expiry"])
+    if len(active_monitors) >= MAX_ACTIVE_MONITORS:
+        # Keep the strongest candidates only.
+        weakest_key = min(
+            active_monitors,
+            key=lambda k: active_monitors[k].get("score", 0)
+        )
+        if active_monitors[weakest_key].get("score", 0) >= opp.get("score", 0):
+            return
+        active_monitors.pop(weakest_key, None)
+    active_monitors[key] = opp
+
+
+def _ordered_assets_for_cycle():
+    """Prioritize active/accelerating candidates without removing any asset."""
+    if not behavior_memory:
+        return list(TARGET_ASSETS)
+
+    def priority(ticker):
+        state = behavior_memory.get(ticker, {})
+        accel = abs(_safe_float(state.get("volume", 0)))
+        return accel
+
+    known = [a for a in TARGET_ASSETS if a in behavior_memory]
+    unknown = [a for a in TARGET_ASSETS if a not in behavior_memory]
+    known.sort(key=priority, reverse=True)
+    return known + unknown
+
+
+def _smart_assets_for_cycle(now):
+    """Select only the most useful due tickers for this cycle.
+
+    The complete universe remains eligible. Strong/active candidates are
+    revisited quickly; quiet candidates are rotated more slowly. This is a
+    request-scheduling layer only and does not alter the hunt engine.
+    """
+    ordered = _ordered_assets_for_cycle()
+    due = [a for a in ordered if now >= _safe_float(search_state.get(a, {}).get("next_scan", 0))]
+
+    # First give already-known active candidates priority, then rotate through
+    # untouched/quiet names. This prevents a burst of 20x structural requests.
+    due.sort(key=lambda a: (
+        _safe_float(search_state.get(a, {}).get("priority", 0)),
+        1 if a in behavior_memory else 0,
+        _safe_float(search_state.get(a, {}).get("last_scan", 0))
+    ), reverse=True)
+    return due[:max(1, MAX_STRUCTURAL_SCANS_PER_CYCLE)]
+
+
+def _schedule_next_scan(ticker, opp=None):
+    """Adapt the next structural scan interval from observed opportunity strength."""
+    now = time.time()
+    state = search_state.setdefault(ticker, {})
+
+    if opp:
+        zone_score = _safe_float(opp.get("zone_score"))
+        distance = _safe_float(opp.get("zone_distance_pct"))
+        trigger = opp.get("alert_mode") == "TRIGGER"
+        if trigger:
+            cooldown = HOT_SCAN_COOLDOWN_SECONDS
+            priority = 3
+        elif zone_score >= EARLY_ZONE_NEAR_SCORE:
+            cooldown = ACTIVE_SCAN_COOLDOWN_SECONDS
+            priority = 2
+        elif zone_score >= EARLY_ZONE_MIN_SCORE:
+            cooldown = ACTIVE_SCAN_COOLDOWN_SECONDS
+            priority = 1
+        else:
+            cooldown = NORMAL_SCAN_COOLDOWN_SECONDS
+            priority = 0
+        state["priority"] = priority
+        state["zone_score"] = zone_score
+        state["distance_pct"] = distance
+    else:
+        # No qualifying opportunity: slow this ticker down, but keep rotating
+        # it through the universe so a later setup is still discovered.
+        cooldown = NORMAL_SCAN_COOLDOWN_SECONDS
+        state["priority"] = max(0, _safe_float(state.get("priority", 0)) - 1)
+
+    state["last_scan"] = now
+    state["next_scan"] = now + max(30, cooldown)
+
+
+def main_engine():
+    if not POLYGON_API_KEY:
+        raise RuntimeError("POLYGON_API_KEY is not configured.")
+
+    _init_log()
+
+    send_telegram_alert(
+        "🗽⚡️ *THE LEGENDARY V2 بدأ العمل — PRE-HUNT engine*"
+        "\nلا يوجد حد لعدد التنبيهات."
+    )
+
+    last_monitor = 0.0
+
+    while True:
+        if not is_us_market_open():
+            time.sleep(180)
+            continue
+
+        cycle_start = time.time()
+
+        assets_this_cycle = _smart_assets_for_cycle(time.time())
+        for asset in assets_this_cycle:
+            try:
+                opp = scan_market_opportunity(asset)
+                _schedule_next_scan(asset, opp)
+                if not opp:
+                    continue
+
+                key = (opp["stock"], opp["contract_ticker"], opp["expiry"])
+                now = time.time()
+
+                # Same contract cannot re-alert inside 45 minutes.
+                if now - alerted.get(key, 0) < 2700:
+                    continue
+                alerted[key] = now
+
+                _log_alert(opp)
+
+                image = generate_card_image(
+                    opp["stock"], opp["type"],
+                    opp["strike"], opp["expiry"],
+                    mode=opp["alert_mode"]
+                )
+                send_telegram_alert(format_alert(opp), image)
+                _register_monitor(opp)
+
+                logging.info(
+                    "ALERT %s %s zone=%.1f potential=%.1f reach=%s",
+                    opp["stock"], opp["type"], opp["zone_score"],
+                    opp["potential"], opp["reachability"]
+                )
+
+            except Exception:
+                logging.exception("Scan error for %s", asset)
+
+        if time.time() - last_monitor >= MONITOR_INTERVAL_SECONDS:
+            monitor_active_contracts()
+            last_monitor = time.time()
+
+        elapsed = time.time() - cycle_start
+        time.sleep(max(5, SCAN_INTERVAL_SECONDS - elapsed))
+
+
+def run_forever(send=None, restart_delay=60):
+    """يشغّل صياد العقود للأبد (يستخدمه السكانر في Thread).
+    send = دالة إرسال (message, image_path). لو طاح المحرك يرجع يشتغل بعد دقيقة."""
+    global EXTERNAL_SENDER
+    if not logging.getLogger().handlers:
+        logging.basicConfig(level=logging.INFO,
+                            format="%(asctime)s - %(levelname)s - %(message)s")
+    if send is not None:
+        EXTERNAL_SENDER = send
+    while True:
+        try:
+            main_engine()
+        except Exception as exc:
+            logging.exception("THE LEGENDARY crashed, restarting")
+            send_telegram_alert(f"⚠️ *صياد العقود توقف وبيرجع يشتغل:* `{exc}`")
+            time.sleep(restart_delay)
+
+
 def main():
     if "--test" in sys.argv:
         self_test()
@@ -2597,6 +4544,9 @@ def main():
     if "--sweeptest" in sys.argv:
         sweep_self_test()
         return
+    if "--optionstest" in sys.argv:
+        legendary_self_test()
+        return
     once = "--once" in sys.argv
     _load_chats()
     discover_groups()
@@ -2604,6 +4554,7 @@ def main():
     if not once:
         start_algo_thread()
         start_news_thread()
+        start_legendary_thread()      # (8) صياد العقود THE LEGENDARY
         try:   # قائمة IFVG الأسبوعية (كل جمعة)
             import weekly_ifvg
             threading.Thread(target=weekly_ifvg.run_forever, kwargs={"send": send_telegram},
