@@ -823,20 +823,20 @@ def check_pattern(c):
     info = {"price": c4["Close"], "open": c4["Open"], "candle_time": c.index[-1],
             "end": c4["end"] if "end" in c else c.index[-1]}
 
-    # 🟢 صعودي: قاع الأولى فوق قمة الثالثة، والرابعة تفتح تحت أعلى الجاب وتقفل فوقه
+    # 🟢 صعودي: قاع الأولى فوق قمة الثالثة، والرابعة تقفل فوق أعلى الجاب (الافتتاح ما يهم)
     if ENABLE_BULLISH and c1["Low"] > c3["High"]:
         gap_bottom = c3["High"]   # قمة الشمعة الثالثة
         gap_top = c1["Low"]       # قاع الشمعة الأولى = الخط المطلوب
         covered = c2["High"] >= gap_top and c2["Low"] <= gap_bottom   # الثانية تغطي الجاب كامل
-        if (covered or not GAP_REQUIRE_MIDDLE_COVER) and c4["Open"] < gap_top and c4["Close"] > gap_top:
+        if (covered or not GAP_REQUIRE_MIDDLE_COVER) and c4["Close"] > gap_top:
             return {"side": "bull", "gap_bottom": gap_bottom, "gap_top": gap_top, **info}
 
-    # 🔴 هبوطي: قمة الأولى تحت قاع الثالثة، والرابعة تفتح فوق أسفل الجاب وتقفل تحته
+    # 🔴 هبوطي: قمة الأولى تحت قاع الثالثة، والرابعة تقفل تحت أسفل الجاب (الافتتاح ما يهم)
     if ENABLE_BEARISH and c1["High"] < c3["Low"]:
         gap_bottom = c1["High"]   # قمة الشمعة الأولى = الخط المطلوب
         gap_top = c3["Low"]       # قاع الشمعة الثالثة
         covered = c2["High"] >= gap_top and c2["Low"] <= gap_bottom   # الثانية تغطي الجاب كامل
-        if (covered or not GAP_REQUIRE_MIDDLE_COVER) and c4["Open"] > gap_bottom and c4["Close"] < gap_bottom:
+        if (covered or not GAP_REQUIRE_MIDDLE_COVER) and c4["Close"] < gap_bottom:
             return {"side": "bear", "gap_bottom": gap_bottom, "gap_top": gap_top, **info}
 
     return None
