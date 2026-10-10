@@ -2719,6 +2719,10 @@ if _env_syms:
 # API/load controls.
 REQUEST_MIN_INTERVAL = float(os.getenv("REQUEST_MIN_INTERVAL", "0.35"))
 MAX_BACKOFF_SECONDS = int(os.getenv("MAX_BACKOFF_SECONDS", "60"))
+POLYGON_CONNECT_TIMEOUT = float(os.getenv("POLYGON_CONNECT_TIMEOUT", "10"))
+POLYGON_READ_TIMEOUT = float(os.getenv("POLYGON_READ_TIMEOUT", "30"))
+POLYGON_MAX_RETRIES = int(os.getenv("POLYGON_MAX_RETRIES", "3"))
+POLYGON_OPTIONS_BLOCK_SECONDS = int(os.getenv("POLYGON_OPTIONS_BLOCK_SECONDS", "3600"))
 SCAN_INTERVAL_SECONDS = int(os.getenv("SCAN_INTERVAL_SECONDS", "75"))
 MONITOR_INTERVAL_SECONDS = int(os.getenv("MONITOR_INTERVAL_SECONDS", "90"))
 OPTIONS_CACHE_SECONDS = int(os.getenv("OPTIONS_CACHE_SECONDS", "25"))
@@ -2762,6 +2766,7 @@ _last_request_time = 0.0
 _backoff_until = 0.0
 _adaptive_interval = ADAPTIVE_MIN_INTERVAL
 _last_429_time = 0.0
+_polygon_options_blocked_until = 0.0
 _stale_cache = {}
 
 _tradier_request_lock = threading.Lock()
@@ -2809,6 +2814,11 @@ def cache_set(key, value):
         _cache[key] = (time.time(), value)
 
 
+def _redact_url(url):
+    """Hide the Polygon API key in anything we log."""
+    return re.sub(r"apiKey=[^&]+", "apiKey=***", str(url))
+
+
 def api_get(url, cache_key=None, cache_ttl=0, allow_stale_on_429=False):
     """Single controlled gateway for Polygon requests.
 
@@ -2817,6 +2827,7 @@ def api_get(url, cache_key=None, cache_ttl=0, allow_stale_on_429=False):
     The market-hunt logic and its thresholds are not changed here.
     """
     global _last_request_time, _backoff_until, _adaptive_interval, _last_429_time
+    global _polygon_options_blocked_until
 
     if cache_key and cache_ttl:
         cached = cache_get(cache_key, cache_ttl)
@@ -2834,11 +2845,46 @@ def api_get(url, cache_key=None, cache_ttl=0, allow_stale_on_429=False):
         if wait > 0:
             time.sleep(wait)
 
-        try:
-            res = requests.get(url, timeout=15)
-            _last_request_time = time.time()
-        except requests.RequestException as exc:
-            logging.error("API connection error: %s", exc)
+        attempts = max(1, POLYGON_MAX_RETRIES)
+        res = None
+        for attempt in range(1, attempts + 1):
+            try:
+                res = requests.get(
+                    url, timeout=(POLYGON_CONNECT_TIMEOUT, POLYGON_READ_TIMEOUT)
+                )
+                _last_request_time = time.time()
+                break
+            except requests.RequestException as exc:
+                _last_request_time = time.time()
+                if attempt < attempts:
+                    delay = 2 ** (attempt - 1)   # 1s, 2s, 4s ...
+                    logging.warning(
+                        "API connection error (attempt %d/%d) for %s: %s; retrying in %ss",
+                        attempt, attempts, _redact_url(url), exc, delay
+                    )
+                    time.sleep(delay)
+                else:
+                    logging.error(
+                        "API connection error for %s after %d attempts: %s",
+                        _redact_url(url), attempts, exc
+                    )
+                    return None
+
+        if res is None:
+            return None
+
+        if res.status_code == 403 and "/v3/snapshot/options" in url:
+            # Plan is not entitled to the options snapshot; retrying will not
+            # help, so pause options lookups instead of burning the budget.
+            now = time.time()
+            if now >= _polygon_options_blocked_until:
+                logging.warning(
+                    "Polygon options snapshot returned 403 (plan not entitled). "
+                    "Options lookups paused for %d minutes; Tradier or a higher "
+                    "Polygon plan is needed.",
+                    max(1, POLYGON_OPTIONS_BLOCK_SECONDS // 60)
+                )
+            _polygon_options_blocked_until = now + POLYGON_OPTIONS_BLOCK_SECONDS
             return None
 
         if res.status_code == 429:
@@ -2877,7 +2923,7 @@ def api_get(url, cache_key=None, cache_ttl=0, allow_stale_on_429=False):
             return None
 
         if res.status_code != 200:
-            logging.warning("API status %s for %s", res.status_code, url)
+            logging.warning("API status %s for %s", res.status_code, _redact_url(url))
             return None
 
         # Gradually recover toward the normal request interval after clean
@@ -3806,9 +3852,15 @@ def _fetch_options_best_source(ticker):
 
 
 def fetch_option_snapshot(ticker):
-    url = f"https://api.polygon.io/v3/snapshot/options/{ticker}?apiKey={POLYGON_API_KEY}"
-    res = api_get(url, f"options:{ticker}", OPTIONS_CACHE_SECONDS)
-    return res.json().get("results", []) if res else []
+    if time.time() < _polygon_options_blocked_until:
+        return []
+    try:
+        url = f"https://api.polygon.io/v3/snapshot/options/{ticker}?apiKey={POLYGON_API_KEY}"
+        res = api_get(url, f"options:{ticker}", OPTIONS_CACHE_SECONDS)
+        return res.json().get("results", []) if res else []
+    except Exception as exc:
+        logging.warning("fetch_option_snapshot failed for %s: %s", ticker, exc)
+        return []
 
 
 def estimate_contract_potential(stock_price, strike, premium, option_type,
@@ -4295,6 +4347,8 @@ def _monitor_one(opp):
                 return price, gain
 
     # Keep the existing Polygon monitor as a fallback.
+    if time.time() < _polygon_options_blocked_until:
+        return None
     url = (
         f"https://api.polygon.io/v3/snapshot/options/"
         f"{opp['stock']}/{contract}?apiKey={POLYGON_API_KEY}"
