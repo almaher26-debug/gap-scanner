@@ -140,6 +140,7 @@ import gc
 import io
 import logging
 import os
+import random
 import sys
 import threading
 import time
@@ -2764,6 +2765,15 @@ _adaptive_interval = ADAPTIVE_MIN_INTERVAL
 _last_429_time = 0.0
 _stale_cache = {}
 
+# Polygon HTTP transport controls (used only by api_get).
+POLYGON_CONNECT_TIMEOUT = float(os.getenv("POLYGON_CONNECT_TIMEOUT", "10"))
+POLYGON_READ_TIMEOUT = float(os.getenv("POLYGON_READ_TIMEOUT", "30"))
+POLYGON_MAX_ATTEMPTS = 3
+_TRANSIENT_HTTP_STATUSES = (500, 502, 503, 504)
+_session = None
+_options_forbidden_until = 0.0
+_forbidden_logged = set()
+
 _tradier_request_lock = threading.Lock()
 _tradier_last_request_time = 0.0
 _tradier_disabled_until = 0.0
@@ -2809,6 +2819,39 @@ def cache_set(key, value):
         _cache[key] = (time.time(), value)
 
 
+# --- api_get notes ---------------------------------------------------------
+# * Retries (up to POLYGON_MAX_ATTEMPTS, exponential backoff + jitter) happen
+#   only for transient network errors: SSLError, ConnectionError, Timeout and
+#   HTTP 500/502/503/504. 400/401/403/404 are never retried.
+# * HTTP 403 means the Polygon plan is not entitled to that data. For the
+#   options snapshot endpoint this triggers a 1-hour options cool-down so the
+#   request budget is not wasted; bar requests are unaffected.
+# * HTTP 429 keeps the adaptive spacing/backoff behaviour and is not retried.
+def _get_session():
+    """Shared session; Connection: close avoids reusing stale keep-alive sockets."""
+    global _session
+    if _session is None:
+        _session = requests.Session()
+        _session.headers.update({"Connection": "close"})
+    return _session
+
+
+def _reset_session():
+    global _session
+    old, _session = _session, None
+    if old is not None:
+        try:
+            old.close()
+        except Exception:
+            pass
+
+
+def _safe_url(url):
+    """Host + path only; never includes the query string (API key)."""
+    base = str(url).split("?", 1)[0]
+    return base.split("://", 1)[-1]
+
+
 def api_get(url, cache_key=None, cache_ttl=0, allow_stale_on_429=False):
     """Single controlled gateway for Polygon requests.
 
@@ -2817,81 +2860,130 @@ def api_get(url, cache_key=None, cache_ttl=0, allow_stale_on_429=False):
     The market-hunt logic and its thresholds are not changed here.
     """
     global _last_request_time, _backoff_until, _adaptive_interval, _last_429_time
+    global _options_forbidden_until
 
     if cache_key and cache_ttl:
         cached = cache_get(cache_key, cache_ttl)
         if cached is not None:
             return cached
 
-    with _request_lock:
-        now = time.time()
-        if now < _backoff_until:
-            # Do not freeze the whole scanner after a 429; keep the pause short
-            # and let stale caches + smart rotation protect the request budget.
-            time.sleep(min(2.0, _backoff_until - now))
+    is_options = "/v3/snapshot/options/" in str(url)
+    if is_options and time.time() < _options_forbidden_until:
+        return None
 
-        wait = _adaptive_interval - (time.time() - _last_request_time)
-        if wait > 0:
-            time.sleep(wait)
+    safe = _safe_url(url)
+    failure = None
 
-        try:
-            res = requests.get(url, timeout=15)
-            _last_request_time = time.time()
-        except requests.RequestException as exc:
-            logging.error("API connection error: %s", exc)
-            return None
-
-        if res.status_code == 429:
+    for attempt in range(POLYGON_MAX_ATTEMPTS):
+        with _request_lock:
             now = time.time()
-            # Exponentially increase the spacing, but cap it so recovery
-            # remains quick after the API cools down.
-            _adaptive_interval = min(
-                ADAPTIVE_MAX_INTERVAL,
-                max(ADAPTIVE_MIN_INTERVAL, _adaptive_interval * 1.5)
-            )
+            if now < _backoff_until:
+                # Do not freeze the whole scanner after a 429; keep the pause short
+                # and let stale caches + smart rotation protect the request budget.
+                time.sleep(min(2.0, _backoff_until - now))
 
-            retry_after = res.headers.get("Retry-After")
+            wait = _adaptive_interval - (time.time() - _last_request_time)
+            if wait > 0:
+                time.sleep(wait)
+
             try:
-                server_delay = float(retry_after) if retry_after else 0.0
-            except (TypeError, ValueError):
-                server_delay = 0.0
+                res = _get_session().get(
+                    url, timeout=(POLYGON_CONNECT_TIMEOUT, POLYGON_READ_TIMEOUT)
+                )
+                _last_request_time = time.time()
+            except (requests.exceptions.SSLError, requests.exceptions.ConnectionError) as exc:
+                _last_request_time = time.time()
+                _reset_session()
+                failure = type(exc).__name__
+                res = None
+            except requests.exceptions.Timeout as exc:
+                _last_request_time = time.time()
+                failure = type(exc).__name__
+                res = None
+            except requests.RequestException as exc:
+                _last_request_time = time.time()
+                logging.warning("API request failed for %s: %s", safe, type(exc).__name__)
+                return None
 
-            previous = max(0, int(_backoff_until - now))
-            delay = max(2, server_delay, min(previous * 2, RATE_LIMIT_BACKOFF_BASE))
-            delay = min(15, MAX_BACKOFF_SECONDS, delay)
-            _backoff_until = now + delay
-            _last_429_time = now
-            logging.warning(
-                "429 rate limit. Adaptive interval=%.2fs; pausing Polygon traffic for %ss.",
-                _adaptive_interval, int(delay)
-            )
+            if res is not None:
+                if res.status_code == 429:
+                    now = time.time()
+                    # Exponentially increase the spacing, but cap it so recovery
+                    # remains quick after the API cools down.
+                    _adaptive_interval = min(
+                        ADAPTIVE_MAX_INTERVAL,
+                        max(ADAPTIVE_MIN_INTERVAL, _adaptive_interval * 1.5)
+                    )
 
-            # Bars can safely use a very short stale fallback during a rate
-            # limit event, preventing one 429 from erasing a qualified
-            # structural candidate. Options are deliberately not given this
-            # fallback because contract quotes are more sensitive to staleness.
-            if allow_stale_on_429 and cache_key:
-                stale = _stale_cache.get(cache_key)
-                if stale and now - stale[0] <= STALE_BAR_FALLBACK_SECONDS:
-                    return stale[1]
-            return None
+                    retry_after = res.headers.get("Retry-After")
+                    try:
+                        server_delay = float(retry_after) if retry_after else 0.0
+                    except (TypeError, ValueError):
+                        server_delay = 0.0
 
-        if res.status_code != 200:
-            logging.warning("API status %s for %s", res.status_code, url)
-            return None
+                    previous = max(0, int(_backoff_until - now))
+                    delay = max(2, server_delay, min(previous * 2, RATE_LIMIT_BACKOFF_BASE))
+                    delay = min(15, MAX_BACKOFF_SECONDS, delay)
+                    _backoff_until = now + delay
+                    _last_429_time = now
+                    logging.warning(
+                        "429 rate limit. Adaptive interval=%.2fs; pausing Polygon traffic for %ss.",
+                        _adaptive_interval, int(delay)
+                    )
 
-        # Gradually recover toward the normal request interval after clean
-        # responses; never jump instantly back to the minimum.
-        if _adaptive_interval > ADAPTIVE_MIN_INTERVAL:
-            _adaptive_interval = max(
-                ADAPTIVE_MIN_INTERVAL,
-                _adaptive_interval - ADAPTIVE_RECOVERY_STEP
-            )
+                    # Bars can safely use a very short stale fallback during a rate
+                    # limit event, preventing one 429 from erasing a qualified
+                    # structural candidate. Options are deliberately not given this
+                    # fallback because contract quotes are more sensitive to staleness.
+                    if allow_stale_on_429 and cache_key:
+                        stale = _stale_cache.get(cache_key)
+                        if stale and now - stale[0] <= STALE_BAR_FALLBACK_SECONDS:
+                            return stale[1]
+                    return None
 
-        if cache_key and cache_ttl:
-            cache_set(cache_key, res)
-            _stale_cache[cache_key] = (time.time(), res)
-        return res
+                if res.status_code == 403:
+                    family = "options_snapshot" if is_options else "other:" + safe.split("/", 2)[-1].split("/")[0]
+                    if family not in _forbidden_logged:
+                        _forbidden_logged.add(family)
+                        if is_options:
+                            logging.warning(
+                                "Polygon returned 403 (not entitled) for the options snapshot "
+                                "(%s). Check that the Polygon plan includes options data; "
+                                "pausing options requests for 1 hour.", safe
+                            )
+                        else:
+                            logging.warning("Polygon returned 403 (not entitled) for %s", safe)
+                    if is_options:
+                        _options_forbidden_until = time.time() + 3600
+                    return None
+
+                if res.status_code in _TRANSIENT_HTTP_STATUSES:
+                    failure = "HTTP %s" % res.status_code
+                elif res.status_code != 200:
+                    logging.warning("API status %s for %s", res.status_code, safe)
+                    return None
+                else:
+                    # Gradually recover toward the normal request interval after clean
+                    # responses; never jump instantly back to the minimum.
+                    if _adaptive_interval > ADAPTIVE_MIN_INTERVAL:
+                        _adaptive_interval = max(
+                            ADAPTIVE_MIN_INTERVAL,
+                            _adaptive_interval - ADAPTIVE_RECOVERY_STEP
+                        )
+
+                    if cache_key and cache_ttl:
+                        cache_set(cache_key, res)
+                        _stale_cache[cache_key] = (time.time(), res)
+                    return res
+
+        # Transient failure: back off outside the request lock.
+        if attempt < POLYGON_MAX_ATTEMPTS - 1:
+            time.sleep(1.5 * 2 ** attempt + random.uniform(0, 1))
+
+    logging.warning("API request failed after %d attempts for %s: %s",
+                    POLYGON_MAX_ATTEMPTS, safe, failure)
+    return None
+
 
 
 def is_us_market_open():
