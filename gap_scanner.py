@@ -219,7 +219,7 @@ GAP_SENT_FILE = "gap_sent.txt"   # عشان ما يعيد نفس التنبيه 
 
 # ---- (1د) سحب سيولة دعمين - الفريم اليومي ----
 #   شمعة اليوم ذيلها نزل تحت دعمين (قاعين سابقين) وقفلت فوقهم الاثنين
-ENABLE_SWEEP = True              # True = شغال | False = مطفي
+ENABLE_SWEEP = False             # True = شغال | False = مطفي
 SWEEP_MIN_MARKET_CAP = 2_000_000_000   # القيمة السوقية 2 مليار دولار وفوق (ناسداك + نيويورك)
 SWEEP_MIN_SUPPORTS = 2           # كم دعم لازم ينسحب بنفس الشمعة
 SWEEP_PIVOT_BARS = 3             # الدعم = قاع أنزل من 3 شموع قبله و3 بعده
@@ -229,7 +229,7 @@ SWEEP_MIN_PRICE = 5              # يتجاهل الأسهم اللي سعرها
 SWEEP_AFTER_NY = (16, 20)        # يفحص بعد الإغلاق: 4:20 العصر نيويورك = 11:20 بالليل بتوقيتك
 
 # ---- (1و) سحب سيولة دعمين - الفريم الأسبوعي ----
-ENABLE_WSWEEP = True             # True = شغال | False = مطفي
+ENABLE_WSWEEP = False            # True = شغال | False = مطفي
 WSWEEP_MIN_MARKET_CAP = 10_000_000_000   # القيمة السوقية 10 مليار دولار وفوق (ناسداك + نيويورك)
 WSWEEP_PIVOT_BARS = 2            # الدعم الأسبوعي = قاع أنزل من شمعتين قبله وشمعتين بعده
 WSWEEP_LOOKBACK = 52             # يدور على الدعوم خلال آخر 52 أسبوع (سنة)
@@ -279,7 +279,7 @@ SHORT_WORKERS = 3
 SHORT_SENT_FILE = "short_sent.txt"   # عشان ما يعيد نفس التنبيه لو البوت أعاد التشغيل
 
 # ---- (4ب) تجزئة عكسية + شورت صفر (أسهم البني ستوك) ----
-ENABLE_RSPLIT_SHORT = True
+ENABLE_RSPLIT_SHORT = False            # مطفي
 RSPLIT_MAX_PRICE = 5                 # الشورت صفر: يفحصه لأسهم البني ستوك (5$ أو أقل) من اللي سوت تجزئة
 RSPLIT_NEW_DAYS = 4                  # "جديد" = تجزئة صارت خلال آخر كذا يوم (يغطي الويكند) وما انرسلت قبل
 RSPLIT_CHECK_AFTER_NY = 10           # الفحص اليومي بعد الساعة 10 الصبح نيويورك (عشان سعر الافتتاح يكون موجود)
@@ -371,7 +371,7 @@ NEWS_EXCHANGES = ("nasdaq", "nyse", "amex")   # البورصات اللي تنج
 NEWS_SENT_FILE = "news_sent.txt"      # عشان ما يعيد نفس الخبر لو البوت أعاد التشغيل
 
 # ---- (9) دعم ومقاومة الأسبوع والشهر السابق ----
-ENABLE_SR = True                 # True = شغال | False = مطفي
+ENABLE_SR = False                # True = شغال | False = مطفي
 SR_SYMBOLS = [
     "AXON", "COIN", "T", "CRWD", "SWKS", "MU", "HOOD", "TSLA", "META", "AAPL",
     "SPCX", "HPE", "VST", "MET", "INTC", "AMD", "AVGO", "PLTR", "NFLX", "ORCL",
