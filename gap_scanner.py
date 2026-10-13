@@ -101,7 +101,7 @@
     - يدور على صفقات صغيرة (10 أسهم وأقل) بنفس الحجم بالضبط، مثل 1، 1، 1، 1...
     - تنبيه لو تكررت 300 مرة أو أكثر خلال 5 دقايق، وقوي عند 600
     - يقدّر هل غالبها شراء ولا بيع من اتجاه السعر (تقريبي)
-    - البيانات من كل البورصات (sip) بتأخير 15 دقيقة في باقة ألباكا المجانية
+    - البيانات من كل البورصات (sip) لحظية بالباقة المدفوعة (ALGO_DELAY_MIN = 0)
     - يحتاج المتغيرين ALPACAAPIKEY و ALPACASECRETKEY في Railway
 
 (6ج) خوارزميات البني ستوك - نفس منطق (6) بالضبط
@@ -298,10 +298,12 @@ ALPACA_KEY = (os.environ.get("ALPACAAPIKEY") or os.environ.get("ALPACA_API_KEY")
 ALPACA_SECRET = (os.environ.get("ALPACASECRETKEY") or os.environ.get("ALPACA_SECRET_KEY")
                  or os.environ.get("APCA_API_SECRET_KEY", ""))
 ENABLE_ALGO = bool(ALPACA_KEY and ALPACA_SECRET)   # يتفعل لحاله لو المفاتيح موجودة
-# sip = كل البورصات (المجاني يعطيها بتأخير 15 دقيقة) | iex = لحظي بس بورصة وحدة صغيرة
+# sip = كل البورصات (لحظي بالباقة المدفوعة، متأخر 15 دقيقة بالمجانية) | iex = بورصة وحدة صغيرة
 # الأسهم الصغيرة تقريباً ما تتداول على IEX، فـ sip أدق بكثير لهالنوع
 ALGO_FEED = os.environ.get("ALGO_FEED", "sip").lower()
-ALGO_DELAY_MIN = 16 if ALGO_FEED == "sip" else 0   # الباقة المجانية: بيانات sip عمرها 15 دقيقة وفوق
+# باقة ألباكا المدفوعة (Algo Trader Plus) = sip لحظي، فالتأخير صفر
+# لو رجعت للباقة المجانية حط في Railway متغير ALGO_DELAY_MIN = 16
+ALGO_DELAY_MIN = int(os.environ.get("ALGO_DELAY_MIN", "0"))
 # الأسهم: تلقائياً أسهم ناسداك اللي سعرها من 1$ إلى 15$ وسوت تجزئة عكسية خلال آخر 3 شهور
 # ولو تبي قائمة ثابتة حطها في Railway بمتغير ALGO_SYMBOLS (بينها فاصلة)
 ALGO_SYMBOLS = [s.strip().upper() for s in os.environ.get("ALGO_SYMBOLS", "").split(",") if s.strip()]
@@ -1813,6 +1815,10 @@ def fetch_alpaca_trades(symbols, start, end=None):
             r = requests.get(ALGO_URL, headers=headers, params=params, timeout=20)
         except Exception as e:
             log("ألباكا: فشل الاتصال -", e)
+            return None
+        if r.status_code == 403 and "subscription" in r.text.lower():
+            log("ألباكا: الاشتراك ما يسمح ببيانات sip اللحظية - تأكد إن المفاتيح من الحساب المشترك،"
+                " أو حط ALGO_DELAY_MIN = 16 في Railway")
             return None
         if r.status_code in (401, 403):
             log(f"ألباكا: المفاتيح مرفوضة ({r.status_code}) - تأكد من ALPACAAPIKEY و ALPACASECRETKEY")
