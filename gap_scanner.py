@@ -317,6 +317,7 @@ ALGO_MAX_SIZE = 10                    # الأحجام الصغيرة بس: صف
 ALGO_WINDOW_MIN = 5                   # يعد الصفقات المتكررة خلال آخر كذا دقيقة
 ALGO_MIN_STREAK = 300                 # تنبيه عند 300 صفقة بنفس الحجم
 ALGO_STRONG_STREAK = 600              # تنبيه قوي عند 600 أو أكثر
+ALGO_MIN_VALUE = float(os.environ.get("ALGO_MIN_VALUE", "25000"))   # أقل قيمة بالدولار لمجموع الصفقات المتكررة (0 = بدون شرط)
 ALGO_SMALL_ONCE_HOURS = 24            # قسم التجزئة العكسية (1$-15$): تنبيه واحد لكل سهم كل كذا ساعة (0 = بدون حد)
 ALGO_ONCE_FILE = "algo_once.txt"      # يحفظ وقت آخر تنبيه لكل سهم عشان ما يعيده لو البوت أعاد التشغيل
 ALGO_REALERT_MIN = 15                 # ما يعيد نفس مستوى التنبيه لنفس السهم والحجم قبل كذا دقيقة
@@ -1872,6 +1873,8 @@ class AlgoDetector:
                  "normal" if n >= ALGO_MIN_STREAK else None)
         if level is None:
             return None
+        if ALGO_MIN_VALUE and sum(x[1] for x in q) * size < ALGO_MIN_VALUE:
+            return None                                # المبلغ صغير: مو أمر كبير متقطع
         k = (sym, size, level)
         last = self.alerted.get(k)
         if last is not None and ts - last < pd.Timedelta(minutes=ALGO_REALERT_MIN):
@@ -2320,7 +2323,16 @@ def start_algo_thread():
 
 
 def algo_self_test():
-    det = AlgoDetector(); t0 = pd.Timestamp("2026-01-02T15:00:00Z"); alerts = []
+    global ALGO_MIN_VALUE
+    t0 = pd.Timestamp("2026-01-02T15:00:00Z")
+    # شرط القيمة: 300 صفقة بسهم واحد على 2.27$ = 681$ بس، فما ينبه
+    det = AlgoDetector()
+    small = [det.add("YJ", {"i": k + 1, "s": 1, "p": 2.27, "t": t0 + pd.Timedelta(milliseconds=k * 700)})
+             for k in range(320)]
+    assert not any(small), "تنبيه على مبلغ صغير"
+    print(f"ALGO TEST OK: 300 trades worth ~681$ ignored (min {ALGO_MIN_VALUE:,.0f}$)")
+    saved, ALGO_MIN_VALUE = ALGO_MIN_VALUE, 0
+    det = AlgoDetector(); alerts = []
     for k in range(650):          # 650 صفقة بحجم سهم واحد خلال 3 دقايق وشوي، السعر يطلع
         tr = {"i": k + 1, "s": 1, "p": 0.50 + (k % 5) * 0.001,
               "t": t0 + pd.Timedelta(milliseconds=k * 300)}
@@ -2330,6 +2342,7 @@ def algo_self_test():
         a = det.add("BIG", {"i": k + 1, "s": 500, "p": 1.0, "t": t0 + pd.Timedelta(seconds=k)})
         assert a is None
     assert [a["count"] for a in alerts] == [300, 600], [a["count"] for a in alerts]
+    ALGO_MIN_VALUE = saved
     print("ALGO TEST OK: 300 / 600 same-size trades")
     print(_algo_message("TEST", alerts[-1], 12_300_000))
 
