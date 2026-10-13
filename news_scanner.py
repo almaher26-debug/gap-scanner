@@ -1,243 +1,341 @@
 # -*- coding: utf-8 -*-
 """
-سكانر الأخبار الإيجابية — بوت سافونا
------------------------------------
-الفكرة:
-  1) يجيب آخر الأخبار من Alpaca News لقائمة الأسهم
-  2) يقرأ العنوان والملخص ويدور على كلمات إيجابية (نتائج أفضل من المتوقع، رفع توقعات، ترقية محلل...)
-     وكلمات سلبية (خسارة، تخفيض، قضية، تحقيق...)
-  3) لو الخبر طابعه إيجابي وما فيه إشارات سلبية واضحة => يرسل تنبيه تعليمي على تليجرام
-  ⚠️ التنبيه تعليمي فقط: يوصف طابع الخبر، وما يقول اشترِ أو بع.
+سكانر أخبار البيني ستوك (ملف مستقل)
+====================================
+- يسحب الأخبار الفورية من ألباكا كل كم ثانية (24 ساعة، كل الأيام)
+- يرسل الأخبار الإيجابية بس (اندماج، FDA، عقود، نتائج قوية...) ويتجاهل السلبية
+- فلتر السعر: من 1$ إلى 10$ (السعر اللحظي من ألباكا SIP)
+- يرسل على تيليجرام
 
-يشتغل لحاله:   python -u news_scanner.py
-أو من داخل البوت (جنب سكانر الـ IFVG):
-    import news_scanner
-    threading.Thread(target=news_scanner.run_forever, kwargs={"send": send_telegram}, daemon=True).start()
+متغيرات Railway المطلوبة:
+    ALPACAAPIKEY        مفتاح ألباكا
+    ALPACASECRETKEY     السر حق ألباكا
+    TELEGRAM_TOKEN      توكن البوت
+    TELEGRAM_CHAT_ID    رقم المحادثة (أكثر من رقم بينهم فاصلة)
 
-المتغيرات (Railway Variables):
-  ALPACAAPIKEY, ALPACASECRETKEY       نفس مفاتيح ألباكا
-  TELEGRAM_TOKEN, TELEGRAM_CHAT_ID    نفس التليجرام
-  NEWS_SYMBOLS        قائمة الأسهم (اختياري — لو فاضي ياخذ IFVG_SYMBOLS أو القائمة الافتراضية)
-  NEWS_MAX_AGE_MIN    أقدم خبر نرسله بالدقايق (الافتراضي 30)
-  NEWS_MIN_SCORE      أقل نقاط إيجابية للتنبيه (الافتراضي 2)
-  NEWS_MAX_SYMBOLS    نتجاهل الأخبار العامة اللي تذكر أكثر من هذا العدد من الأسهم (الافتراضي 4)
-  NEWS_SCAN_EVERY_SEC كل كم ثانية يفحص (الافتراضي 120)
+اختياري:
+    NEWS_MIN_PRICE=1    NEWS_MAX_PRICE=10    NEWS_POLL_SEC=15
+    NEWS_MAX_MARKET_CAP=0   (مثلاً 100000000 = يرسل بس الأسهم اللي قيمتها أقل من 100 مليون)
+
+التشغيل:
+    python news_scanner.py          # يشتغل
+    python news_scanner.py --test   # يجرب التصنيف بدون نت
 """
-import json
+
 import os
 import re
+import sys
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import requests
 
-# ------------------------------------------------------------------ الإعدادات
-DEFAULT_SYMBOLS = (
-    "LITE,MU,NVDA,AMD,AVGO,TSLA,AAPL,MSFT,META,AMZN,GOOGL,NFLX,PLTR,SMCI,"
-    "COIN,MSTR,ARM,TSM,ANET,CRWD,SHOP,UBER,QQQ,SPY"
-)
-_sym_env = os.getenv("NEWS_SYMBOLS") or os.getenv("IFVG_SYMBOLS") or DEFAULT_SYMBOLS
-SYMBOLS = [s.strip().upper() for s in _sym_env.split(",") if s.strip()]
-MAX_AGE_MIN = int(os.getenv("NEWS_MAX_AGE_MIN", "30"))
-MIN_SCORE = float(os.getenv("NEWS_MIN_SCORE", "2"))
-MAX_SYMBOLS_PER_NEWS = int(os.getenv("NEWS_MAX_SYMBOLS", "4"))
-SCAN_EVERY_SEC = int(os.getenv("NEWS_SCAN_EVERY_SEC", "120"))
-STATE_FILE = os.getenv("NEWS_STATE_FILE", "/data/news_state.json" if os.path.isdir("/data") else "news_state.json")
+# ================= الإعدادات =================
+ALPACA_KEY = (os.environ.get("ALPACAAPIKEY") or os.environ.get("ALPACA_API_KEY")
+              or os.environ.get("APCA_API_KEY_ID", ""))
+ALPACA_SECRET = (os.environ.get("ALPACASECRETKEY") or os.environ.get("ALPACA_SECRET_KEY")
+                 or os.environ.get("APCA_API_SECRET_KEY", ""))
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+NEWS_MIN_PRICE = float(os.environ.get("NEWS_MIN_PRICE", "1"))     # أقل سعر
+NEWS_MAX_PRICE = float(os.environ.get("NEWS_MAX_PRICE", "10"))    # أعلى سعر
+NEWS_POLL_SEC = int(os.environ.get("NEWS_POLL_SEC", "15"))        # كل كم ثانية يسحب
+NEWS_MAX_AGE_MIN = 30          # يتجاهل الخبر اللي عمره أكثر من كذا دقيقة
+NEWS_MAX_SYMBOLS = 3           # يتجاهل الخبر اللي فيه أكثر من كذا سهم (ملخصات السوق)
+NEWS_MAX_MARKET_CAP = float(os.environ.get("NEWS_MAX_MARKET_CAP", "0"))   # 0 = بدون حد
+PRICE_FEED = os.environ.get("ALGO_FEED", "sip").lower()   # sip = كل السوق (فوري مع Algo Trader Plus)
 
 NEWS_URL = "https://data.alpaca.markets/v1beta1/news"
+SNAP_URL = "https://data.alpaca.markets/v2/stocks/snapshots"
+SENT_FILE = "news_sent.txt"
+SENT_KEEP_LINES = 20000
+LOCAL_TZ = ZoneInfo("Asia/Riyadh")
+DISCLAIMER = "⚠️ محتوى تعليمي فقط، وليس توصية بيع أو شراء."
+HEADERS = {"User-Agent": "Mozilla/5.0"}
+# =============================================
 
-# (النمط, الوزن, الوصف بالعربي)
-POSITIVE = [
-    (r"\bbeats?\b|\btops? (estimates|expectations|views)\b|\bbetter[- ]than[- ]expected\b|\bahead of (estimates|expectations)\b",
-     2, "نتائج أفضل من توقعات السوق"),
-    (r"\b(raises?|boosts?|lifts?|hikes?|ups?) (its |full[- ]year |annual |fy |quarterly )?(guidance|outlook|forecast)\b",
-     2, "رفع التوقعات المستقبلية للشركة"),
-    (r"\bupgrade[sd]?\b", 2, "ترقية تصنيف من محلل"),
-    (r"\b(raises?|lifts?|hikes?|boosts?) (price target|pt)\b|\bprice target (raised|increased|lifted)\b",
-     2, "رفع السعر المستهدف من محلل"),
-    (r"\brecord (revenue|sales|quarter|profit|earnings|deliveries)\b", 2, "إيرادات أو أرباح قياسية"),
-    (r"\bfda (approval|approves|clears|grants)\b|\bapproved by (the )?fda\b", 2, "موافقة من FDA"),
-    (r"\b(buyback|share repurchase|repurchase program|stock repurchase)\b", 2, "برنامج إعادة شراء أسهم"),
-    (r"\b(raises?|increases?|hikes?|boosts?) (its |quarterly )?dividend\b|\bdividend (increase|hike)\b",
-     2, "رفع التوزيعات النقدية"),
-    (r"\b(wins?|won|awarded|secures?|lands?) .{0,40}\b(contract|deal|order)\b", 2, "عقد أو صفقة جديدة"),
-    (r"\b(partnership|partners with|strategic alliance|collaboration with)\b", 1, "شراكة أو تعاون"),
-    (r"\b(to be acquired|agrees to be acquired|takeover (offer|bid)|buyout offer)\b", 2, "عرض استحواذ على الشركة"),
-    (r"\b(added to|joins|to join) (the )?s&p 500\b", 2, "انضمام لمؤشر S&P 500"),
-    (r"\b(surges?|soars?|jumps?|rall(y|ies)|skyrockets?|climbs?)\b", 1, "ارتفاع قوي في السهم"),
+NEWS_POSITIVE = [
+    ("🤝 اندماج / استحواذ", r"\bmerger\b|\bmerge\b|\bto merge\b|\bacquir|\bacquisition\b|\bbuyout\b|"
+                            r"\btakeover\b|\bdefinitive agreement\b|\btender offer\b|\bgo(ing)? private\b|"
+                            r"\bto be acquired\b|\bbusiness combination\b"),
+    ("💊 موافقة FDA", r"\bfda\b.*\b(approv|clear|grant)|\bapproval\b|\bapproved\b|\bclearance\b|"
+                     r"\bbreakthrough therapy\b|\bfast track\b|\borphan drug\b|\bpriority review\b"),
+    ("🧪 نتائج دراسة إيجابية", r"\bpositive (topline|results|data|phase)|\bmet (its |the )?primary endpoint|"
+                              r"\bstatistically significant\b"),
+    ("📝 عقد / شراكة", r"\bcontract\b|\bawarded\b|\bwins\b.*\b(order|deal|contract)|\bpartnership\b|"
+                      r"\bpartners with\b|\bcollaboration\b|\bstrategic alliance\b|\bselected by\b|"
+                      r"\bpurchase order\b|\blicens(e|ing) agreement\b|\bsupply agreement\b"),
+    ("📈 نتائج / توقعات قوية", r"\bbeats?\b|\btops?\b.*\bestimates\b|\brecord (revenue|quarter|sales|results)|"
+                              r"\braises?\b.*\b(guidance|outlook|forecast)|\bboosts?\b.*\b(guidance|outlook)|"
+                              r"\bexceeds?\b.*\b(expectations|estimates)"),
+    ("⬆️ ترقية محلل", r"\bupgrades?\b|\bupgraded\b|\braises?\b.*\bprice target\b|"
+                     r"\binitiates?\b.*\b(buy|outperform|overweight)"),
+    ("💵 إعادة شراء / توزيعات", r"\bbuyback\b|\b(share|stock) repurchase\b|\bspecial dividend\b|"
+                               r"\b(raises|increases|boosts) (quarterly )?dividend\b"),
 ]
-
-NEGATIVE = [
-    r"\bmiss(es|ed)?\b", r"\b(cuts?|lowers?|slashes?|trims?) (its |full[- ]year |annual )?(guidance|outlook|forecast)\b",
-    r"\bdowngrade[sd]?\b", r"\b(cuts?|lowers?|slashes?) (price target|pt)\b", r"\bprice target (cut|lowered)\b",
-    r"\b(lawsuit|sued|sues|class action)\b", r"\b(investigation|probe|subpoena|sec charges)\b",
-    r"\brecalls?\b", r"\b(stock offering|share offering|secondary offering|dilution)\b",
-    r"\blayoffs?\b|\bjob cuts\b", r"\bbankruptcy\b", r"\b(plunges?|tumbles?|slumps?|sinks?|falls?|drops?|crash(es)?)\b",
-    r"\b(delays?|delayed|halts?|suspends?)\b", r"\b(warns?|warning)\b", r"\b(loss widens|wider loss)\b",
-    r"\bworse[- ]than[- ]expected\b",
-]
-_POS = [(re.compile(p, re.I), w, lbl) for p, w, lbl in POSITIVE]
-_NEG = [re.compile(p, re.I) for p in NEGATIVE]
+# لو العنوان فيه أي وحدة من هذي، يتجاهل الخبر حتى لو فيه كلمة إيجابية
+NEWS_NEGATIVE = (r"\boffering\b|\bdilut|\bpriced\b|\bregistered direct\b|\bprivate placement\b|\bwarrants?\b|"
+                 r"\breverse (stock )?split\b|\blawsuit\b|\bclass action\b|\binvestigat|\bshareholder alert\b|"
+                 r"\blaw firm\b|\bfair to\b|\bdowngrad|\bmiss(es|ed)?\b|\b(cuts|lowers|slashes|withdraws)\b|"
+                 r"\bbankrupt|\bchapter 11\b|\bdelist|\bterminat|\bhalt|\bwarning\b|\bfalls?\b|\bplunge|"
+                 r"\bslump|\btumble|\bsinks?\b|\bshort (seller|report)\b|\bsec charges\b|\brecall\b|"
+                 r"\bcomplete response letter\b|\bcrl\b|\brejects?\b|\bdenied\b|\bfails?\b|\bdelay")
+_NEWS_POS = [(name, re.compile(rx, re.I)) for name, rx in NEWS_POSITIVE]
+_NEWS_NEG = re.compile(NEWS_NEGATIVE, re.I)
 
 
-# ------------------------------------------------------------------ البيانات
-def fetch_news(symbols, since):
-    """يرجع قائمة الأخبار من Alpaca من وقت since لين الحين."""
-    headers = {
-        "APCA-API-KEY-ID": os.getenv("ALPACAAPIKEY", ""),
-        "APCA-API-SECRET-KEY": os.getenv("ALPACASECRETKEY", ""),
-    }
-    out = []
-    for i in range(0, len(symbols), 50):
-        params = {
-            "symbols": ",".join(symbols[i:i + 50]),
-            "start": since.isoformat().replace("+00:00", "Z"),
-            "limit": 50,
-            "sort": "desc",
-            "include_content": "false",
-        }
-        for _ in range(10):  # حد أقصى للصفحات
-            r = requests.get(NEWS_URL, headers=headers, params=params, timeout=30)
-            r.raise_for_status()
-            js = r.json()
-            out.extend(js.get("news") or [])
-            tok = js.get("next_page_token")
-            if not tok:
-                break
-            params["page_token"] = tok
-    # شيل المكرر
-    seen, uniq = set(), []
-    for n in out:
-        if n.get("id") not in seen:
-            seen.add(n.get("id"))
-            uniq.append(n)
-    return uniq
+def log(*a):
+    print(datetime.now(LOCAL_TZ).strftime("%H:%M:%S"), *a, flush=True)
 
 
-# ------------------------------------------------------------------ التحليل
-def score(text):
-    """يرجع (النقاط, الأسباب الإيجابية, عدد الإشارات السلبية)"""
-    pos, reasons = 0, []
-    for rx, w, lbl in _POS:
-        if rx.search(text):
-            pos += w
-            reasons.append(lbl)
-    neg = sum(1 for rx in _NEG if rx.search(text))
-    return pos, reasons, neg
+def classify_news(headline):
+    """يرجع اسم التصنيف لو الخبر إيجابي، وإلا None."""
+    h = headline or ""
+    if _NEWS_NEG.search(h):
+        return None
+    for name, rx in _NEWS_POS:
+        if rx.search(h):
+            return name
+    return None
 
 
-def is_positive(news):
-    text = f"{news.get('headline', '')} {news.get('summary', '')}"
-    pos, reasons, neg = score(text)
-    ok = neg == 0 and pos >= MIN_SCORE and any(w >= 2 for rx, w, lbl in _POS if lbl in reasons)
-    return ok, reasons
-
-
-# ------------------------------------------------------------------ الرسالة
-def _riyadh(ts):
-    t = datetime.fromisoformat(ts.replace("Z", "+00:00")) + timedelta(hours=3)
-    return t.strftime("%m-%d %H:%M")
-
-
-def format_msg(sym, news, reasons):
-    others = [s for s in news.get("symbols", []) if s != sym]
-    lines = [
-        "🤖 بوت سافونا — 📰 خبر إيجابي على السهم",
-        "⚠️ محتوى تعليمي فقط، وليس توصية بيع أو شراء. القرار مسؤوليتك.",
-        "",
-        f"السهم: ${sym}",
-        f"العنوان: {news.get('headline', '').strip()}",
-        "طابع الخبر: إيجابي",
-        "النقاط الإيجابية في الخبر:",
-        *[f"  • {r}" for r in reasons],
-    ]
-    if others:
-        lines.append(f"أسهم ثانية مذكورة: {', '.join('$' + s for s in others)}")
-    lines += [
-        f"المصدر: {news.get('source', 'Alpaca')}",
-        f"وقت الخبر: {_riyadh(news['created_at'])} (توقيتك)",
-    ]
-    if news.get("url"):
-        lines.append(f"الرابط: {news['url']}")
-    lines += [
-        "",
-        "📚 الخبر الإيجابي ما يعني إن السهم لازم يصعد — أحياناً يكون الخبر متوقع ومسعّر مسبقاً. "
-        "اقرأ الخبر كامل وشوف ردة فعل السعر قبل أي قرار.",
-    ]
-    return "\n".join(lines)
-
-
-# ------------------------------------------------------------------ التليجرام والحالة
-def _default_send(text):
-    token = os.getenv("TELEGRAM_TOKEN", "")
-    for chat in [c.strip() for c in os.getenv("TELEGRAM_CHAT_ID", "").split(",") if c.strip()]:
-        try:
-            requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                          data={"chat_id": chat, "text": text, "disable_web_page_preview": "true"}, timeout=15)
-        except Exception as e:
-            print(f"NEWS: ما قدرت أرسل لـ {chat}: {e}")
-
-
-def _load_state():
+# ---------- ملف المرسل (عشان ما يعيد نفس الخبر بعد إعادة التشغيل) ----------
+def load_sent():
     try:
-        with open(STATE_FILE, encoding="utf-8") as f:
-            return json.load(f)
+        with open(SENT_FILE, encoding="utf-8") as f:
+            lines = [x.strip() for x in f if x.strip()]
+    except FileNotFoundError:
+        return set()
+    if len(lines) > SENT_KEEP_LINES:
+        lines = lines[-SENT_KEEP_LINES:]
+        with open(SENT_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    return set(lines)
+
+
+def mark_sent(key):
+    try:
+        with open(SENT_FILE, "a", encoding="utf-8") as f:
+            f.write(key + "\n")
     except Exception:
+        pass
+
+
+# ---------- تيليجرام ----------
+def chats():
+    return [c.strip() for c in TELEGRAM_CHAT_ID.split(",") if c.strip()]
+
+
+def send_telegram(text):
+    text = text + "\n\n" + DISCLAIMER
+    log(text.replace("\n", " | "))
+    if not TELEGRAM_TOKEN:
+        return
+    for chat_id in chats():
+        try:
+            r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                              data={"chat_id": chat_id, "text": text,
+                                    "disable_web_page_preview": True}, timeout=10).json()
+            if not r.get("ok"):
+                log(f"فشل الإرسال لـ {chat_id}: {r.get('description')}")
+        except Exception as e:
+            log(f"فشل الإرسال لـ {chat_id}: {e}")
+
+
+# ---------- ألباكا ----------
+def alpaca_headers():
+    return {"APCA-API-KEY-ID": ALPACA_KEY, "APCA-API-SECRET-KEY": ALPACA_SECRET}
+
+
+def fetch_news(start):
+    """كل الأخبار من وقت start لين الحين. يرجع قائمة أو None لو فشل."""
+    params = {"start": start.strftime("%Y-%m-%dT%H:%M:%SZ"), "limit": 50, "sort": "asc",
+              "include_content": "false"}
+    out = []
+    for _ in range(10):
+        try:
+            r = requests.get(NEWS_URL, headers=alpaca_headers(), params=params, timeout=20)
+        except Exception as e:
+            log("الأخبار: فشل الاتصال -", e)
+            return None
+        if r.status_code == 429:
+            time.sleep(5)
+            continue
+        if r.status_code != 200:
+            log(f"الأخبار: خطأ {r.status_code} - {r.text[:200]}")
+            return None
+        data = r.json()
+        out.extend(data.get("news") or [])
+        token = data.get("next_page_token")
+        if not token:
+            break
+        params["page_token"] = token
+    return out
+
+
+def fetch_prices(symbols):
+    """آخر سعر لحظي لكل سهم: {الرمز: السعر}."""
+    if not symbols:
+        return {}
+    try:
+        r = requests.get(SNAP_URL, headers=alpaca_headers(),
+                         params={"symbols": ",".join(symbols), "feed": PRICE_FEED}, timeout=15)
+        if r.status_code != 200:
+            log(f"الأسعار: خطأ {r.status_code} - {r.text[:150]}")
+            return {}
+        out = {}
+        for sym, snap in (r.json() or {}).items():
+            snap = snap or {}
+            px = ((snap.get("latestTrade") or {}).get("p")
+                  or (snap.get("dailyBar") or {}).get("c"))
+            if px:
+                out[sym] = float(px)
+        return out
+    except Exception as e:
+        log("الأسعار: خطأ -", e)
         return {}
 
 
-def _save_state(st):
-    if len(st) > 5000:
-        st = dict(sorted(st.items(), key=lambda kv: kv[1])[-5000:])
+# ---------- القيم السوقية (اختياري) ----------
+_caps = {"day": None, "caps": {}}
+
+
+def _to_number(x):
     try:
-        with open(STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(st, f)
-    except Exception as e:
-        print(f"NEWS: ما قدرت أحفظ الحالة: {e}")
-    return st
+        return float(str(x).replace("$", "").replace(",", "").strip())
+    except Exception:
+        return 0.0
 
 
-def scan_once(send=None):
-    send = send or _default_send
-    state = _load_state()
-    since = datetime.now(timezone.utc) - timedelta(minutes=MAX_AGE_MIN)
-    new = 0
+def market_caps():
+    """{الرمز: القيمة السوقية} من سكرينر ناسداك، تتجدد مرة باليوم."""
+    today = datetime.now(timezone.utc).date()
+    if _caps["day"] == today and _caps["caps"]:
+        return _caps["caps"]
+    caps = {}
+    for ex in ("nasdaq", "nyse", "amex"):
+        url = ("https://api.nasdaq.com/api/screener/stocks"
+               f"?tableonly=true&limit=10000&exchange={ex}&download=true")
+        try:
+            r = requests.get(url, headers={**HEADERS, "Accept": "application/json"}, timeout=30)
+            data = r.json().get("data") or {}
+            rows = data.get("rows") or (data.get("table") or {}).get("rows") or []
+            for row in rows:
+                sym = str(row.get("symbol", "")).strip().upper()
+                cap = _to_number(row.get("marketCap"))
+                if sym.isalpha() and len(sym) <= 5 and 0 < cap:
+                    caps[sym] = cap
+        except Exception as e:
+            log(f"ما قدرت أجيب القيم السوقية من {ex.upper()} -", e)
+    if caps:
+        _caps.update(day=today, caps=caps)
+    return caps
+
+
+def cap_txt(cap):
+    return f"{cap / 1e9:.2f} مليار$" if cap >= 1e9 else f"{cap / 1e6:.1f} مليون$"
+
+
+# ---------- الرسالة ----------
+def news_message(item, cat, syms, prices, caps):
     try:
-        items = fetch_news(SYMBOLS, since)
-    except Exception as e:
-        print(f"NEWS: خطأ بالبيانات: {e}")
-        return 0
-    watch = set(SYMBOLS)
-    for n in sorted(items, key=lambda x: x.get("created_at", "")):
-        syms = n.get("symbols") or []
-        if len(syms) > MAX_SYMBOLS_PER_NEWS:
-            continue  # خبر عام يذكر أسهم كثيرة
-        ok, reasons = is_positive(n)
-        if not ok:
-            continue
-        for sym in syms:
-            if sym not in watch:
-                continue
-            key = f"{n.get('id')}|{sym}"
-            if key in state:
-                continue
-            send(format_msg(sym, n, reasons))
-            state[key] = int(time.time())
-            new += 1
-    _save_state(state)
-    print(f"[{datetime.now(timezone.utc) + timedelta(hours=3):%H:%M}] الأخبار: خلص الفحص - {new} تنبيه جديد")
-    return new
+        t = datetime.fromisoformat(item["created_at"].replace("Z", "+00:00")).astimezone(LOCAL_TZ)
+        t_txt = t.strftime("%H:%M")
+    except Exception:
+        t_txt = "-"
+    stocks = " | ".join(f"${s} ({prices[s]:.2f}$)" if s in prices else f"${s}" for s in syms)
+    cap_line = ""
+    if caps and any(s in caps for s in syms):
+        cap_line = "القيمة السوقية: " + " | ".join(cap_txt(caps[s]) for s in syms if s in caps) + "\n"
+    return (f"📰 خبر إيجابي — {cat}\n"
+            f"السهم: {stocks}\n"
+            + cap_line
+            + f"العنوان: {(item.get('headline') or '').strip()}\n"
+            f"المصدر: {item.get('source') or item.get('author') or 'غير معروف'}\n"
+            f"الوقت: {t_txt} (توقيتك)"
+            + (f"\nالرابط: {item['url']}" if item.get("url") else ""))
 
 
-def run_forever(send=None):
-    print(f"الأخبار: بدأ المراقبة — {len(SYMBOLS)} سهم، كل {SCAN_EVERY_SEC} ثانية")
+# ---------- الحلقة الرئيسية ----------
+def run():
+    if not (ALPACA_KEY and ALPACA_SECRET):
+        log("❌ يحتاج ALPACAAPIKEY و ALPACASECRETKEY في Railway")
+        sys.exit(1)
+    if not (TELEGRAM_TOKEN and chats()):
+        log("⚠️ TELEGRAM_TOKEN أو TELEGRAM_CHAT_ID ناقص — بيطبع بالسجل بس")
+
+    sent = load_sent()
+    last = datetime.now(timezone.utc) - timedelta(minutes=NEWS_MAX_AGE_MIN)
+    log(f"سكانر الأخبار بدأ — أسهم {NEWS_MIN_PRICE:g}$ إلى {NEWS_MAX_PRICE:g}$، "
+        f"فحص كل {NEWS_POLL_SEC} ثانية، أسعار {PRICE_FEED.upper()}")
+
     while True:
         try:
-            scan_once(send)
+            now = datetime.now(timezone.utc)
+            items = fetch_news(last - timedelta(minutes=2))   # نرجع شوي عشان الأخبار المتأخرة
+            if items is not None:
+                last = now
+                hits = []
+                for it in items:
+                    key = str(it.get("id"))
+                    if key in sent:
+                        continue
+                    try:
+                        created = datetime.fromisoformat(it["created_at"].replace("Z", "+00:00"))
+                    except Exception:
+                        continue
+                    if (now - created).total_seconds() / 60 > NEWS_MAX_AGE_MIN:
+                        continue
+                    syms = [s for s in (it.get("symbols") or []) if s.isalpha() and len(s) <= 5]
+                    if not syms or len(syms) > NEWS_MAX_SYMBOLS:
+                        continue
+                    cat = classify_news(it.get("headline"))
+                    if not cat:
+                        continue
+                    sent.add(key)
+                    mark_sent(key)
+                    hits.append((it, cat, syms))
+
+                if hits:
+                    prices = fetch_prices(sorted({s for _, _, ss in hits for s in ss}))
+                    caps = market_caps() if NEWS_MAX_MARKET_CAP else {}
+                    for it, cat, syms in hits:
+                        ok = [s for s in syms if s in prices
+                              and NEWS_MIN_PRICE <= prices[s] <= NEWS_MAX_PRICE]
+                        if NEWS_MAX_MARKET_CAP:
+                            ok = [s for s in ok if 0 < caps.get(s, 0) < NEWS_MAX_MARKET_CAP]
+                        if ok:
+                            send_telegram(news_message(it, cat, ok, prices, caps))
         except Exception as e:
-            print(f"NEWS: خطأ: {e}")
-        time.sleep(SCAN_EVERY_SEC)
+            log("خطأ -", e)
+        time.sleep(NEWS_POLL_SEC)
+
+
+def self_test():
+    cases = [
+        ("Acme Therapeutics Receives FDA Approval For Lead Drug", True),
+        ("Acme Corp Enters Definitive Agreement To Be Acquired By BigCo", True),
+        ("Acme Awarded $20M Contract From US Army", True),
+        ("Acme Announces Pricing Of $10M Public Offering", False),
+        ("Acme Announces 1-for-20 Reverse Stock Split", False),
+        ("Acme Shares Fall After Earnings Miss", False),
+    ]
+    bad = 0
+    for h, want in cases:
+        got = classify_news(h)
+        ok = bool(got) == want
+        bad += not ok
+        print("✅" if ok else "❌", got or "-", "|", h)
+    print(news_message({"headline": cases[0][0], "source": "test", "created_at": "2026-10-13T10:00:00Z",
+                        "url": "https://example.com"}, classify_news(cases[0][0]),
+                       ["ACME"], {"ACME": 3.45}, {}))
+    print("TEST OK" if not bad else f"TEST FAILED ({bad})")
 
 
 if __name__ == "__main__":
-    run_forever()
+    if "--test" in sys.argv:
+        self_test()
+    else:
+        run()
