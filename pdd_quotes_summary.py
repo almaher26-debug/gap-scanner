@@ -79,6 +79,7 @@ class Summary:
         self.spread_n = 0
         self.big_bid = self.big_ask = None    # أكبر كمية طلب / عرض
         self.bid_size_sum = self.ask_size_sum = 0
+        self.one_bid = self.one_ask = 0       # أوامر كميتها سهم واحد بالضبط
 
     def add(self, quotes):
         for q in quotes:
@@ -99,6 +100,10 @@ class Summary:
             self.spread_n += 1
             self.bid_size_sum += bs
             self.ask_size_sum += as_
+            if bs == 1:
+                self.one_bid += 1
+            if as_ == 1:
+                self.one_ask += 1
             if self.big_bid is None or bs > self.big_bid[2]:
                 self.big_bid = (t, bp, bs)
             if self.big_ask is None or as_ > self.big_ask[2]:
@@ -117,6 +122,7 @@ def build_message(sym, date, frm, to, s):
         f"📊 الطلب والعرض - ${sym}",
         f"{date} | {frm} ← {to} (توقيتك)",
         f"عدد الاقتباسات: {s.count:,}",
+        f"🔹 أوامر بسهم واحد: {s.one_bid + s.one_ask:,} (طلب {s.one_bid:,} | عرض {s.one_ask:,})",
         "",
         f"البداية ({tlocal(s.first[0])}): طلب {s.first[1]:.2f} | عرض {s.first[2]:.2f}",
         f"النهاية ({tlocal(s.last[0])}): طلب {s.last[1]:.2f} | عرض {s.last[2]:.2f}",
