@@ -25,7 +25,7 @@
 
     📦 صناديق SPY و QQQ داخلة في فريم الساعة والأربع ساعات بس (GAP_ETFS)
 
-    فلتر: السهم سعره فوق 10$ ، وحجم الجاب (الفرق بين الحدين) 1$ أو أكثر (الساعة والأربع ساعات)
+    فلتر: السهم سعره فوق 10$ ، وحجم الجاب (الفرق بين الحدين) 1$ أو أكثر (الأربع ساعات)، و50 سنت أو أكثر (الساعة)
 
     ⭐ فريم 4 ساعات له شروط أشد (check_pattern_4h):
       - بدون شرط حجم الجاب (GAP4H_MIN_SIZE = 0)
@@ -187,6 +187,7 @@ GAP4H_REQUIRE_COLOR4 = True      # الرابعة خضراء (صعودي) أو �
 GAP4H_MIN_FILL = 0.9             # كل شمعة لازم فيها 90% من شموع الربع ساعة وأكثر، وإلا بياناتها ناقصة وتنرفض
 GAP_SHOW_CANDLES = True          # يكتب الشموع الأربع (وقت، أعلى، أقل) في التنبيه عشان تقارنها بالشارت
 ENABLE_GAP_1H = True             # فريم ساعة - ينبه عند إغلاق الشمعة
+GAP_1H_MIN_SIZE = 0.50           # فريم ساعة: أقل حجم للجاب 50 سنت
 ENABLE_GAP_15M = False           # فريم 15 دقيقة - مطفي
 ENABLE_GAP_1D = False            # فريم يومي - مطفي
 GAP_1D_AFTER_NY = (16, 20)       # يفحص بعد الإغلاق: 4:20 العصر نيويورك = 11:20 بالليل بتوقيتك
@@ -1010,7 +1011,7 @@ def scan_gap(tickers, already_sent, frames=None, min_price=None, max_price=None,
                     continue                    # فريم 4 ساعات: ناسداك بس
                 res = checker(only_closed(to_frame(df, minutes), last_bar, now))
                 # فريم 4 ساعات له حده الخاص (GAP4H_MIN_SIZE) ينفحص داخل check_pattern_4h
-                need = min_size
+                need = GAP_1H_MIN_SIZE if tag == "1h" else min_size
                 if not res or round(res["gap_top"] - res["gap_bottom"], 2) < need:
                     continue
                 if (now - res["end"]).total_seconds() / 60 > GAP_MAX_ALERT_DELAY_MIN:
