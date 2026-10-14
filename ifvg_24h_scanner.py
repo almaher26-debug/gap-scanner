@@ -47,6 +47,7 @@ NY = "America/New_York"
 LOCAL_TZ = "Asia/Riyadh"
 BASE_MIN = 15                    # كل شي ينبني من شموع 15 دقيقة
 FRAME_MIN = 240                  # 4 ساعات
+FRAME_MIN_1H = 60                # ساعة
 ANCHOR_MIN = 20 * 60             # اليوم يبدأ 8 بالليل نيويورك (نفس تريدنج فيو)
 LOOKBACK_DAYS = 5                # كم يوم يرجع بالبيانات (يغطي الويكند)
 
@@ -62,7 +63,8 @@ ENABLE_BULLISH = True
 ENABLE_BEARISH = True
 REQUIRE_MIDDLE_COVER = True      # الشمعة الثانية تغطي الجاب كامل
 STRICT_4H = os.environ.get("GAP4H_STRICT", "1") != "0"
-GAP4H_MIN_SIZE = 0               # أقل حجم للجاب (0 = بدون شرط)
+GAP4H_MIN_SIZE = 0.20            # أقل حجم للجاب على فريم 4 ساعات (20 سنت)
+GAP1H_MIN_SIZE = 0.80            # أقل حجم للجاب على فريم ساعة (80 سنت)
 GAP4H_REQUIRE_STEP = True        # الشموع الثلاث متراصة
 GAP4H_REQUIRE_COLOR4 = True      # الرابعة خضراء (صعودي) / حمراء (هبوطي)
 # نسبة الاكتمال: بالليل الأسهم تتداول أقل فشموع الربع ساعة تجي متقطعة (ما فيه صفقات = ما فيه شمعة)
@@ -245,6 +247,24 @@ def to_4h_24(df):
     return out
 
 
+def to_1h_24(df):
+    """يحول شموع 15 دقيقة لشموع ساعة على 24 ساعة، نفس منطق to_4h_24 بس بإطار ساعة."""
+    df = df.dropna(subset=OHLC)
+    if df.empty:
+        return df
+    if df.index.tz is None:
+        df = df.tz_localize("UTC")
+    df = df.tz_convert(NY)
+    m = df.index.hour * 60 + df.index.minute
+    offset = ((m - ANCHOR_MIN) % 1440) % FRAME_MIN_1H
+    start = df.index.floor("min") - pd.to_timedelta(offset, unit="m")
+    out = df.groupby(start).agg(Open=("Open", "first"), High=("High", "max"),
+                                Low=("Low", "min"), Close=("Close", "last"),
+                                n=("Close", "size"))
+    out["end"] = out.index + pd.Timedelta(minutes=FRAME_MIN_1H)
+    return out
+
+
 def only_closed(c, now):
     """يخلي الشموع المقفلة بس."""
     if c.empty:
@@ -312,12 +332,24 @@ def check_pattern_4h(c):
     return res
 
 
+def check_pattern_1h(c):
+    """نفس نموذج الجاب الأساسي على فريم ساعة، بحد أدنى لحجم الجاب 80 سنت."""
+    res = check_pattern(c)
+    if not res:
+        return None
+    if res["gap_top"] - res["gap_bottom"] < GAP1H_MIN_SIZE:
+        return None
+    res["candles"] = c.iloc[-4:]
+    return res
+
+
 def gap_message(t, res):
     lo, hi, px = (round(float(res[k]), 2) for k in ("gap_bottom", "gap_top", "price"))
+    frame = res.get("frame", "فريم 4 ساعات (24 ساعة)")
     if res["side"] == "bull":
-        head, line = "🟢 Inversion Gap - فريم 4 ساعات (24 ساعة)", f"الشمعة قفلت فوق أعلى الـ IFVG ({hi})"
+        head, line = f"🟢 Inversion Gap - {frame}", f"الشمعة قفلت فوق أعلى الـ IFVG ({hi})"
     else:
-        head, line = "🔴 Inversion Gap - فريم 4 ساعات (24 ساعة)", f"الشمعة قفلت تحت أسفل الـ IFVG ({lo})"
+        head, line = f"🔴 Inversion Gap - {frame}", f"الشمعة قفلت تحت أسفل الـ IFVG ({lo})"
     closed_at = pd.Timestamp(res["end"]).tz_convert(LOCAL_TZ)
     msg = (f"{head}\n"
            f"السهم: ${t}\n"
@@ -350,26 +382,36 @@ def scan(symbols, sent):
     now = pd.Timestamp.now(tz=NY)
     data = load_candles(symbols, now)
     hits = 0
+    hits_1h = 0
     for t, df in data.items():
         try:
             if df.empty or float(df["Close"].iloc[-1]) < MIN_STOCK_PRICE:
                 continue
-            c = only_closed(to_4h_24(df), now)
-            res = check_pattern_4h(c)
-            if not res:
-                continue
-            if (now - pd.Timestamp(res["end"])).total_seconds() / 60 > MAX_ALERT_DELAY_MIN:
-                continue
-            key = f"{t}-4h24-{res['side']}-{res['candle_time']}"
-            if key in sent:
-                continue
-            sent.add(key)
-            mark_sent(key)
-            send_telegram(gap_message(t, res))
-            hits += 1
+            # ---- فريم 4 ساعات ----
+            c4 = only_closed(to_4h_24(df), now)
+            res = check_pattern_4h(c4)
+            if res and (now - pd.Timestamp(res["end"])).total_seconds() / 60 <= MAX_ALERT_DELAY_MIN:
+                key = f"{t}-4h24-{res['side']}-{res['candle_time']}"
+                if key not in sent:
+                    sent.add(key)
+                    mark_sent(key)
+                    res["frame"] = "فريم 4 ساعات (24 ساعة)"
+                    send_telegram(gap_message(t, res))
+                    hits += 1
+            # ---- فريم ساعة ----
+            c1 = only_closed(to_1h_24(df), now)
+            res1 = check_pattern_1h(c1)
+            if res1 and (now - pd.Timestamp(res1["end"])).total_seconds() / 60 <= MAX_ALERT_DELAY_MIN:
+                key1 = f"{t}-1h24-{res1['side']}-{res1['candle_time']}"
+                if key1 not in sent:
+                    sent.add(key1)
+                    mark_sent(key1)
+                    res1["frame"] = "فريم ساعة (24 ساعة)"
+                    send_telegram(gap_message(t, res1))
+                    hits_1h += 1
         except Exception as e:
             log(f"{t}: خطأ -", e)
-    log(f"فحص 4 ساعات (24 ساعة): {len(data)} سهم، {hits} تنبيه")
+    log(f"فحص 24 ساعة: {len(data)} سهم، {hits} تنبيه (4 ساعات) + {hits_1h} تنبيه (ساعة)")
 
 
 def market_closed(now):
@@ -379,10 +421,9 @@ def market_closed(now):
 
 
 def due_slots(now):
-    """أوقات الفحص: بعد إغلاق كل شمعة 4 ساعات بكذا دقيقة."""
+    """أوقات الفحص: بعد إغلاق كل شمعة ساعة بكذا دقيقة.
+    لأن شمعة الساعة تقفل كل ساعة، والأربع ساعات تقفل على نفس الحدود، يكفي ننطلق من بداية كل ساعة."""
     base = now.floor("h")
-    while (base.hour * 60 - ANCHOR_MIN) % FRAME_MIN:
-        base -= pd.Timedelta(hours=1)
     return [base + pd.Timedelta(minutes=d) for d in SCAN_AFTER_CLOSE_MIN]
 
 
@@ -423,7 +464,10 @@ def show_candles(sym):
         print(f"{ts:%m/%d %H:%M}  O {r['Open']:.2f}  H {r['High']:.2f}  L {r['Low']:.2f}  "
               f"C {r['Close']:.2f}  n {int(r['n'])}")
     res = check_pattern_4h(only_closed(c, now))
-    print("النموذج على آخر شمعة مقفلة:", res["side"] if res else "ما فيه")
+    print("نموذج 4 ساعات على آخر شمعة مقفلة:", res["side"] if res else "ما فيه")
+    c1 = to_1h_24(df)
+    res1 = check_pattern_1h(only_closed(c1, now))
+    print("نموذج الساعة على آخر شمعة مقفلة:", res1["side"] if res1 else "ما فيه")
 
 
 def self_test():
@@ -450,6 +494,9 @@ def self_test():
     res = check_pattern_4h(only_closed(c, idx[-1] + pd.Timedelta(minutes=20)))
     assert res and res["side"] == "bull", res
     print(gap_message("TEST", res))
+    c1 = to_1h_24(merged)
+    print("عدد شموع الساعة:", len(c1))
+    assert len(c1) == 16
     print("TEST OK")
 
 
