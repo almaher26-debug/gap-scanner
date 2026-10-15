@@ -212,6 +212,9 @@ WATCH_SYMBOLS = [
     "RKLB", "UNH", "MU", "LLY", "ADBE", "QCOM", "SHOP", "GOOGL", "MSFT", "MSTR",
     "AMZN", "DDOG", "ACN", "GEV", "LRCX", "PLTR", "OKTA", "ORCL", "INTC", "AAOI",
     "CRDO", "SNDK", "STX", "CRCL", "WDC", "SKHY", "NBIS", "CRWV", "CRWD", "MRVL",
+    "ARM", "AMAT", "PANW", "SNOW", "NOW", "DELL", "FSLR", "ENPH", "VRT", "RIVN",
+    "KLAC", "MCHP", "FTNT", "ADSK", "MDB", "CSCO", "CLS", "BE", "MOD", "TEM",
+    "CELH", "CHWY", "CROX", "GRMN", "CTSH", "BBIO", "DOCS", "ADMA", "CTAS", "MSM",
 ]
 WATCH_MIN_SIZE = 0.16            # حجم الجاب: أكثر من 15 سنت (يعني 16 سنت وفوق) | 0 = بدون شرط
 GAP_REQUIRE_MIDDLE_COVER = True  # الشمعة الثانية لازم تغطي الجاب كامل (من قمة الثالثة لقاع الأولى)
@@ -318,6 +321,15 @@ TUEWED_MIN_PRICE = 50            # السعر 50$ وفوق
 TUEWED_AFTER_NY = (16, 25)       # بعد إغلاق الأربعاء: 4:25 العصر نيويورك = 11:25 بالليل بتوقيتك
 TUEWED_WEEK_FILE = "tuewed_week.txt"   # عشان ما يرسل مرتين بنفس الأسبوع
 
+# ---- (1ح) سحب سيولة قاع اليوم السابق - يومي على قائمة المراقبة (70 سهم) ----
+#   ذيل شمعة اليوم نزل تحت قاع أمس، وإغلاق اليوم فوق قاع أمس. قائمة وحدة كل يوم بعد الإغلاق
+ENABLE_PDL_SWEEP = True          # True = شغال | False = مطفي
+PDL_AFTER_NY = (16, 25)          # بعد الإغلاق: 4:25 العصر نيويورك = 11:25 بالليل بتوقيتك
+PDL_DAY_FILE = "pdl_day.txt"     # عشان ما يرسل مرتين بنفس اليوم
+# ---- (1ط) سحب سيولة قمة اليوم السابق (المقاومة) - يومي على نفس القائمة ----
+#   ذيل شمعة اليوم طلع فوق قمة أمس، والإغلاق رجع تحت قمة أمس. قائمة وحدة مع نفس التوقيت
+ENABLE_PDH_SWEEP = True          # True = شغال | False = مطفي
+
 # ---- (4ب) تجزئة عكسية + شورت صفر (أسهم البني ستوك) ----
 ENABLE_RSPLIT_SHORT = False            # مطفي
 RSPLIT_MAX_PRICE = 5                 # الشورت صفر: يفحصه لأسهم البني ستوك (5$ أو أقل) من اللي سوت تجزئة
@@ -380,12 +392,14 @@ ALGO_PENNY_MAX_SYMBOLS = 300          # الأنشط أول
 # الأحجام الصغيرة بس: 10 أسهم وأقل (1، 1، 1 ... أو 5، 5، 5 ...)
 ALGO_BIG = os.environ.get("ALGO_BIG", "1") != "0"      # 0 = يطفي هالقسم
 ALGO_BIG_MIN_MARKET_CAP = 1_000_000_000   # مليار دولار وفوق
-ALGO_BIG_MIN_STREAK = 600                 # أقل عدد صفقات متتالية بنفس الحجم
-ALGO_BIG_MAX_SIZE = 10                    # حجم الصفقة 10 أسهم أو أقل
+ALGO_BIG_MIN_STREAK = 300                 # أقل عدد صفقات متتالية بنفس الحجم
+ALGO_BIG_MAX_SIZE = 1                     # حجم الصفقة: سهم واحد بس (1، 1، 1...)
 ALGO_BIG_MAX_GAP_SEC = 5                  # لو مر أكثر من كذا ثانية بين صفقتين، تنقطع السلسلة
 ALGO_BIG_MAX_SYMBOLS = int(os.environ.get("ALGO_BIG_MAX_SYMBOLS", "200"))   # الأنشط أول
-ALGO_BIG_SYMBOLS = [s.strip().upper() for s in os.environ.get("ALGO_BIG_SYMBOLS", "").split(",")
-                    if s.strip()]         # قائمة ثابتة بدل التلقائية (اختياري)
+ALGO_BIG_SYMBOLS = ([s.strip().upper() for s in os.environ.get("ALGO_BIG_SYMBOLS", "").split(",")
+                     if s.strip()] or list(WATCH_SYMBOLS))   # الافتراضي: قائمة المراقبة
+ALGO_BIG_REGULAR_ONLY = True              # وقت السوق الرسمي بس (9:30 - 4 نيويورك)
+ALGO_BIG_ONE_SIDE_PCT = 90                # "شراء كامل" أو "بيع كامل": الجهة وحدة 90% وفوق، وإلا ما ينبه
 ALGO_BIG_POLL_SEC = 20                    # كل كم ثانية يسحب الصفقات الجديدة
 ALGO_BIG_CHUNK = 20                       # كم سهم بكل طلب لألباكا (الكبيرة صفقاتها كثيرة)
 ALGO_BIG_REALERT_MIN = 15                 # ما يعيد التنبيه لنفس السهم والحجم قبل كذا دقيقة
@@ -2082,6 +2096,84 @@ def scan_tuewed(tickers):
     log(f"[{datetime.now():%H:%M}] سحب الثلاثاء/الأربعاء: {len(rows)} سهم")
 
 
+# ================== (1ح) سحب سيولة قاع اليوم السابق (يومي) ==================
+def check_pdl_sweep(df, today):
+    """شمعة اليوم: أقل سعر تحت قاع أمس، والإغلاق فوق قاع أمس."""
+    df = df.dropna(subset=OHLC)
+    if len(df) < 2 or pd.Timestamp(df.index[-1]).date() != today:
+        return None
+    y, t = df.iloc[-2], df.iloc[-1]
+    y_low, low, close = float(y["Low"]), float(t["Low"]), float(t["Close"])
+    if not (low < y_low < close):
+        return None
+    vol_rel = None
+    if "Volume" in df and len(df) > 2:
+        avg = df["Volume"].iloc[-21:-1].astype(float).mean()
+        vol_rel = float(t["Volume"]) / avg if avg > 0 else None
+    return {"y_low": y_low, "low": low, "close": close,
+            "depth": (y_low - low) / y_low * 100, "vol_rel": vol_rel}
+
+
+def check_pdh_sweep(df, today):
+    """شمعة اليوم: أعلى سعر فوق قمة أمس، والإغلاق تحت قمة أمس."""
+    df = df.dropna(subset=OHLC)
+    if len(df) < 2 or pd.Timestamp(df.index[-1]).date() != today:
+        return None
+    y, t = df.iloc[-2], df.iloc[-1]
+    y_high, high, close = float(y["High"]), float(t["High"]), float(t["Close"])
+    if not (close < y_high < high):
+        return None
+    vol_rel = None
+    if "Volume" in df and len(df) > 2:
+        avg = df["Volume"].iloc[-21:-1].astype(float).mean()
+        vol_rel = float(t["Volume"]) / avg if avg > 0 else None
+    return {"y_high": y_high, "high": high, "close": close,
+            "depth": (high - y_high) / y_high * 100, "vol_rel": vol_rel}
+
+
+def scan_pdl_sweep(symbols, today):
+    rows, rows_h = [], []
+    for t, df in download_batches(symbols, 100, period="2mo", interval="1d", prepost=False):
+        try:
+            if ENABLE_PDL_SWEEP:
+                r = check_pdl_sweep(df, today)
+                if r:
+                    rows.append((t, r))
+            if ENABLE_PDH_SWEEP:
+                r = check_pdh_sweep(df, today)
+                if r:
+                    rows_h.append((t, r))
+        except Exception:
+            continue
+    rows.sort(key=lambda x: -(x[1]["vol_rel"] or 0))
+    head = (f"💧 سحب سيولة قاع أمس - فريم يومي\n"
+            f"قائمة المراقبة ({len(symbols)} سهم) | {today:%Y-%m-%d}\n"
+            f"الذيل نزل تحت قاع أمس، والإغلاق فوقه\n")
+    if not ENABLE_PDL_SWEEP:
+        pass
+    elif not rows:
+        send_telegram(head + "\nما فيه ولا سهم اليوم", kind="sweep")
+    else:
+        lines = [f"${t}: قاع أمس {r['y_low']:.2f} | أقل سعر {r['low']:.2f} (-{r['depth']:.1f}%) | "
+                 f"إغلاق {r['close']:.2f}" + (f" | فوليوم {r['vol_rel']:.1f}x" if r["vol_rel"] else "")
+                 for t, r in rows]
+        send_telegram(head + f"({len(rows)} سهم)\n\n" + "\n".join(lines), kind="sweep")
+    if ENABLE_PDH_SWEEP:
+        rows_h.sort(key=lambda x: -(x[1]["vol_rel"] or 0))
+        head_h = (f"🔻 سحب سيولة قمة أمس (المقاومة) - فريم يومي\n"
+                  f"قائمة المراقبة ({len(symbols)} سهم) | {today:%Y-%m-%d}\n"
+                  f"الذيل طلع فوق قمة أمس، والإغلاق تحتها\n")
+        if not rows_h:
+            send_telegram(head_h + "\nما فيه ولا سهم اليوم", kind="sweep")
+        else:
+            lines = [f"${t}: قمة أمس {r['y_high']:.2f} | أعلى سعر {r['high']:.2f} (+{r['depth']:.1f}%) | "
+                     f"إغلاق {r['close']:.2f}" + (f" | فوليوم {r['vol_rel']:.1f}x" if r["vol_rel"] else "")
+                     for t, r in rows_h]
+            send_telegram(head_h + f"({len(rows_h)} سهم)\n\n" + "\n".join(lines), kind="sweep")
+    free_memory()
+    log(f"[{datetime.now():%H:%M}] سحب قاع أمس: {len(rows)} سهم | سحب قمة أمس: {len(rows_h)} سهم")
+
+
 # ================== (4ب) تجزئة عكسية + شورت صفر ==================
 def load_rsplits(tickers):
     """كل التجزئات العكسية آخر سنة.
@@ -2691,8 +2783,13 @@ def _big_message(sym, a, cap=None):
     b, s_, total = a["buys"], a["sells"], a["count"]
     t1 = pd.Timestamp(a["first_t"], unit="s", tz="UTC").tz_convert(LOCAL_TZ)
     t2 = pd.Timestamp(a["last_t"], unit="s", tz="UTC").tz_convert(LOCAL_TZ)
-    head = ("🔁 تحديث: السلسلة مستمرة" if a["update"] else
-            "🏦🤖 خوارزمية على سهم كبير — صفقات متتالية بنفس الحجم")
+    if a.get("one_side") == "buy":
+        head = "🟢🤖 خوارزمية شراء كامل — صفقات سهم واحد متتالية"
+    elif a.get("one_side") == "sell":
+        head = "🔴🤖 خوارزمية بيع كامل — صفقات سهم واحد متتالية"
+    else:
+        head = ("🔁 تحديث: السلسلة مستمرة" if a["update"] else
+                "🏦🤖 خوارزمية على سهم كبير — صفقات متتالية بنفس الحجم")
     return (f"{head}\n"
             f"السهم: ${sym}\n"
             + (f"القيمة السوقية: {_cap_txt(cap)}\n" if cap else "")
@@ -2719,7 +2816,9 @@ def algo_big_loop():
         try:
             now = pd.Timestamp.now(tz="UTC")
             end = now - pd.Timedelta(minutes=ALGO_DELAY_MIN)
-            on = trading_hours(end.tz_convert(NY))
+            end_ny = end.tz_convert(NY)
+            on = (end_ny.weekday() < 5 and (9, 30) <= (end_ny.hour, end_ny.minute) < (16, 0)
+                  if ALGO_BIG_REGULAR_ONLY else trading_hours(end_ny))
             if on != was_on:
                 log("خوارزميات الكبيرة: " + ("بدأ المراقبة" if on else "السوق مسكر، أنتظر"))
                 was_on = on
@@ -2732,8 +2831,7 @@ def algo_big_loop():
                 caps = ({s_: None for s_ in ALGO_BIG_SYMBOLS} if ALGO_BIG_SYMBOLS
                         else get_bigcaps())
                 caps_day = today
-                log(f"خوارزميات الكبيرة: يراقب {len(caps)} سهم ناسداك قيمتها "
-                    f"{ALGO_BIG_MIN_MARKET_CAP / 1e9:g} مليار وفوق - تنبيه عند "
+                log(f"خوارزميات الكبيرة: يراقب {len(caps)} سهم (قائمة المراقبة) - شراء كامل/بيع كامل - تنبيه عند "
                     f"{ALGO_BIG_MIN_STREAK} صفقة متتالية بنفس الحجم ({ALGO_BIG_MAX_SIZE:g} أسهم وأقل)"
                     + (f" | الآيس بيرغ: {ALGO_ICE_MIN_STREAK} صفقة متتالية بنفس الحجم والسعر" if ALGO_ICE else ""))
             syms = list(caps)
@@ -2752,8 +2850,17 @@ def algo_big_loop():
                 for sym, trades in got.items():
                     for tr in sorted(trades, key=lambda x: x.get("t", "")):
                         res = det.add(sym, tr)
-                        if res:
-                            send_telegram(_big_message(sym, res, caps.get(sym)), kind="algo_big")
+                        if res and not res["update"]:      # تنبيه واحد لكل سلسلة
+                            directional = res["buys"] + res["sells"]
+                            need = ALGO_BIG_ONE_SIDE_PCT / 100
+                            if directional and res["buys"] / directional >= need:
+                                res["one_side"] = "buy"
+                            elif directional and res["sells"] / directional >= need:
+                                res["one_side"] = "sell"
+                            else:
+                                res = None                 # مخلوطة بيع وشراء: ما ينبه
+                            if res:
+                                send_telegram(_big_message(sym, res, caps.get(sym)), kind="algo_big")
                         if ice is not None:
                             res = ice.add(sym, tr)
                             if res:
@@ -3226,6 +3333,11 @@ def main():
             tuewed_week = f.read().strip() or None
     except FileNotFoundError:
         tuewed_week = None
+    try:
+        with open(PDL_DAY_FILE, encoding="utf-8") as f:
+            pdl_day = f.read().strip() or None
+    except FileNotFoundError:
+        pdl_day = None
     gap_tickers, gap_day, gap_last = [], None, None
     gap15_tickers = []
     gap1d_day = None
@@ -3345,6 +3457,18 @@ def main():
             try:
                 with open(TUEWED_WEEK_FILE, "w", encoding="utf-8") as f:
                     f.write(tw_wk + "\n")
+            except Exception:
+                pass
+
+        # (1ح) سحب سيولة قاع أمس - كل يوم بعد الإغلاق، قائمة وحدة
+        now_ny = pd.Timestamp.now(tz=NY)
+        if (ENABLE_PDL_SWEEP or ENABLE_PDH_SWEEP) and pdl_day != str(now_ny.date()) and (
+                once or (now_ny.weekday() < 5 and (now_ny.hour, now_ny.minute) >= PDL_AFTER_NY)):
+            scan_pdl_sweep(list(WATCH_SYMBOLS), now_ny.date())
+            pdl_day = str(now_ny.date())
+            try:
+                with open(PDL_DAY_FILE, "w", encoding="utf-8") as f:
+                    f.write(pdl_day + "\n")
             except Exception:
                 pass
 
