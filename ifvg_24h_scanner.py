@@ -41,7 +41,14 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 DAY_FEED = os.environ.get("DAY_FEED", "sip").lower()        # 4 الفجر - 8 بالليل
 NIGHT_FEED = os.environ.get("NIGHT_FEED", "boats").lower()  # 8 بالليل - 4 الفجر
-SYMBOLS_ENV = [s.strip().upper() for s in os.environ.get("SYMBOLS", "").split(",") if s.strip()]
+WATCH_SYMBOLS = [   # قائمتك: يفحص هالأسهم بس
+    "NVDA", "CRM", "AVGO", "META", "TSLA", "SPCX", "AMD", "LITE", "FICO", "AAPL",
+    "RKLB", "UNH", "MU", "LLY", "ADBE", "QCOM", "SHOP", "GOOGL", "MSFT", "MSTR",
+    "AMZN", "DDOG", "ACN", "GEV", "LRCX", "PLTR", "OKTA", "ORCL", "INTC", "AAOI",
+    "CRDO", "SNDK", "STX", "CRCL", "WDC", "SKHY", "NBIS", "CRWV", "CRWD", "MRVL",
+]
+SYMBOLS_ENV = ([s.strip().upper() for s in os.environ.get("SYMBOLS", "").split(",") if s.strip()]
+               or WATCH_SYMBOLS)
 
 NY = "America/New_York"
 LOCAL_TZ = "Asia/Riyadh"
@@ -51,7 +58,7 @@ FRAME_MIN_1H = 60                # ساعة
 ANCHOR_MIN = 20 * 60             # اليوم يبدأ 8 بالليل نيويورك (نفس تريدنج فيو)
 LOOKBACK_DAYS = 5                # كم يوم يرجع بالبيانات (يغطي الويكند)
 
-MIN_STOCK_PRICE = 10             # يتجاهل الأسهم اللي سعرها أقل من كذا
+MIN_STOCK_PRICE = 0              # بدون حد للسعر (القائمة محددة)
 MIN_MARKET_CAP = 2_000_000_000   # 2 مليار وفوق
 NASDAQ_ONLY = True               # أسهم ناسداك بس (نفس البوت)
 EXTRA_SYMBOLS = ["SPY", "QQQ",
@@ -62,9 +69,9 @@ EXTRA_SYMBOLS = ["SPY", "QQQ",
 ENABLE_BULLISH = True
 ENABLE_BEARISH = True
 REQUIRE_MIDDLE_COVER = True      # الشمعة الثانية تغطي الجاب كامل
-STRICT_4H = os.environ.get("GAP4H_STRICT", "1") != "0"
+STRICT_4H = os.environ.get("GAP4H_STRICT", "0") != "0"   # مطفي: النموذج الأساسي بس
 GAP4H_MIN_SIZE = 0.20            # أقل حجم للجاب على فريم 4 ساعات (20 سنت)
-GAP1H_MIN_SIZE = 0.80            # أقل حجم للجاب على فريم ساعة (80 سنت)
+GAP1H_MIN_SIZE = 0               # فريم ساعة: بدون حد أدنى لحجم الجاب
 GAP4H_REQUIRE_STEP = True        # الشموع الثلاث متراصة
 GAP4H_REQUIRE_COLOR4 = True      # الرابعة خضراء (صعودي) / حمراء (هبوطي)
 # نسبة الاكتمال: بالليل الأسهم تتداول أقل فشموع الربع ساعة تجي متقطعة (ما فيه صفقات = ما فيه شمعة)
