@@ -189,7 +189,7 @@ GAP4H_MIN_FILL = 0.9             # كل شمعة لازم فيها 90% من شم
 GAP_SHOW_CANDLES = True          # يكتب الشموع الأربع (وقت، أعلى، أقل) في التنبيه عشان تقارنها بالشارت
 ENABLE_GAP_1H = False            # فريم ساعة - ينبه عند إغلاق الشمعة
 GAP_1H_MIN_SIZE = 0.50           # فريم ساعة: أقل حجم للجاب 50 سنت
-ENABLE_GAP_15M = False           # فريم 15 دقيقة - مطفي
+ENABLE_GAP_15M = False           # فريم 15 دقيقة - مطفي (مقفول)
 ENABLE_GAP_1D = False            # فريم يومي - مطفي
 GAP_1D_AFTER_NY = (16, 20)       # يفحص بعد الإغلاق: 4:20 العصر نيويورك = 11:20 بالليل بتوقيتك
 GAP_1D_MIN_SIZE = 0.50           # أقل حجم للجاب اليومي (دولار)
@@ -308,6 +308,7 @@ ENABLE_MOMENTUM = True           # True = شغال | False = مطفي
 MOM_MIN_PRICE = 1                # أقل سعر
 MOM_MAX_PRICE = 50               # أعلى سعر
 MOM_MIN_CHANGE = 10              # أقل ارتفاع % عن إغلاق أمس
+MOM_MAX_CHANGE = 20              # أعلى ارتفاع % - أي سهم فوقه ما ينبّه عليه
 MOM_MIN_RVOL = 2                 # الفوليوم النسبي (ضعف المعتاد وفوق)
 MOM_MIN_VOLUME = 500_000         # أقل فوليوم لليوم
 MOM_NEAR_HIGH_PCT = 2            # السعر ما يبعد عن قمة اليوم أكثر من 2%
@@ -1977,7 +1978,7 @@ def mom_check(sym, snap, frac):
         return None
     change = (price - prev_close) / prev_close * 100
     vol = daily.get("v", 0)
-    if change < MOM_MIN_CHANGE or vol < MOM_MIN_VOLUME:
+    if change < MOM_MIN_CHANGE or change > MOM_MAX_CHANGE or vol < MOM_MIN_VOLUME:
         return None
     prev_vol = prev.get("v") or 0
     rvol = vol / (prev_vol * frac) if prev_vol else 99.0
