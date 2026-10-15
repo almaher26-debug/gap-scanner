@@ -3479,7 +3479,7 @@ def main():
             # (هـ) قائمة المراقبة - IFVG على 15 دقيقة وساعة و4 ساعات، الجاب أكثر من 15 سنت
             if ENABLE_WATCH and WATCH_SYMBOLS:
                 scan_gap(WATCH_SYMBOLS, gap_sent,
-                         frames=[(True, 15, "w15", "فريم 15 دقيقة"),
+                         frames=[(False, 15, "w15", "فريم 15 دقيقة"),   # 15 دقيقة مقفول
                                  (True, 60, "w1h", "فريم ساعة"),
                                  (True, 240, "w4h", "فريم 4 ساعات")],
                          min_price=0, min_size=WATCH_MIN_SIZE,
