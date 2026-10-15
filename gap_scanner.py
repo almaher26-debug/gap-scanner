@@ -134,6 +134,7 @@
 
 import gc
 import io
+import json
 import logging
 import os
 import sys
@@ -178,7 +179,7 @@ TIINGO_WORKERS = 8
 
 GAP_MIN_STOCK_PRICE = 10         # يتجاهل الأسهم اللي سعرها أقل من كذا (لفريم 4 ساعات والساعة)
 GAP_MIN_SIZE = 1.00              # فريم الساعة والأربع ساعات: يتجاهل الجاب اللي حجمه أقل من 1$
-ENABLE_GAP_4H = True             # فريم 4 ساعات - ينبه عند إغلاق الشمعة
+ENABLE_GAP_4H = False            # فريم 4 ساعات - ينبه عند إغلاق الشمعة
 # ---- شروط فريم 4 ساعات (خاصة فيه، الساعة واليومي ما تغيروا) ----
 GAP4H_MIN_SIZE = 0.30            # فريم 4 ساعات: أقل حجم للجاب 30 سنت
 GAP4H_REQUIRE_RED = False        # True = الشموع الثلاث لازم حمراء | False = لونها ما يهم
@@ -186,7 +187,7 @@ GAP4H_REQUIRE_STEP = True        # الشموع الثلاث متراصة: كل 
 GAP4H_REQUIRE_COLOR4 = True      # الرابعة خضراء (صعودي) أو حمراء (هبوطي)
 GAP4H_MIN_FILL = 0.9             # كل شمعة لازم فيها 90% من شموع الربع ساعة وأكثر، وإلا بياناتها ناقصة وتنرفض
 GAP_SHOW_CANDLES = True          # يكتب الشموع الأربع (وقت، أعلى، أقل) في التنبيه عشان تقارنها بالشارت
-ENABLE_GAP_1H = True             # فريم ساعة - ينبه عند إغلاق الشمعة
+ENABLE_GAP_1H = False            # فريم ساعة - ينبه عند إغلاق الشمعة
 GAP_1H_MIN_SIZE = 0.50           # فريم ساعة: أقل حجم للجاب 50 سنت
 ENABLE_GAP_15M = False           # فريم 15 دقيقة - مطفي
 ENABLE_GAP_1D = False            # فريم يومي - مطفي
@@ -200,16 +201,17 @@ GAP15_MIN_AVG_VOLUME = 100_000   # يشيل الأسهم الميتة اللي �
 GAP15_MIN_SIZE = 0.05            # الجاب على الأسهم الرخيصة أصغر، فحجم أقل
 # ---- (1ج) جاب 15 دقيقة "النظيف": نفس أسهم الساعة والأربع ساعات (ناسداك 2 مليار وفوق، سعر 10$ وفوق) ----
 #   الشرط الزايد: الشموع الثلاث ما بينها فراغ، والجاب دولارين أو أكثر
-ENABLE_GAP_15M_CLEAN = True      # True = شغال | False = مطفي
+ENABLE_GAP_15M_CLEAN = False     # True = شغال | False = مطفي
 GAP15C_MIN_SIZE = 2.00           # أقل حجم للجاب (دولار)
 GAP15C_OPEN_TOL = 0.01           # سماحية فرق الافتتاح عن إغلاق الشمعة اللي قبلها (سنت واحد)
 # ---- (1هـ) قائمة المراقبة الخاصة: IFVG على 15 دقيقة + ساعة + 4 ساعات، الجاب أكثر من 15 سنت ----
 #   الجاب 15 سنت أو أقل يتجاهله. الأسهم هذي تنشال من الفحص العادي عشان ما يجيك تنبيهين
 ENABLE_WATCH = True              # True = شغال | False = مطفي
 WATCH_SYMBOLS = [
-    "TSLA", "AAPL", "NVDA", "MSFT", "INTC", "MSTR", "COIN", "SPCX", "CRCL", "OKTA",
-    "META", "AVGO", "NOW", "ORCL", "LLY", "CRWD", "GOOGL", "ADBE", "SNDK", "AMD",
-    "MU", "DELL", "QCOM", "RKLB", "CRDO",
+    "NVDA", "CRM", "AVGO", "META", "TSLA", "SPCX", "AMD", "LITE", "FICO", "AAPL",
+    "RKLB", "UNH", "MU", "LLY", "ADBE", "QCOM", "SHOP", "GOOGL", "MSFT", "MSTR",
+    "AMZN", "DDOG", "ACN", "GEV", "LRCX", "PLTR", "OKTA", "ORCL", "INTC", "AAOI",
+    "CRDO", "SNDK", "STX", "CRCL", "WDC", "SKHY", "NBIS", "CRWV", "CRWD", "MRVL",
 ]
 WATCH_MIN_SIZE = 0.16            # حجم الجاب: أكثر من 15 سنت (يعني 16 سنت وفوق) | 0 = بدون شرط
 GAP_REQUIRE_MIDDLE_COVER = True  # الشمعة الثانية لازم تغطي الجاب كامل (من قمة الثالثة لقاع الأولى)
@@ -272,12 +274,33 @@ DAILY_LOOKBACK_DAYS = 10         # النماذج اللي اخترقت خلال
 DAILY_MIN_MARKET_CAP = 2_000_000_000   # نموذج W على الأسهم اللي قيمتها 2 مليار وفوق بس
 
 # ---- (4) الشورت صفر ----
-ENABLE_SHORT = True             # الشورت صفر شغال
+ENABLE_SHORT = False            # الشورت صفر مطفي
 SHORT_MIN_PRICE = 0.10
 SHORT_MAX_PRICE = 15
 SHORT_MIN_AVG_VOLUME = 50_000
 SHORT_WORKERS = 3
 SHORT_SENT_FILE = "short_sent.txt"   # عشان ما يعيد نفس التنبيه لو البوت أعاد التشغيل
+SHORT_EVERY_MIN = 60             # يعيد فحص الشورت كل كم دقيقة (عشان يمسك البيانات الجديدة أول ما تنزل)
+
+# ---- (4ج) الشورت صفر اللحظي: الأسهم المتاحة للشورت وصلت صفر (Interactive Brokers كل 15 دقيقة) ----
+ENABLE_BORROW_ZERO = True        # True = شغال | False = مطفي
+BZ_MIN_PRICE = 0.70              # أقل سعر
+BZ_MAX_PRICE = 10                # أعلى سعر
+BZ_MAX_MARKET_CAP = 100_000_000  # القيمة السوقية أقل من 100 مليون
+BZ_EVERY_MIN = 15                # كل كم دقيقة يفحص
+BZ_UNIVERSE_EVERY_MIN = 60       # كل كم دقيقة يحدث قائمة البني ستوك (السعر والقيمة السوقية)
+BZ_SHORT_DAYS = 15               # كم يوم من حجم الشورت يكتب في التنبيه
+BZ_STATE_FILE = "borrow_state.json"
+
+# ---- (4د) سكنر الزخم: ارتفاع قوي + فوليوم نسبي + قريب من قمة اليوم (Alpaca، كل دقيقة) ----
+ENABLE_MOMENTUM = True           # True = شغال | False = مطفي
+MOM_MIN_PRICE = 1                # أقل سعر
+MOM_MAX_PRICE = 50               # أعلى سعر
+MOM_MIN_CHANGE = 10              # أقل ارتفاع % عن إغلاق أمس
+MOM_MIN_RVOL = 2                 # الفوليوم النسبي (ضعف المعتاد وفوق)
+MOM_MIN_VOLUME = 500_000         # أقل فوليوم لليوم
+MOM_NEAR_HIGH_PCT = 2            # السعر ما يبعد عن قمة اليوم أكثر من 2%
+MOM_EVERY_SEC = 60               # كل كم ثانية يفحص
 
 # ---- (4ب) تجزئة عكسية + شورت صفر (أسهم البني ستوك) ----
 ENABLE_RSPLIT_SHORT = False            # مطفي
@@ -1519,7 +1542,7 @@ def scan_daily(tickers):
     """قائمة وحدة بالأسبوع بكل الأسهم اللي سوت قاع مزدوج واخترقت خط العنق آخر أسبوعين."""
     found = _scan_patterns_frame(tickers)
     hits = 0
-    label = "فريم يومي - آخر أسبوعين | أسهم ناسداك 2 مليار وفوق"
+    label = "فريم يومي - آخر أسبوعين | قائمة المراقبة"
     for name, rows in found.items():
         rows.sort(reverse=True)                   # الأحدث فوق
         hits += len(rows)
@@ -1625,6 +1648,300 @@ def scan_short(tickers, already_sent):
             )
     free_memory()
     log(f"[{datetime.now():%H:%M}] الشورت: خلص الفحص - {hits} تنبيه جديد")
+
+
+# ================== (4ج) الشورت صفر اللحظي (الأسهم المتاحة للشورت) ==================
+#   المصدر: ملف Interactive Brokers العام (نفس ChartExchange) يتحدث كل 15 دقيقة
+#   + حجم الشورت اليومي آخر 15 يوم من FINRA
+def _bz_num(x):
+    try:
+        return float(str(x).replace("$", "").replace(",", "").strip())
+    except Exception:
+        return 0.0
+
+
+def bz_universe():
+    """البني ستوك: {الرمز: {"price", "cap"}} من سكرينر ناسداك (ناسداك + نيويورك + أميكس)."""
+    out = {}
+    for ex in ("nasdaq", "nyse", "amex"):
+        url = ("https://api.nasdaq.com/api/screener/stocks"
+               f"?tableonly=true&limit=10000&exchange={ex}&download=true")
+        try:
+            r = requests.get(url, headers={**HEADERS, "Accept": "application/json"}, timeout=40)
+            data = r.json().get("data") or {}
+            rows = data.get("rows") or (data.get("table") or {}).get("rows") or []
+            for row in rows:
+                sym = str(row.get("symbol", "")).strip().upper()
+                price, cap = _bz_num(row.get("lastsale")), _bz_num(row.get("marketCap"))
+                if (sym.isalpha() and len(sym) <= 5 and BZ_MIN_PRICE <= price <= BZ_MAX_PRICE
+                        and 0 < cap < BZ_MAX_MARKET_CAP):
+                    out[sym] = {"price": price, "cap": cap}
+        except Exception as e:
+            log(f"الشورت صفر: سكرينر {ex} خطأ: {e}")
+    return out
+
+
+def bz_download_ibkr():
+    import ftplib
+    buf = io.BytesIO()
+    with ftplib.FTP("ftp3.interactivebrokers.com", timeout=60) as ftp:
+        ftp.login("shortstock", "")
+        ftp.retrbinary("RETR usa.txt", buf.write)
+    return buf.getvalue().decode("utf-8", errors="ignore")
+
+
+def bz_parse_ibkr(text):
+    """{الرمز: {"available": عدد، "fee": رسوم %}}"""
+    out, cols = {}, []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        if line.startswith("#SYM"):
+            cols = [c.strip().lstrip("#").upper() for c in line.split("|")]
+            continue
+        if line.startswith("#") or not cols:
+            continue
+        row = dict(zip(cols, line.split("|")))
+        sym = row.get("SYM", "").strip().upper()
+        raw = row.get("AVAILABLE", "").strip().replace(",", "").lstrip(">")
+        try:
+            avail = int(float(raw))
+        except ValueError:
+            continue
+        try:
+            fee = float(row.get("FEERATE", "") or "nan")
+        except ValueError:
+            fee = float("nan")
+        if sym:
+            out[sym] = {"available": avail, "fee": fee}
+    return out
+
+
+_bz_finra = {}
+
+
+def _bz_finra_day(day):
+    if day in _bz_finra:
+        return _bz_finra[day]
+    try:
+        r = requests.get(f"https://cdn.finra.org/equity/regsho/daily/CNMSshvol{day}.txt",
+                         headers=HEADERS, timeout=30)
+        if r.status_code != 200:
+            return None
+    except Exception:
+        return None
+    rows = {}
+    for line in r.text.splitlines()[1:]:
+        p = line.split("|")
+        if len(p) >= 5:
+            try:
+                rows[p[1].strip().upper()] = (float(p[2]), float(p[4]))
+            except ValueError:
+                pass
+    _bz_finra[day] = rows
+    return rows
+
+
+def bz_short_history_txt(sym):
+    out, d, tries = [], datetime.now(ZoneInfo(NY)).date(), 0
+    while len(out) < BZ_SHORT_DAYS and tries < BZ_SHORT_DAYS * 2 + 10:
+        tries += 1
+        if d.weekday() < 5:
+            rows = _bz_finra_day(d.strftime("%Y%m%d"))
+            if rows is not None and sym in rows:
+                sv, tv = rows[sym]
+                out.append(f"{d:%m-%d}: {sv:,.0f} من {tv:,.0f} ({(sv / tv * 100 if tv else 0):.0f}%)")
+        d -= timedelta(days=1)
+    for k in sorted(_bz_finra)[:-(BZ_SHORT_DAYS * 2 + 10)]:
+        _bz_finra.pop(k, None)
+    if not out:
+        return "📊 حجم الشورت آخر 15 يوم: ما فيه بيانات"
+    return f"📊 حجم الشورت آخر {len(out)} يوم (FINRA):\n" + "\n".join(out)
+
+
+def _bz_load_state():
+    try:
+        with open(BZ_STATE_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _bz_save_state(state):
+    try:
+        with open(BZ_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+    except Exception as e:
+        log(f"الشورت صفر: ما قدرت أحفظ الحالة: {e}")
+
+
+def bz_check(state, first_run, universe):
+    data = bz_parse_ibkr(bz_download_ibkr())
+    if not data:
+        log("الشورت صفر: ملف IBKR فاضي أو صيغته تغيرت")
+        return
+    now = datetime.now(ZoneInfo(LOCAL_TZ))
+    fee_txt = lambda f: "غير معروف" if f != f else f"{f:.2f}%"
+    zero_now = alerts = 0
+    for sym, u in universe.items():
+        info = data.get(sym)
+        if info is None:
+            continue
+        avail, prev = info["available"], state.get(sym)
+        zero_now += avail == 0
+        if prev is not None and not first_run:
+            if prev > 0 and avail == 0:
+                send_telegram(
+                    f"🚫 الشورت صفر - ${sym}\n"
+                    f"السعر: {u['price']:.2f}$\n"
+                    f"القيمة السوقية: {u['cap'] / 1e6:.1f} مليون$\n"
+                    f"الأسهم المتاحة للشورت: 0 (كانت {prev:,})\n"
+                    f"رسوم الاستلاف: {fee_txt(info['fee'])}\n"
+                    f"الوقت: {now:%Y-%m-%d %H:%M} (توقيتك)\n"
+                    f"المصدر: Interactive Brokers\n\n"
+                    f"{bz_short_history_txt(sym)}")
+                alerts += 1
+                time.sleep(0.5)
+            elif prev == 0 and avail > 0:
+                send_telegram(
+                    f"✅ رجع الشورت متاح - ${sym}\n"
+                    f"الأسهم المتاحة للشورت: {avail:,}\n"
+                    f"رسوم الاستلاف: {fee_txt(info['fee'])}\n"
+                    f"الوقت: {now:%Y-%m-%d %H:%M} (توقيتك)")
+                alerts += 1
+                time.sleep(0.5)
+        state[sym] = avail
+    _bz_save_state(state)
+    log(f"[{datetime.now():%H:%M}] الشورت صفر: {len(universe)} سهم بني ستوك — "
+        f"صفر حالياً {zero_now} — تنبيهات {alerts}")
+
+
+def bz_run_forever():
+    log(f"الشورت صفر: بدأ — {BZ_MIN_PRICE:g}-{BZ_MAX_PRICE:g}$، قيمة سوقية أقل من "
+        f"{BZ_MAX_MARKET_CAP / 1e6:g} مليون — كل {BZ_EVERY_MIN} دقيقة")
+    state = _bz_load_state()
+    first_run = not state      # أول مرة يسجل الوضع بس عشان ما يجيك سيل تنبيهات
+    universe, uni_last = {}, 0.0
+    while True:
+        try:
+            if not universe or time.time() - uni_last >= BZ_UNIVERSE_EVERY_MIN * 60:
+                fresh = bz_universe()
+                if fresh:
+                    universe, uni_last = fresh, time.time()
+                    log(f"الشورت صفر: قائمة البني ستوك {len(universe)} سهم")
+            if universe:
+                bz_check(state, first_run, universe)
+                first_run = False
+        except Exception as e:
+            log(f"الشورت صفر: خطأ {e}")
+        time.sleep(BZ_EVERY_MIN * 60)
+
+
+# ================== (4د) سكنر الزخم (Alpaca لحظي) ==================
+#   ارتفاع قوي + فوليوم نسبي عالي + السعر قريب من قمة اليوم - كل دقيقة وقت السوق الرسمي
+_mom_levels = {}
+_mom_day = None
+
+
+def _mom_get(path, params=None):
+    r = requests.get("https://data.alpaca.markets" + path, params=params or {}, timeout=20,
+                     headers={"APCA-API-KEY-ID": ALPACA_KEY, "APCA-API-SECRET-KEY": ALPACA_SECRET,
+                              "Accept": "application/json"})
+    r.raise_for_status()
+    return r.json()
+
+
+def _mom_candidates():
+    syms = set()
+    try:
+        for g in _mom_get("/v1beta1/screener/stocks/movers", {"top": 50}).get("gainers", []):
+            syms.add(g["symbol"])
+    except Exception as e:
+        log(f"الزخم: خطأ movers: {e}")
+    try:
+        for a in _mom_get("/v1beta1/screener/stocks/most-actives",
+                          {"by": "volume", "top": 100}).get("most_actives", []):
+            syms.add(a["symbol"])
+    except Exception as e:
+        log(f"الزخم: خطأ most-actives: {e}")
+    return [s for s in syms if s.isalpha() and len(s) <= 5]
+
+
+def _mom_snapshots(symbols):
+    out = {}
+    for i in range(0, len(symbols), 100):
+        try:
+            out.update(_mom_get("/v2/stocks/snapshots",
+                                {"symbols": ",".join(symbols[i:i + 100]), "feed": "sip"}))
+        except Exception as e:
+            log(f"الزخم: خطأ snapshots: {e}")
+    return out
+
+
+def mom_check(sym, snap, frac):
+    daily = snap.get("dailyBar") or {}
+    prev = snap.get("prevDailyBar") or {}
+    minute = snap.get("minuteBar") or {}
+    price = (snap.get("latestTrade") or {}).get("p") or daily.get("c")
+    prev_close = prev.get("c")
+    if not price or not prev_close or not (MOM_MIN_PRICE <= price <= MOM_MAX_PRICE):
+        return None
+    change = (price - prev_close) / prev_close * 100
+    vol = daily.get("v", 0)
+    if change < MOM_MIN_CHANGE or vol < MOM_MIN_VOLUME:
+        return None
+    prev_vol = prev.get("v") or 0
+    rvol = vol / (prev_vol * frac) if prev_vol else 99.0
+    if rvol < MOM_MIN_RVOL:
+        return None
+    high = daily.get("h") or price
+    from_high = (high - price) / high * 100 if high else 0
+    if from_high > MOM_NEAR_HIGH_PCT:
+        return None
+    level = int(change // 10) * 10        # تنبيه مرة لكل مستوى: 10% ثم 20% ثم 30%...
+    previous = _mom_levels.get(sym, 0)
+    if previous >= level:
+        return None
+    _mom_levels[sym] = level
+    first = "🆕 أول تنبيه اليوم" if previous == 0 else f"🔼 كسر مستوى +{level}%"
+    return (f"🚀 زخم - ${sym}\n{first}\n\n"
+            f"السعر: {price:.2f}$\n"
+            f"التغير: +{change:.1f}%\n"
+            f"قمة اليوم: {high:.2f}$ (يبعد {from_high:.1f}%)\n"
+            f"الفوليوم: {vol:,.0f}\n"
+            f"الفوليوم النسبي: {rvol:.1f}x\n"
+            f"فوليوم آخر دقيقة: {minute.get('v', 0):,.0f}\n"
+            f"الوقت: {datetime.now(ZoneInfo(LOCAL_TZ)):%H:%M} (توقيتك)")
+
+
+def mom_run_forever():
+    global _mom_day
+    if not (ALPACA_KEY and ALPACA_SECRET):
+        log("الزخم: مفاتيح Alpaca ناقصة، ما اشتغل")
+        return
+    log("الزخم: بدأ")
+    while True:
+        try:
+            now_ny = datetime.now(ZoneInfo(NY))
+            if _mom_day != now_ny.date():
+                _mom_day = now_ny.date()
+                _mom_levels.clear()
+            if now_ny.weekday() < 5 and (9, 30) <= (now_ny.hour, now_ny.minute) < (16, 0):
+                start = now_ny.replace(hour=9, minute=30, second=0, microsecond=0)
+                frac = min(max((now_ny - start).total_seconds() / 60 / 390, 0.03), 1.0)
+                snaps = _mom_snapshots(_mom_candidates())
+                hits = 0
+                for sym, snap in snaps.items():
+                    msg = mom_check(sym, snap, frac)
+                    if msg:
+                        send_telegram(msg)
+                        hits += 1
+                        time.sleep(0.5)
+                if hits:
+                    log(f"[{datetime.now():%H:%M}] الزخم: {hits} تنبيه من {len(snaps)} سهم")
+        except Exception as e:
+            log(f"الزخم: خطأ {e}")
+        time.sleep(MOM_EVERY_SEC)
 
 
 # ================== (4ب) تجزئة عكسية + شورت صفر ==================
@@ -2755,6 +3072,10 @@ def main():
     if not once:
         start_algo_thread()
         start_news_thread()
+        if ENABLE_MOMENTUM:      # سكنر الزخم
+            threading.Thread(target=mom_run_forever, daemon=True, name="momentum").start()
+        if ENABLE_BORROW_ZERO:   # الشورت صفر اللحظي
+            threading.Thread(target=bz_run_forever, daemon=True, name="borrow_zero").start()
         try:   # قائمة IFVG الأسبوعية (كل جمعة)
             import weekly_ifvg
             threading.Thread(target=weekly_ifvg.run_forever, kwargs={"send": send_telegram},
@@ -2779,7 +3100,7 @@ def main():
     flow_tickers, flow_day, flow_last = [], None, 0.0
     flow_sent = _load_set(FLOW_SENT_FILE)
     daily_week = next(iter(_load_set(DAILY_WEEK_FILE)), None)
-    short_day = None
+    short_day, short_last, short_tickers = None, 0.0, []
     short_sent = _load_set(SHORT_SENT_FILE)
     rsplit_sent = _load_set(RSPLIT_SENT_FILE)
     rsplit_new_sent = _load_set(RSPLIT_NEW_FILE)
@@ -2794,7 +3115,8 @@ def main():
         if ENABLE_GAP and (once or (slot is not None and us_market_open(now_ny))):
             gap_last = slot or now_ny
             today = pd.Timestamp.now(tz=NY).date()
-            if gap_day != today or not gap_tickers:
+            need_universe = ENABLE_GAP_4H or ENABLE_GAP_1H or ENABLE_GAP_15M_CLEAN or ENABLE_GAP_15M
+            if need_universe and (gap_day != today or not gap_tickers):
                 gap_tickers = get_gap_universe()
                 log(f"الجاب: {len(gap_tickers)} سهم ({' + '.join(e.upper() for e in GAP_EXCHANGES)}) "
                     f"قيمتها السوقية {MIN_MARKET_CAP/1e9:.0f} مليار وفوق")
@@ -2887,12 +3209,8 @@ def main():
         if ENABLE_DAILY and (once or (now_ny.weekday() == DAILY_WEEKDAY
                                       and (now_ny.hour, now_ny.minute) >= DAILY_AFTER_NY
                                       and daily_week != week)):
-            daily_tickers = build_universe("اليومي", DAILY_MIN_PRICE, 100_000,
-                                           DAILY_MIN_AVG_VOLUME, include_nyse=False)
-            big = nasdaq_above_cap(DAILY_MIN_MARKET_CAP)
-            daily_tickers = [t for t in daily_tickers if t in big]
-            log(f"النماذج: {len(daily_tickers)} سهم قيمتها السوقية "
-                f"{DAILY_MIN_MARKET_CAP / 1e9:.0f} مليار وفوق")
+            daily_tickers = list(WATCH_SYMBOLS)   # القاع المزدوج على قائمة المراقبة بس
+            log(f"النماذج: {len(daily_tickers)} سهم (قائمة المراقبة)")
             scan_daily(daily_tickers)
             daily_week = week
             try:
@@ -2912,13 +3230,14 @@ def main():
             rsplit_job(rsplit_state, rsplit_new_sent, rsplit_sent, force=once)
 
         # (4) الشورت صفر - مرة باليوم
-        if ENABLE_SHORT:
+        if ENABLE_SHORT and (once or time.time() - short_last >= SHORT_EVERY_MIN * 60):
             today = pd.Timestamp.now(tz=LOCAL_TZ).date()
-            if short_day != today:
+            if short_day != today or not short_tickers:
                 short_tickers = build_universe("الشورت", SHORT_MIN_PRICE, SHORT_MAX_PRICE,
                                                SHORT_MIN_AVG_VOLUME, include_nyse=False)
-                scan_short(short_tickers, short_sent)
                 short_day = today
+            scan_short(short_tickers, short_sent)
+            short_last = time.time()
 
         is_open = us_market_open()
         if not is_open and was_open is not False:
