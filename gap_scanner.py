@@ -291,6 +291,14 @@ BZ_EVERY_MIN = 15                # كل كم دقيقة يفحص
 BZ_UNIVERSE_EVERY_MIN = 60       # كل كم دقيقة يحدث قائمة البني ستوك (السعر والقيمة السوقية)
 BZ_SHORT_DAYS = 15               # كم يوم من حجم الشورت يكتب في التنبيه
 BZ_STATE_FILE = "borrow_state.json"
+# تنبيه نزول الأسهم المتاحة للشورت أكثر من 60% (يروح لقروب/قسم ثاني)
+ENABLE_BZ_DROP = True            # True = شغال | False = مطفي
+BZ_DROP_PCT = 60                 # نسبة النزول عن أعلى رقم خلال الفترة
+BZ_DROP_DAYS = 30                # الفترة: آخر شهر
+BZ_DROP_MIN_BASE = 1_000         # يتجاهل الأسهم اللي أعلى متاح لها خلال الشهر أقل من كذا
+# رقم القروب/القسم الثاني: حطه كمتغير TELEGRAM_CHAT_ID_SHORT على Railway
+#   قروب عادي: -1001234567890    |   موضوع داخل قروب (Topics): -1001234567890:5
+BZ_DROP_CHAT = os.environ.get("TELEGRAM_CHAT_ID_SHORT", "").strip()
 
 # ---- (4د) سكنر الزخم: ارتفاع قوي + فوليوم نسبي + قريب من قمة اليوم (Alpaca، كل دقيقة) ----
 ENABLE_MOMENTUM = True           # True = شغال | False = مطفي
@@ -1775,6 +1783,28 @@ def _bz_save_state(state):
         log(f"الشورت صفر: ما قدرت أحفظ الحالة: {e}")
 
 
+def bz_send_drop(text):
+    """يرسل تنبيه النزول للقسم الثاني بس. لو ما انحط رقمه يرسل للقروب الأساسي."""
+    if not BZ_DROP_CHAT:
+        send_telegram(text)
+        return
+    text = "للمتابعة\n" + text
+    if ADD_DISCLAIMER:
+        text += "\n\n" + DISCLAIMER
+    log(text)
+    for target in BZ_DROP_CHAT.split(","):
+        chat, _, topic = target.strip().partition(":")
+        data = {"chat_id": chat, "text": text, "disable_web_page_preview": True}
+        if topic:
+            data["message_thread_id"] = topic
+        try:
+            r = requests.post(f"{TG_API}/sendMessage", data=data, timeout=10).json()
+            if not r.get("ok"):
+                log(f"الشورت: فشل الإرسال للقسم الثاني {target}: {r.get('description')}")
+        except Exception as e:
+            log(f"الشورت: فشل الإرسال للقسم الثاني {target}: {e}")
+
+
 def bz_check(state, first_run, universe):
     data = bz_parse_ibkr(bz_download_ibkr())
     if not data:
@@ -1808,6 +1838,37 @@ def bz_check(state, first_run, universe):
                     f"الأسهم المتاحة للشورت: {avail:,}\n"
                     f"رسوم الاستلاف: {fee_txt(info['fee'])}\n"
                     f"الوقت: {now:%Y-%m-%d %H:%M} (توقيتك)")
+                alerts += 1
+                time.sleep(0.5)
+        if ENABLE_BZ_DROP:
+            day = now.strftime("%Y-%m-%d")
+            drop = state.get("_drop")
+            if not isinstance(drop, dict) or "hist" not in drop:
+                drop = state["_drop"] = {"hist": {}, "sent": []}
+            hist = drop["hist"].setdefault(sym, {})          # {اليوم: أعلى متاح باليوم}
+            hist[day] = max(hist.get(day, 0), avail)
+            cutoff = (now - timedelta(days=BZ_DROP_DAYS)).strftime("%Y-%m-%d")
+            for d in [d for d in hist if d < cutoff]:
+                del hist[d]
+            base = max(hist.values())
+            limit = base * (1 - BZ_DROP_PCT / 100)
+            if sym in drop["sent"] and avail > limit:
+                drop["sent"].remove(sym)                       # رجع فوق الحد، ينبه لو نزل مرة ثانية
+            if (avail > 0 and base >= BZ_DROP_MIN_BASE and sym not in drop["sent"]
+                    and avail <= limit):
+                drop["sent"].append(sym)
+                base_day = max(hist, key=hist.get)
+                bz_send_drop(
+                    f"📉 نزول الشورت المتاح - ${sym}\n"
+                    f"نزل {(1 - avail / base) * 100:.0f}% من أعلى رقم خلال آخر شهر\n"
+                    f"الأسهم المتاحة للشورت: {avail:,}\n"
+                    f"أعلى رقم بالشهر: {base:,} (يوم {base_day})\n"
+                    f"السعر: {u['price']:.2f}$\n"
+                    f"القيمة السوقية: {u['cap'] / 1e6:.1f} مليون$\n"
+                    f"رسوم الاستلاف: {fee_txt(info['fee'])}\n"
+                    f"الوقت: {now:%Y-%m-%d %H:%M} (توقيتك)\n"
+                    f"المصدر: Interactive Brokers\n\n"
+                    f"{bz_short_history_txt(sym)}")
                 alerts += 1
                 time.sleep(0.5)
         state[sym] = avail
