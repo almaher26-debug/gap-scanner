@@ -310,6 +310,14 @@ MOM_MIN_VOLUME = 500_000         # أقل فوليوم لليوم
 MOM_NEAR_HIGH_PCT = 2            # السعر ما يبعد عن قمة اليوم أكثر من 2%
 MOM_EVERY_SEC = 60               # كل كم ثانية يفحص
 
+# ---- (1ز) سحب سيولة الثلاثاء + إغلاق فوق الدعم الأربعاء (قائمة أسبوعية) ----
+#   ذيل شمعة الثلاثاء نزل تحت دعم (قاع سابق صامد)، وشمعة الأربعاء قفلت فوقه
+ENABLE_TUEWED = True             # True = شغال | False = مطفي
+TUEWED_MIN_MARKET_CAP = 2_000_000_000   # ناسداك 2 مليار وفوق
+TUEWED_MIN_PRICE = 50            # السعر 50$ وفوق
+TUEWED_AFTER_NY = (16, 25)       # بعد إغلاق الأربعاء: 4:25 العصر نيويورك = 11:25 بالليل بتوقيتك
+TUEWED_WEEK_FILE = "tuewed_week.txt"   # عشان ما يرسل مرتين بنفس الأسبوع
+
 # ---- (4ب) تجزئة عكسية + شورت صفر (أسهم البني ستوك) ----
 ENABLE_RSPLIT_SHORT = False            # مطفي
 RSPLIT_MAX_PRICE = 5                 # الشورت صفر: يفحصه لأسهم البني ستوك (5$ أو أقل) من اللي سوت تجزئة
@@ -2005,6 +2013,75 @@ def mom_run_forever():
         time.sleep(MOM_EVERY_SEC)
 
 
+# ================== (1ز) سحب سيولة الثلاثاء + إغلاق فوق الدعم الأربعاء ==================
+def check_tuewed(df):
+    """آخر شمعتين لازم الثلاثاء ثم الأربعاء. يرجع الدعوم اللي ذيل الثلاثاء نزل تحتها
+    وإغلاق الأربعاء فوقها، وإلا None."""
+    df = df.dropna(subset=OHLC)
+    n = SWEEP_PIVOT_BARS
+    if len(df) < 2 * n + 4:
+        return None
+    idx = [pd.Timestamp(i) for i in df.index]
+    if idx[-1].weekday() != 2 or idx[-2].weekday() != 1:
+        return None
+    df = df.iloc[-(SWEEP_LOOKBACK + 2):]
+    lo, cl = df["Low"].astype(float).values, df["Close"].astype(float).values
+    tu, we = len(df) - 2, len(df) - 1
+    supports = []
+    for i in range(n, tu - n):
+        if lo[i] != lo[i - n:i + n + 1].min():
+            continue
+        lvl = lo[i]
+        if (cl[i + 1:tu] < lvl).any():          # الدعم صامد قبل الثلاثاء
+            continue
+        if lo[tu] < lvl < cl[we]:
+            supports.append((i, lvl))
+    supports.sort(key=lambda x: x[1])
+    merged = []
+    for i, lvl in supports:
+        if merged and (lvl - merged[-1][1]) / merged[-1][1] < SWEEP_MERGE_PCT:
+            continue
+        merged.append((i, lvl))
+    if not merged:
+        return None
+    vol_rel = None
+    v = df["Volume"].astype(float).values if "Volume" in df else None
+    if v is not None:
+        avg = v[max(0, tu - 20):tu].mean()
+        vol_rel = v[we] / avg if avg > 0 else None
+    return {"supports": [(df.index[i], lvl) for i, lvl in sorted(merged, key=lambda x: -x[1])],
+            "tue_low": lo[tu], "tue_close": cl[tu], "wed_close": cl[we], "vol_rel": vol_rel}
+
+
+def scan_tuewed(tickers):
+    rows = []
+    for t, df in download_batches(tickers, 200, period="6mo", interval="1d", prepost=False):
+        try:
+            if float(df["Close"].dropna().iloc[-1]) < TUEWED_MIN_PRICE:
+                continue
+            r = check_tuewed(df)
+            if r:
+                rows.append((t, r))
+        except Exception:
+            continue
+    rows.sort(key=lambda x: (-len(x[1]["supports"]), -(x[1]["vol_rel"] or 0)))
+    head = (f"💧 سحب سيولة الثلاثاء + إغلاق فوق الدعم الأربعاء\n"
+            f"ناسداك {TUEWED_MIN_MARKET_CAP / 1e9:.0f} مليار وفوق | السعر {TUEWED_MIN_PRICE}$ وفوق\n")
+    if not rows:
+        send_telegram(head + "\nما فيه ولا سهم هالأسبوع", kind="sweep")
+    lines = []
+    for t, r in rows:
+        lv = " / ".join(f"{lvl:.2f}" for _, lvl in r["supports"])
+        vr = f" | فوليوم {r['vol_rel']:.1f}x" if r["vol_rel"] else ""
+        lines.append(f"${t}: دعم {lv} | قاع الثلاثاء {r['tue_low']:.2f} | "
+                     f"إغلاق الأربعاء {r['wed_close']:.2f}{vr}")
+    for i in range(0, len(lines), 30):
+        send_telegram(head + f"({len(rows)} سهم)\n\n" + "\n".join(lines[i:i + 30]), kind="sweep")
+        time.sleep(3)
+    free_memory()
+    log(f"[{datetime.now():%H:%M}] سحب الثلاثاء/الأربعاء: {len(rows)} سهم")
+
+
 # ================== (4ب) تجزئة عكسية + شورت صفر ==================
 def load_rsplits(tickers):
     """كل التجزئات العكسية آخر سنة.
@@ -3144,6 +3221,11 @@ def main():
         except Exception as e:
             log(f"IFVG الأسبوعي: ما اشتغل: {e}")
 
+    try:
+        with open(TUEWED_WEEK_FILE, encoding="utf-8") as f:
+            tuewed_week = f.read().strip() or None
+    except FileNotFoundError:
+        tuewed_week = None
     gap_tickers, gap_day, gap_last = [], None, None
     gap15_tickers = []
     gap1d_day = None
@@ -3249,6 +3331,20 @@ def main():
             try:
                 with open(WSWEEP_WEEK_FILE, "w", encoding="utf-8") as f:
                     f.write(wk + "\n")
+            except Exception:
+                pass
+
+        # (1ز) سحب سيولة الثلاثاء + إغلاق فوق الدعم الأربعاء - كل أربعاء بعد الإغلاق
+        now_ny = pd.Timestamp.now(tz=NY)
+        iso = now_ny.isocalendar()
+        tw_wk = f"{iso[0]}-W{iso[1]:02d}"
+        if ENABLE_TUEWED and tuewed_week != tw_wk and (
+                once or (now_ny.weekday() == 2 and (now_ny.hour, now_ny.minute) >= TUEWED_AFTER_NY)):
+            scan_tuewed(sorted(nasdaq_above_cap(TUEWED_MIN_MARKET_CAP)))
+            tuewed_week = tw_wk
+            try:
+                with open(TUEWED_WEEK_FILE, "w", encoding="utf-8") as f:
+                    f.write(tw_wk + "\n")
             except Exception:
                 pass
 
