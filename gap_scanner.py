@@ -330,6 +330,12 @@ PDL_DAY_FILE = "pdl_day.txt"     # عشان ما يرسل مرتين بنفس ا
 #   ذيل شمعة اليوم طلع فوق قمة أمس، والإغلاق رجع تحت قمة أمس. قائمة وحدة مع نفس التوقيت
 ENABLE_PDH_SWEEP = True          # True = شغال | False = مطفي
 
+# ---- (1ي) دعم الشهر السابق + إغلاق 4 ساعات أخضر فوقه - لحظي على قائمة المراقبة ----
+#   الدعم = قاع شمعة الشهر السابق. السعر نزل تحته، بعدين شمعة 4 ساعات خضراء قفلت فوقه
+ENABLE_PMS = True                # True = شغال | False = مطفي
+PMS_EVERY_MIN = 20               # كل كم دقيقة يفحص وقت السوق
+PMS_MAX_ALERT_DELAY_MIN = 60     # ما ينبه على شمعة قفلت من أكثر من كذا دقيقة
+
 # ---- (4ب) تجزئة عكسية + شورت صفر (أسهم البني ستوك) ----
 ENABLE_RSPLIT_SHORT = False            # مطفي
 RSPLIT_MAX_PRICE = 5                 # الشورت صفر: يفحصه لأسهم البني ستوك (5$ أو أقل) من اللي سوت تجزئة
@@ -2174,6 +2180,88 @@ def scan_pdl_sweep(symbols, today):
     log(f"[{datetime.now():%H:%M}] سحب قاع أمس: {len(rows)} سهم | سحب قمة أمس: {len(rows_h)} سهم")
 
 
+# ================== (1ي) دعم الشهر السابق + إغلاق 4 ساعات أخضر فوقه ==================
+_pms_support = {"day": None, "lvl": {}}
+
+
+def _pms_supports(symbols, today):
+    """قاع الشهر السابق لكل سهم (يتحدث مرة باليوم)."""
+    if _pms_support["day"] == today and _pms_support["lvl"]:
+        return _pms_support["lvl"]
+    first = pd.Timestamp(today).replace(day=1)
+    prev_first = (first - pd.Timedelta(days=1)).replace(day=1)
+    lvl = {}
+    for t, df in download_batches(symbols, 100, period="3mo", interval="1d", prepost=False):
+        try:
+            df = df.dropna(subset=OHLC)
+            d = pd.to_datetime([pd.Timestamp(i).date() for i in df.index])
+            pm = df[(d >= prev_first) & (d < first)]
+            if len(pm):
+                lvl[t] = (float(pm["Low"].min()), pd.Timestamp(pm["Low"].astype(float).idxmin()).date())
+        except Exception:
+            continue
+    _pms_support.update(day=today, lvl=lvl)
+    return lvl
+
+
+def check_pms(c4, support, month_start):
+    """c4 = شموع 4 ساعات المقفلة. آخر شمعة خضراء قفلت فوق الدعم، وهي (أو اللي قبلها) كانت تحته:
+    يا ذيلها نزل تحت الدعم، يا الشمعة اللي قبلها قفلت تحته. وكسر الدعم صار هالشهر."""
+    c4 = c4[c4.index >= month_start]
+    if len(c4) < 1:
+        return None
+    last = c4.iloc[-1]
+    if not (last["Close"] > last["Open"] and last["Close"] > support):
+        return None
+    prev_below = len(c4) > 1 and c4.iloc[-2]["Close"] < support
+    if not (last["Low"] < support or prev_below):
+        return None
+    lowest = float(c4["Low"].min())
+    if lowest >= support:
+        return None
+    return {"close": float(last["Close"]), "open": float(last["Open"]), "low": float(last["Low"]),
+            "lowest": lowest, "start": c4.index[-1], "end": last["end"]}
+
+
+def scan_pms(symbols, sent):
+    now = pd.Timestamp.now(tz=NY)
+    month_start = now.normalize().replace(day=1)
+    sup = _pms_supports(symbols, now.date())
+    hits = 0
+    for t, df in download_batches(symbols, 100, period="1mo", interval=f"{GAP_BASE_MIN}m",
+                                  prepost=GAP_EXTENDED):
+        try:
+            if t not in sup:
+                continue
+            df = to_ny(df)[OHLC]
+            if df.empty:
+                continue
+            c4 = only_closed(to_4h(df), df.index.max(), now)
+            lvl, lvl_day = sup[t]
+            r = check_pms(c4, lvl, month_start)
+            if not r or (now - pd.Timestamp(r["end"])).total_seconds() / 60 > PMS_MAX_ALERT_DELAY_MIN:
+                continue
+            key = f"{t}-pms-{r['start']:%Y%m%d%H%M}"
+            if key in sent:
+                continue
+            sent.add(key)
+            _append_line(GAP_SENT_FILE, key)
+            hits += 1
+            t1 = pd.Timestamp(r["start"]).tz_convert(LOCAL_TZ)
+            send_telegram(
+                f"🟢 دعم الشهر السابق — إغلاق 4 ساعات أخضر فوقه\n"
+                f"السهم: ${t}\n"
+                f"الدعم (قاع الشهر السابق): {lvl:.2f}  (يوم {lvl_day})\n"
+                f"أقل سعر هالشهر: {r['lowest']:.2f}  ({(r['lowest'] / lvl - 1) * 100:.1f}% تحت الدعم)\n"
+                f"شمعة 4 ساعات: افتتاح {r['open']:.2f} ← إغلاق {r['close']:.2f}\n"
+                f"وقت الشمعة: {t1:%Y-%m-%d %H:%M} (توقيتك)", kind="sweep")
+        except Exception as e:
+            log(f"دعم الشهر السابق: {t}: خطأ - {e}")
+    free_memory()
+    if hits:
+        log(f"[{datetime.now():%H:%M}] دعم الشهر السابق: {hits} تنبيه")
+
+
 # ================== (4ب) تجزئة عكسية + شورت صفر ==================
 def load_rsplits(tickers):
     """كل التجزئات العكسية آخر سنة.
@@ -3338,6 +3426,7 @@ def main():
             pdl_day = f.read().strip() or None
     except FileNotFoundError:
         pdl_day = None
+    pms_last = 0.0
     gap_tickers, gap_day, gap_last = [], None, None
     gap15_tickers = []
     gap1d_day = None
@@ -3471,6 +3560,11 @@ def main():
                     f.write(pdl_day + "\n")
             except Exception:
                 pass
+
+        # (1ي) دعم الشهر السابق + إغلاق 4 ساعات أخضر - كل 20 دقيقة وقت السوق
+        if ENABLE_PMS and (once or us_market_open()) and time.time() - pms_last >= PMS_EVERY_MIN * 60:
+            scan_pms(list(WATCH_SYMBOLS), gap_sent)
+            pms_last = time.time()
 
         # (2) ماسح السيولة - وقت السوق الرسمي، كل 5 دقايق
         if ENABLE_FLOW and (regular_session_open() or once) \
