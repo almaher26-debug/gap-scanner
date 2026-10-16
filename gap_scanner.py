@@ -51,6 +51,13 @@
     - يفحص مرة باليوم بعد الإغلاق (4:20 العصر نيويورك = 11:20 بالليل بتوقيتك)
     - ENABLE_SWEEP = False يطفيه | python gap_scanner.py --sweeptest يجربه بدون نت
 
+(1ك) سحب سيولة دعم ومقاومة الأسبوع السابق - فريم ساعة - قائمة المراقبة (نفس 70 سهم الـ IFVG) (WATCH_SYMBOLS)
+    - الدعم = قاع شمعة الأسبوع السابق (الاثنين - الجمعة)
+    - الشرط: شمعة ساعة من هالأسبوع ذيلها نزل تحت الدعم، وقفلت فوقه (لونها ما يهم)
+    - المقاومة = قمة شمعة الأسبوع السابق: شمعة ساعة ذيلها طلع فوقها وقفلت تحتها
+    - يفحص كل 5 دقايق وقت السوق، وينبه أول ما تقفل الشمعة
+    - ENABLE_PWL_1H = False يطفي الدعم | ENABLE_PWH_1H = False يطفي المقاومة | python gap_scanner.py --pwltest يجربه بدون نت
+
 (1و) سحب سيولة دعمين - الفريم الأسبوعي
     - الأسهم: ناسداك + نيويورك اللي قيمتها السوقية 10 مليار دولار وفوق
     - الدعم = قاع أسبوعي سابق (أنزل من شمعتين قبله وشمعتين بعده) خلال آخر سنة، ولسا صامد
@@ -336,6 +343,15 @@ ENABLE_PDH_SWEEP = True          # True = شغال | False = مطفي
 ENABLE_PMS = True                # True = شغال | False = مطفي
 PMS_EVERY_MIN = 20               # كل كم دقيقة يفحص وقت السوق
 PMS_MAX_ALERT_DELAY_MIN = 60     # ما ينبه على شمعة قفلت من أكثر من كذا دقيقة
+
+# ---- (1ك) سحب سيولة دعم ومقاومة الأسبوع السابق - فريم ساعة - لحظي على قائمة المراقبة ----
+#   الدعم = قاع شمعة الأسبوع السابق. شمعة ساعة ذيلها نزل تحت الدعم وقفلت فوقه (لونها ما يهم)
+ENABLE_PWL_1H = True             # True = شغال | False = مطفي
+PWL_EVERY_MIN = 5                # كل كم دقيقة يفحص وقت السوق
+PWL_MAX_ALERT_DELAY_MIN = 30     # ما ينبه على شمعة قفلت من أكثر من كذا دقيقة
+PWL_ONCE_PER_WEEK = False        # True = تنبيه واحد لكل سهم بالأسبوع | False = كل شمعة سحب
+#   المقاومة = قمة شمعة الأسبوع السابق. شمعة ساعة ذيلها طلع فوق المقاومة وقفلت تحتها
+ENABLE_PWH_1H = True             # True = شغال | False = مطفي (نفس توقيت وإعدادات الدعم فوق)
 
 # ---- (4ب) تجزئة عكسية + شورت صفر (أسهم البني ستوك) ----
 ENABLE_RSPLIT_SHORT = False            # مطفي
@@ -2263,6 +2279,207 @@ def scan_pms(symbols, sent):
         log(f"[{datetime.now():%H:%M}] دعم الشهر السابق: {hits} تنبيه")
 
 
+# ================== (1ك) سحب سيولة دعم ومقاومة الأسبوع السابق - فريم ساعة ==================
+_pwl_support = {"day": None, "lvl": {}}
+
+
+def _week_start(ts):
+    """بداية الأسبوع (الاثنين 00:00 بتوقيت نيويورك)."""
+    ts = pd.Timestamp(ts)
+    return ts.normalize() - pd.Timedelta(days=ts.weekday())
+
+
+def _pwl_supports(symbols, today):
+    """قاع وقمة الأسبوع السابق لكل سهم من الشموع اليومية (يتحدث مرة باليوم).
+    يرجع {الرمز: {"low": (القاع، يومه), "high": (القمة، يومها)}}"""
+    if _pwl_support["day"] == today and _pwl_support["lvl"]:
+        return _pwl_support["lvl"]
+    this_wk = _week_start(pd.Timestamp(today)).date()
+    prev_wk = this_wk - timedelta(days=7)
+    lvl = {}
+    for t, df in download_batches(symbols, 100, period="1mo", interval="1d", prepost=False):
+        try:
+            df = df.dropna(subset=OHLC)
+            lo = prev_week_low(df, prev_wk, this_wk)
+            hi = prev_week_high(df, prev_wk, this_wk)
+            if lo and hi:
+                lvl[t] = {"low": lo, "high": hi}
+        except Exception:
+            continue
+    _pwl_support.update(day=today, lvl=lvl)
+    return lvl
+
+
+def _prev_week_rows(daily, prev_wk, this_wk):
+    d = [pd.Timestamp(i).date() for i in daily.index]
+    return daily[[(prev_wk <= x < this_wk) for x in d]]
+
+
+def prev_week_low(daily, prev_wk, this_wk):
+    """(قاع الأسبوع السابق، يومه) من الشموع اليومية، أو None."""
+    pw = _prev_week_rows(daily, prev_wk, this_wk)
+    if pw.empty:
+        return None
+    lows = pw["Low"].astype(float)
+    return float(lows.min()), pd.Timestamp(lows.idxmin()).date()
+
+
+def prev_week_high(daily, prev_wk, this_wk):
+    """(قمة الأسبوع السابق، يومها) من الشموع اليومية، أو None."""
+    pw = _prev_week_rows(daily, prev_wk, this_wk)
+    if pw.empty:
+        return None
+    highs = pw["High"].astype(float)
+    return float(highs.max()), pd.Timestamp(highs.idxmax()).date()
+
+
+def check_pwl_1h(c1h, support, week_start):
+    """الدعم: آخر شمعة ساعة (من هالأسبوع) ذيلها نزل تحت قاع الأسبوع السابق وقفلت فوقه."""
+    c1h = c1h[c1h.index >= week_start]
+    if c1h.empty:
+        return None
+    last = c1h.iloc[-1]
+    low, close = float(last["Low"]), float(last["Close"])
+    if not (low < support < close):
+        return None
+    before = c1h.iloc[:-1]
+    closes_beyond = int((before["Close"] < support).sum()) if len(before) else 0
+    return {"open": float(last["Open"]), "high": float(last["High"]), "low": low, "close": close,
+            "depth": (support - low) / support * 100, "start": c1h.index[-1], "end": last["end"],
+            "closes_beyond": closes_beyond,
+            "first_touch": bool(before.empty or before["Low"].min() >= support)}
+
+
+def check_pwh_1h(c1h, resistance, week_start):
+    """المقاومة: آخر شمعة ساعة (من هالأسبوع) ذيلها طلع فوق قمة الأسبوع السابق وقفلت تحتها."""
+    c1h = c1h[c1h.index >= week_start]
+    if c1h.empty:
+        return None
+    last = c1h.iloc[-1]
+    high, close = float(last["High"]), float(last["Close"])
+    if not (close < resistance < high):
+        return None
+    before = c1h.iloc[:-1]
+    closes_beyond = int((before["Close"] > resistance).sum()) if len(before) else 0
+    return {"open": float(last["Open"]), "high": high, "low": float(last["Low"]), "close": close,
+            "depth": (high - resistance) / resistance * 100, "start": c1h.index[-1], "end": last["end"],
+            "closes_beyond": closes_beyond,
+            "first_touch": bool(before.empty or before["High"].max() <= resistance)}
+
+
+def _pwl_message(t, side, lvl, lvl_day, r):
+    t1 = pd.Timestamp(r["start"]).tz_convert(LOCAL_TZ)
+    color = "خضراء 🟢" if r["close"] > r["open"] else "حمراء 🔴"
+    if side == "low":
+        head = "💧 سحب سيولة دعم الأسبوع السابق — فريم ساعة"
+        lvl_line = f"الدعم (قاع الأسبوع السابق): {lvl:.2f}  (يوم {lvl_day})"
+        wick = f"أقل سعر بالشمعة: {r['low']:.2f}  (-{r['depth']:.2f}% تحت الدعم)"
+        close = f"الإغلاق: {r['close']:.2f} فوق الدعم | الشمعة {color}"
+        word, where = "الدعم", "تحت"
+    else:
+        head = "🔻 سحب سيولة مقاومة الأسبوع السابق — فريم ساعة"
+        lvl_line = f"المقاومة (قمة الأسبوع السابق): {lvl:.2f}  (يوم {lvl_day})"
+        wick = f"أعلى سعر بالشمعة: {r['high']:.2f}  (+{r['depth']:.2f}% فوق المقاومة)"
+        close = f"الإغلاق: {r['close']:.2f} تحت المقاومة | الشمعة {color}"
+        word, where = "المقاومة", "فوق"
+    note = (f"أول لمس {'للدعم' if side == 'low' else 'للمقاومة'} هالأسبوع" if r["first_touch"] else
+            f"قبلها {r['closes_beyond']} شمعة قفلت {where} {word}" if r["closes_beyond"] else
+            f"لمس {word} قبل وما قفل {where}{'ه' if side == 'low' else 'ها'}")
+    return (f"{head}\nالسهم: ${t}\n{lvl_line}\n{wick}\n{close}\n{note}\n"
+            f"وقت الشمعة: {t1:%Y-%m-%d %H:%M} (توقيتك)")
+
+
+def scan_pwl_1h(symbols, sent):
+    """يفحص الدعم (ENABLE_PWL_1H) والمقاومة (ENABLE_PWH_1H) بنفس التحميل."""
+    now = pd.Timestamp.now(tz=NY)
+    wk0 = _week_start(now)
+    lv = _pwl_supports(symbols, now.date())
+    hits = 0
+    checks = []
+    if ENABLE_PWL_1H:
+        checks.append(("low", "pwl1h", check_pwl_1h))
+    if ENABLE_PWH_1H:
+        checks.append(("high", "pwh1h", check_pwh_1h))
+    for t, df in download_batches(symbols, 100, period="10d", interval=f"{GAP_BASE_MIN}m",
+                                  prepost=GAP_EXTENDED):
+        try:
+            if t not in lv:
+                continue
+            df = to_ny(df)[OHLC]
+            if df.empty:
+                continue
+            c1h = only_closed(to_frame(df, 60), df.index.max(), now)
+            for side, tag, fn in checks:
+                lvl, lvl_day = lv[t][side]
+                r = fn(c1h, lvl, wk0)
+                if not r or (now - pd.Timestamp(r["end"])).total_seconds() / 60 > PWL_MAX_ALERT_DELAY_MIN:
+                    continue
+                key = (f"{t}-{tag}-{wk0:%Y%m%d}" if PWL_ONCE_PER_WEEK
+                       else f"{t}-{tag}-{r['start']:%Y%m%d%H%M}")
+                if key in sent:
+                    continue
+                sent.add(key)
+                _append_line(GAP_SENT_FILE, key)
+                hits += 1
+                send_telegram(_pwl_message(t, side, lvl, lvl_day, r), kind="sweep")
+        except Exception as e:
+            log(f"سحب دعم/مقاومة الأسبوع السابق: {t}: خطأ - {e}")
+    free_memory()
+    if hits:
+        log(f"[{datetime.now():%H:%M}] سحب دعم/مقاومة الأسبوع السابق (ساعة): {hits} تنبيه")
+
+
+def pwl_self_test():
+    """يجرب (1ك) الدعم والمقاومة على بيانات مصنوعة بدون نت."""
+    ny = ZoneInfo(NY)
+    # يومي: الأسبوع السابق قاعه 100 يوم الأربعاء، وقمته 106 يوم الجمعة
+    days = pd.to_datetime(["2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09",
+                           "2026-10-12"])
+    daily = pd.DataFrame({"Open": [105, 104, 102, 103, 104, 103], "High": [105.5, 105, 104, 105, 106, 107],
+                          "Low": [103, 102, 100, 101, 102, 99], "Close": [104, 103, 101, 104, 105, 102]},
+                         index=days)
+    pw0, wk = datetime(2026, 10, 5).date(), datetime(2026, 10, 12).date()
+    lvl, day = prev_week_low(daily, pw0, wk)
+    assert lvl == 100 and str(day) == "2026-10-07", (lvl, day)
+    hi, hday = prev_week_high(daily, pw0, wk)
+    assert hi == 106 and str(hday) == "2026-10-09", (hi, hday)
+    print(f"✅ قاع الأسبوع السابق {lvl} ({day}) | قمته {hi} ({hday}) - شموع هالأسبوع ما دخلت")
+
+    wk0 = pd.Timestamp("2026-10-12", tz=ny)
+    idx = pd.to_datetime(["2026-10-13 10:00", "2026-10-13 11:00", "2026-10-13 12:00"]).tz_localize(ny)
+
+    def frame(o, h, l, c):
+        f = pd.DataFrame({"Open": o, "High": h, "Low": l, "Close": c}, index=idx)
+        f["end"] = f.index + pd.Timedelta(hours=1)
+        return f
+
+    # ---- الدعم ----
+    ok = frame([102, 101, 100.5], [102.5, 101.5, 101.8], [101, 100.2, 99.4], [101.2, 100.6, 101.5])
+    r = check_pwl_1h(ok, lvl, wk0)
+    assert r and r["first_touch"], r
+    print(f"✅ دعم: نزل لـ {r['low']} وقفل {r['close']} فوق {lvl} (أول لمس)")
+    bad = ok.copy(); bad.iloc[-1, bad.columns.get_loc("Close")] = 99.8
+    assert check_pwl_1h(bad, lvl, wk0) is None
+    nos = ok.copy(); nos.iloc[-1, nos.columns.get_loc("Low")] = 100.1
+    assert check_pwl_1h(nos, lvl, wk0) is None
+    assert check_pwl_1h(ok, lvl, pd.Timestamp("2026-10-19", tz=ny)) is None
+    print("✅ دعم: قفل تحته / ما نزل تحته / أسبوع قديم = ما فيه تنبيه")
+
+    # ---- المقاومة ----
+    ok = frame([104, 105, 105.5], [104.8, 105.8, 106.7], [103.5, 104.5, 105], [104.9, 105.4, 105.2])
+    r = check_pwh_1h(ok, hi, wk0)
+    assert r and r["first_touch"], r
+    print(f"✅ مقاومة: طلع لـ {r['high']} وقفل {r['close']} تحت {hi} (أول لمس)")
+    bad = ok.copy(); bad.iloc[-1, bad.columns.get_loc("Close")] = 106.2
+    assert check_pwh_1h(bad, hi, wk0) is None
+    nos = ok.copy(); nos.iloc[-1, nos.columns.get_loc("High")] = 105.9
+    assert check_pwh_1h(nos, hi, wk0) is None
+    assert check_pwh_1h(ok, hi, pd.Timestamp("2026-10-19", tz=ny)) is None
+    print("✅ مقاومة: قفل فوقها / ما طلع فوقها / أسبوع قديم = ما فيه تنبيه")
+    print()
+    print(_pwl_message("TEST", "high", hi, hday, r))
+
+
 # ================== (4ب) تجزئة عكسية + شورت صفر ==================
 def load_rsplits(tickers):
     """كل التجزئات العكسية آخر سنة.
@@ -3399,6 +3616,9 @@ def main():
     if "--sweeptest" in sys.argv:
         sweep_self_test()
         return
+    if "--pwltest" in sys.argv:
+        pwl_self_test()
+        return
     once = "--once" in sys.argv
     _load_chats()
     discover_groups()
@@ -3428,6 +3648,7 @@ def main():
     except FileNotFoundError:
         pdl_day = None
     pms_last = 0.0
+    pwl_last = 0.0
     gap_tickers, gap_day, gap_last = [], None, None
     gap15_tickers = []
     gap1d_day = None
@@ -3566,6 +3787,11 @@ def main():
         if ENABLE_PMS and (once or us_market_open()) and time.time() - pms_last >= PMS_EVERY_MIN * 60:
             scan_pms(list(WATCH_SYMBOLS), gap_sent)
             pms_last = time.time()
+
+        # (1ك) سحب سيولة دعم ومقاومة الأسبوع السابق - فريم ساعة - كل 5 دقايق وقت السوق
+        if (ENABLE_PWL_1H or ENABLE_PWH_1H) and (once or us_market_open()) and time.time() - pwl_last >= PWL_EVERY_MIN * 60:
+            scan_pwl_1h(list(WATCH_SYMBOLS), gap_sent)
+            pwl_last = time.time()
 
         # (2) ماسح السيولة - وقت السوق الرسمي، كل 5 دقايق
         if ENABLE_FLOW and (regular_session_open() or once) \
