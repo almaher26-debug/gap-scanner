@@ -306,7 +306,7 @@ BZ_DROP_CHAT = os.environ.get("TELEGRAM_CHAT_ID_SHORT", "").strip()
 # ---- (4د) سكنر الزخم: ارتفاع قوي + فوليوم نسبي + قريب من قمة اليوم (Alpaca، كل دقيقة) ----
 ENABLE_MOMENTUM = True           # True = شغال | False = مطفي
 MOM_MIN_PRICE = 1                # أقل سعر
-MOM_MAX_PRICE = 50               # أعلى سعر
+MOM_MAX_PRICE = 10               # أعلى سعر (كان 50)
 MOM_MIN_CHANGE = 10              # أقل ارتفاع % عن إغلاق أمس
 MOM_MAX_CHANGE = 20              # أعلى ارتفاع % - أي سهم فوقه ما ينبّه عليه
 MOM_MIN_RVOL = 2                 # الفوليوم النسبي (ضعف المعتاد وفوق)
