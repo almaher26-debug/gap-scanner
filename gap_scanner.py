@@ -43,6 +43,14 @@
     - حجم الجاب 2$ أو أكثر
     - ENABLE_GAP_15M_CLEAN = False يطفيه
 
+(1ل) IFVG فريم 15 دقيقة عند دعم أو مقاومة اليوم السابق - قائمة المراقبة (70 سهم)
+    - نفس نموذج الـ IFVG (الثانية تغطي الجاب، والرابعة تقفل وراه)، والجاب 16 سنت وفوق
+    - 🟢 صعودي: ذيل النموذج وصل لقاع أمس (أو قرّب منه 0.3%) وما كسره أكثر من 1%،
+      والرابعة قفلت فوق الـ IFVG وفوق قاع أمس
+    - 🔴 هبوطي: نفس الشي عند قمة أمس، والرابعة قفلت تحت الـ IFVG وتحت قمة أمس
+    - أمس = الجلسة الرسمية (9:30 - 4 العصر نيويورك)
+    - ENABLE_PD15 = False يطفيه | python gap_scanner.py --pd15test يجربه بدون نت
+
 (1د) سحب سيولة دعمين - الفريم اليومي
     - الأسهم: ناسداك + نيويورك اللي قيمتها السوقية 2 مليار دولار وفوق، وسعرها 5$ وفوق
     - الدعم = قاع يومي سابق (أنزل من 3 شموع قبله و3 بعده) خلال آخر 60 يوم،
@@ -224,6 +232,19 @@ WATCH_SYMBOLS = [
     "CELH", "CHWY", "CROX", "GRMN", "CTSH", "BBIO", "DOCS", "ADMA", "CTAS", "MSM",
 ]
 WATCH_MIN_SIZE = 0.16            # حجم الجاب: أكثر من 15 سنت (يعني 16 سنت وفوق) | 0 = بدون شرط
+# ---- (1ل) IFVG فريم 15 دقيقة عند دعم اليوم السابق أو مقاومته - قسم جديد ----
+#   🟢 صعودي: النموذج تكوّن عند قاع أمس (الدعم): أنزل ذيل في الشموع الأربع وصل لقاع أمس
+#      (أو قرّب منه PD15_NEAR_PCT) وما نزل تحته أكثر من PD15_MAX_BEYOND_PCT،
+#      والرابعة قفلت فوق أعلى الـ IFVG وفوق قاع أمس
+#   🔴 هبوطي: نفس الشي بالعكس عند قمة أمس (المقاومة)، والرابعة قفلت تحت أسفل الـ IFVG وتحت قمة أمس
+#   اليوم السابق = شمعة اليوم الرسمية (9:30 - 4 العصر نيويورك) نفس تريدنج فيو
+ENABLE_PD15 = True               # True = شغال | False = مطفي
+PD15_SYMBOLS = []                # فاضية = نفس قائمة المراقبة (WATCH_SYMBOLS)
+PD15_MIN_SIZE = 0.16             # أقل حجم للجاب (دولار)
+PD15_NEAR_PCT = 0.003            # يعتبره "عند المستوى" لو الذيل قرّب منه 0.3% حتى لو ما لمسه
+PD15_MAX_BEYOND_PCT = 0.01       # الذيل يقدر يكسر المستوى (سحب سيولة) لين 1%، أكثر من كذا ما يحسب
+PD15_REQUIRE_CLOSE_BACK = True   # الرابعة لازم تقفل فوق الدعم (صعودي) أو تحت المقاومة (هبوطي)
+PD15_REGULAR_ONLY = False        # True = ينبه بس على شموع الجلسة الرسمية (9:30 - 4)
 GAP_REQUIRE_MIDDLE_COVER = True  # الشمعة الثانية لازم تغطي الجاب كامل (من قمة الثالثة لقاع الأولى)
 GAP_BASE_MIN = 15                # البيانات تنحمّل بشموع 15 دقيقة، وكل الفريمات تنبني منها
 GAP_SCAN_AFTER_CLOSE_MIN = (1, 5, 12)   # يفحص بعد الإغلاق بكذا دقيقة (الأولى هي الأساسية)
@@ -900,6 +921,116 @@ def check_pattern_clean(c):
     if res and no_void_between(c):
         return res
     return None
+
+
+def prev_day_levels(c):
+    """(1ل) قمة وقاع اليوم السابق (الجلسة الرسمية 9:30 - 4 نيويورك) من شموع الـ15 دقيقة نفسها.
+    يرجع (التاريخ، القمة، القاع) أو None لو البيانات ما تكفي."""
+    if c.empty:
+        return None
+    last = c.index[-1]
+    day = last.date()
+    if last.hour >= 20:                     # الجلسة الليلية تتبع يوم التداول اللي بعدها
+        day = (last + pd.Timedelta(days=1)).date()
+    m = c.index.hour * 60 + c.index.minute
+    reg = c[(m >= 9 * 60 + 30) & (m < 16 * 60)]
+    reg = reg[reg.index.date < day]
+    if reg.empty:
+        return None
+    prev_d = reg.index[-1].date()
+    p = reg[reg.index.date == prev_d]
+    if len(p) < 10:                         # بيانات اليوم ناقصة (أقل من نص جلسة)
+        return None
+    return prev_d, float(p["High"].max()), float(p["Low"].min())
+
+
+def check_pattern_pd(c):
+    """(1ل) IFVG فريم 15 دقيقة (نفس check_pattern) + لازم يكون عند قاع أمس (صعودي) أو قمة أمس (هبوطي)."""
+    res = check_pattern(c)
+    if not res:
+        return None
+    if PD15_REGULAR_ONLY:
+        t4 = c.index[-1]
+        m4 = t4.hour * 60 + t4.minute
+        if not (9 * 60 + 30 <= m4 < 16 * 60):
+            return None
+    lv = prev_day_levels(c)
+    if not lv:
+        return None
+    prev_d, pdh, pdl = lv
+    cs = c.iloc[-4:]
+    close4 = float(res["price"])
+    if res["side"] == "bull":
+        low = float(cs["Low"].min())
+        if not (pdl * (1 - PD15_MAX_BEYOND_PCT) <= low <= pdl * (1 + PD15_NEAR_PCT)):
+            return None
+        if PD15_REQUIRE_CLOSE_BACK and close4 <= pdl:
+            return None
+        res.update(pd_name="دعم اليوم السابق (قاع أمس)", pd_level=pdl, pd_extreme=low)
+    else:
+        high = float(cs["High"].max())
+        if not (pdh * (1 - PD15_NEAR_PCT) <= high <= pdh * (1 + PD15_MAX_BEYOND_PCT)):
+            return None
+        if PD15_REQUIRE_CLOSE_BACK and close4 >= pdh:
+            return None
+        res.update(pd_name="مقاومة اليوم السابق (قمة أمس)", pd_level=pdh, pd_extreme=high)
+    res["pd_date"] = prev_d
+    res["candles"] = cs
+    return res
+
+
+def _pd15_message(t, res, frame):
+    """رسالة (1ل): نفس رسالة الجاب + المستوى."""
+    msg = _gap_message(t, res, frame)
+    lvl = float(res["pd_level"])
+    ext = float(res["pd_extreme"])
+    word = "أنزل ذيل" if res["side"] == "bull" else "أعلى ذيل"
+    extra = (f"📍 عند {res['pd_name']}: {lvl:.2f}  (يوم {res['pd_date']:%m/%d})\n"
+             f"{word} بالنموذج: {ext:.2f}  ({(ext - lvl) / lvl * 100:+.2f}% عن المستوى)")
+    head, rest = msg.split("\n", 1)
+    return f"{head}\n{extra}\n{rest}"
+
+
+def pd15_self_test():
+    """يجرب (1ل) على بيانات وهمية بدون نت: أمس قاعه 100 وقمته 110."""
+    global GAP_OVERNIGHT
+    GAP_OVERNIGHT = False
+
+    def bars(day, rows):
+        idx = pd.date_range(f"{day} 09:30", periods=len(rows), freq="15min", tz=NY)
+        return pd.DataFrame(rows, columns=OHLC, index=idx)
+
+    y = [(105, 106, 104, 105)] * 26
+    y[3] = (101, 102, 100.0, 101)          # قاع أمس 100
+    y[20] = (109, 110.0, 108, 109)         # قمة أمس 110
+    yday = bars("2026-10-15", y)
+
+    def run(name, today_rows, expect):
+        df = pd.concat([yday, bars("2026-10-16", today_rows)])
+        c = to_frame(df, 15)
+        res = check_pattern_pd(c)
+        got = res["side"] if res else None
+        ok = "✅" if got == expect else "❌"
+        print(f"{ok} {name}: المتوقع {expect} - النتيجة {got}")
+        if res:
+            print(_pd15_message("TEST", res, "فريم 15 دقيقة"))
+            print("-" * 40)
+
+    pre = [(103, 103.5, 102.5, 103)] * 4
+    bull = [(101.4, 101.6, 100.6, 100.8),   # الأولى - قاعها 100.6
+            (100.8, 100.9, 99.7, 99.9),     # الثانية تغطي الجاب
+            (99.9, 100.2, 99.5, 99.8),      # الثالثة - قمتها 100.2 (سحبت قاع أمس)
+            (99.8, 101.0, 99.6, 100.9)]     # الرابعة تقفل فوق 100.6 وفوق 100
+    run("صعودي عند قاع أمس", pre + bull, "bull")
+    far = [tuple(x + 4 for x in r) for r in bull]
+    run("صعودي بعيد عن قاع أمس", pre + far, None)
+    deep = [tuple(x - 2 for x in r) for r in bull]
+    run("صعودي كسر الدعم أكثر من 1%", pre + deep, None)
+    bear = [(108.6, 109.4, 108.4, 109.2),   # الأولى - قمتها 109.4
+            (109.2, 110.3, 109.1, 110.1),   # الثانية تغطي الجاب
+            (110.1, 110.5, 109.8, 110.2),   # الثالثة - قاعها 109.8 (سحبت قمة أمس)
+            (110.2, 110.4, 108.9, 109.0)]   # الرابعة تقفل تحت 109.4 وتحت 110
+    run("هبوطي عند قمة أمس", pre + bear, "bear")
 
 
 def check_pattern_4h(c):
@@ -3619,6 +3750,9 @@ def main():
     if "--pwltest" in sys.argv:
         pwl_self_test()
         return
+    if "--pd15test" in sys.argv:
+        pd15_self_test()
+        return
     once = "--once" in sys.argv
     _load_chats()
     discover_groups()
@@ -3705,6 +3839,12 @@ def main():
                                  (True, 240, "w4h", "فريم 4 ساعات")],
                          min_price=0, min_size=WATCH_MIN_SIZE,
                          tag_label=" (قائمة المراقبة)", msg_fn=_watch_message)
+            # (ل) IFVG فريم 15 دقيقة عند دعم أو مقاومة اليوم السابق
+            if ENABLE_PD15:
+                scan_gap(PD15_SYMBOLS or list(WATCH_SYMBOLS), gap_sent,
+                         frames=[(True, 15, "pd15", "فريم 15 دقيقة", check_pattern_pd)],
+                         min_price=0, min_size=PD15_MIN_SIZE,
+                         tag_label=" (15 دقيقة عند مستوى أمس)", msg_fn=_pd15_message)
             # (ج) فريم 15 دقيقة النظيف - نفس أسهم الساعة، الشموع الثلاث بدون فراغ، والجاب 2$ وفوق
             if ENABLE_GAP_15M_CLEAN:
                 scan_gap(normal, gap_sent,
