@@ -230,8 +230,10 @@ WATCH_SYMBOLS = [
     "ARM", "AMAT", "PANW", "SNOW", "NOW", "DELL", "FSLR", "ENPH", "VRT", "RIVN",
     "KLAC", "MCHP", "FTNT", "ADSK", "MDB", "CSCO", "CLS", "BE", "MOD", "TEM",
     "CELH", "CHWY", "CROX", "GRMN", "CTSH", "BBIO", "DOCS", "ADMA", "CTAS", "MSM",
+    "SMH", "ABBV", "HAS", "KO",
 ]
-WATCH_MIN_SIZE = 0.16            # حجم الجاب: أكثر من 15 سنت (يعني 16 سنت وفوق) | 0 = بدون شرط
+WATCH_MIN_SIZE = 0.16            # حجم الجاب (فريم الساعة): أكثر من 15 سنت (يعني 16 سنت وفوق) | 0 = بدون شرط
+WATCH4H_MIN_SIZE = 0.10          # حجم الجاب (فريم 4 ساعات): 10 سنت وفوق
 # ---- (1ل) IFVG فريم 15 دقيقة عند دعم اليوم السابق أو مقاومته - قسم جديد ----
 #   🟢 صعودي: النموذج تكوّن عند قاع أمس (الدعم): أنزل ذيل في الشموع الأربع وصل لقاع أمس
 #      (أو قرّب منه PD15_NEAR_PCT) وما نزل تحته أكثر من PD15_MAX_BEYOND_PCT،
@@ -334,13 +336,15 @@ BZ_DROP_CHAT = os.environ.get("TELEGRAM_CHAT_ID_SHORT", "").strip()
 # ---- (4د) سكنر الزخم: ارتفاع قوي + فوليوم نسبي + قريب من قمة اليوم (Alpaca، كل دقيقة) ----
 ENABLE_MOMENTUM = True           # True = شغال | False = مطفي
 MOM_MIN_PRICE = 1                # أقل سعر
-MOM_MAX_PRICE = 10               # أعلى سعر (كان 50)
+MOM_MAX_PRICE = 15               # أعلى سعر (كان 10)
 MOM_MIN_CHANGE = 10              # أقل ارتفاع % عن إغلاق أمس
 MOM_MAX_CHANGE = 20              # أعلى ارتفاع % - أي سهم فوقه ما ينبّه عليه
 MOM_MIN_RVOL = 2                 # الفوليوم النسبي (ضعف المعتاد وفوق)
 MOM_MIN_VOLUME = 500_000         # أقل فوليوم لليوم
 MOM_NEAR_HIGH_PCT = 2            # السعر ما يبعد عن قمة اليوم أكثر من 2%
 MOM_EVERY_SEC = 60               # كل كم ثانية يفحص
+MOM_REQUIRE_SWEEP = True         # لازم السهم ساحب سيولة دعم يومي (قاع أمس) أو أسبوعي (قاع الأسبوع اللي راح)
+                                 # يعني قاع اليوم نزل تحت الدعم والسعر الحين فوقه | False = يطفي الشرط
 
 # ---- (1ز) سحب سيولة الثلاثاء + إغلاق فوق الدعم الأربعاء (قائمة أسبوعية) ----
 #   ذيل شمعة الثلاثاء نزل تحت دعم (قاع سابق صامد)، وشمعة الأربعاء قفلت فوقه
@@ -375,7 +379,7 @@ PWL_ONCE_PER_WEEK = False        # True = تنبيه واحد لكل سهم با
 ENABLE_PWH_1H = True             # True = شغال | False = مطفي (نفس توقيت وإعدادات الدعم فوق)
 
 # ---- (4ب) تجزئة عكسية + شورت صفر (أسهم البني ستوك) ----
-ENABLE_RSPLIT_SHORT = False            # مطفي
+ENABLE_RSPLIT_SHORT = True             # شغال
 RSPLIT_MAX_PRICE = 5                 # الشورت صفر: يفحصه لأسهم البني ستوك (5$ أو أقل) من اللي سوت تجزئة
 RSPLIT_NEW_DAYS = 4                  # "جديد" = تجزئة صارت خلال آخر كذا يوم (يغطي الويكند) وما انرسلت قبل
 RSPLIT_CHECK_AFTER_NY = 10           # الفحص اليومي بعد الساعة 10 الصبح نيويورك (عشان سعر الافتتاح يكون موجود)
@@ -2078,6 +2082,39 @@ def bz_run_forever():
 #   ارتفاع قوي + فوليوم نسبي عالي + السعر قريب من قمة اليوم - كل دقيقة وقت السوق الرسمي
 _mom_levels = {}
 _mom_day = None
+_mom_pwl = {}      # قاع الأسبوع اللي راح لكل سهم (يتصفر كل يوم)
+
+
+def _mom_prev_week_low(sym):
+    """قاع شمعة الأسبوع اللي راح من Alpaca (يتخزن لباقي اليوم)."""
+    if sym in _mom_pwl:
+        return _mom_pwl[sym]
+    low = None
+    try:
+        today = datetime.now(ZoneInfo(NY)).date()
+        monday = today - timedelta(days=today.weekday())
+        start = (monday - timedelta(days=21)).isoformat()
+        bars = _mom_get(f"/v2/stocks/{sym}/bars",
+                        {"timeframe": "1Week", "start": start, "feed": "sip",
+                         "adjustment": "split", "limit": 10}).get("bars") or []
+        prev = [b for b in bars if pd.Timestamp(b["t"]).tz_convert(NY).date() < monday]
+        if prev:
+            low = float(prev[-1]["l"])
+    except Exception as e:
+        log(f"الزخم: خطأ قاع الأسبوع {sym}: {e}")
+    _mom_pwl[sym] = low
+    return low
+
+
+def _mom_sweeps(sym, price, day_low, prev_low):
+    """الدعوم اللي انسحبت: قاع اليوم نزل تحتها والسعر الحين فوقها."""
+    out = []
+    if prev_low and day_low < prev_low < price:
+        out.append(f"دعم يومي (قاع أمس {prev_low:.2f}$)")
+    pwl = _mom_prev_week_low(sym)
+    if pwl and day_low < pwl < price:
+        out.append(f"دعم أسبوعي (قاع الأسبوع اللي راح {pwl:.2f}$)")
+    return out
 
 
 def _mom_get(path, params=None):
@@ -2135,6 +2172,11 @@ def mom_check(sym, snap, frac):
     from_high = (high - price) / high * 100 if high else 0
     if from_high > MOM_NEAR_HIGH_PCT:
         return None
+    sweeps = []
+    if MOM_REQUIRE_SWEEP:
+        sweeps = _mom_sweeps(sym, price, daily.get("l") or price, prev.get("l"))
+        if not sweeps:
+            return None
     level = int(change // 10) * 10        # تنبيه مرة لكل مستوى: 10% ثم 20% ثم 30%...
     previous = _mom_levels.get(sym, 0)
     if previous >= level:
@@ -2148,7 +2190,8 @@ def mom_check(sym, snap, frac):
             f"الفوليوم: {vol:,.0f}\n"
             f"الفوليوم النسبي: {rvol:.1f}x\n"
             f"فوليوم آخر دقيقة: {minute.get('v', 0):,.0f}\n"
-            f"الوقت: {datetime.now(ZoneInfo(LOCAL_TZ)):%H:%M} (توقيتك)")
+            + (f"🧲 سحب سيولة: {' + '.join(sweeps)}\n" if sweeps else "")
+            + f"الوقت: {datetime.now(ZoneInfo(LOCAL_TZ)):%H:%M} (توقيتك)")
 
 
 def mom_run_forever():
@@ -2163,6 +2206,7 @@ def mom_run_forever():
             if _mom_day != now_ny.date():
                 _mom_day = now_ny.date()
                 _mom_levels.clear()
+                _mom_pwl.clear()
             if now_ny.weekday() < 5 and (9, 30) <= (now_ny.hour, now_ny.minute) < (16, 0):
                 start = now_ny.replace(hour=9, minute=30, second=0, microsecond=0)
                 frac = min(max((now_ny - start).total_seconds() / 60 / 390, 0.03), 1.0)
@@ -3835,9 +3879,13 @@ def main():
             if ENABLE_WATCH and WATCH_SYMBOLS:
                 scan_gap(WATCH_SYMBOLS, gap_sent,
                          frames=[(False, 15, "w15", "فريم 15 دقيقة"),   # 15 دقيقة مقفول
-                                 (True, 60, "w1h", "فريم ساعة"),
-                                 (True, 240, "w4h", "فريم 4 ساعات")],
+                                 (True, 60, "w1h", "فريم ساعة")],
                          min_price=0, min_size=WATCH_MIN_SIZE,
+                         tag_label=" (قائمة المراقبة)", msg_fn=_watch_message)
+                # فريم 4 ساعات - الجاب 10 سنت وفوق
+                scan_gap(WATCH_SYMBOLS, gap_sent,
+                         frames=[(True, 240, "w4h", "فريم 4 ساعات")],
+                         min_price=0, min_size=WATCH4H_MIN_SIZE,
                          tag_label=" (قائمة المراقبة)", msg_fn=_watch_message)
             # (ل) IFVG فريم 15 دقيقة عند دعم أو مقاومة اليوم السابق
             if ENABLE_PD15:
