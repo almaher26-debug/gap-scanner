@@ -194,7 +194,12 @@ TIINGO_WORKERS = 8
 
 GAP_MIN_STOCK_PRICE = 10         # يتجاهل الأسهم اللي سعرها أقل من كذا (لفريم 4 ساعات والساعة)
 GAP_MIN_SIZE = 1.00              # فريم الساعة والأربع ساعات: يتجاهل الجاب اللي حجمه أقل من 1$
-ENABLE_GAP_4H = False            # فريم 4 ساعات - ينبه عند إغلاق الشمعة
+ENABLE_GAP_4H = True             # فريم 4 ساعات - ينبه عند إغلاق الشمعة
+# ---- فريم 4 ساعات على كل الجلسات (24 ساعة، نفس تريدنج فيو) ----
+#   شموع 4 ساعات تبدأ 8 بالليل نيويورك: 8-12، 12-4، 4-8، 8-12، 12-4، 4-8 (بتوقيتك 3، 7، 11، 15، 19، 23)
+#   بيانات الليل (8 بالليل - 4 الفجر) من ألباكا (feed=boats، نفس مفاتيح ALPACAAPIKEY) أو Tiingo لو موجود
+#   يشمل فريم 4 ساعات العام وفريم 4 ساعات حق قائمة المراقبة. الساعة و15 دقيقة ما تغيروا
+GAP_4H_24H = True                # True = 24 ساعة | False = 4 الفجر - 8 بالليل بس
 # ---- شروط فريم 4 ساعات (خاصة فيه، الساعة واليومي ما تغيروا) ----
 GAP4H_MIN_SIZE = 0.30            # فريم 4 ساعات: أقل حجم للجاب 30 سنت
 GAP4H_REQUIRE_RED = False        # True = الشموع الثلاث لازم حمراء | False = لونها ما يهم
@@ -363,12 +368,6 @@ PDL_DAY_FILE = "pdl_day.txt"     # عشان ما يرسل مرتين بنفس ا
 #   ذيل شمعة اليوم طلع فوق قمة أمس، والإغلاق رجع تحت قمة أمس. قائمة وحدة مع نفس التوقيت
 ENABLE_PDH_SWEEP = True          # True = شغال | False = مطفي
 
-# ---- (1ي) دعم الشهر السابق + إغلاق 4 ساعات أخضر فوقه - لحظي على قائمة المراقبة ----
-#   الدعم = قاع شمعة الشهر السابق. السعر نزل تحته، بعدين شمعة 4 ساعات خضراء قفلت فوقه
-ENABLE_PMS = True                # True = شغال | False = مطفي
-PMS_EVERY_MIN = 20               # كل كم دقيقة يفحص وقت السوق
-PMS_MAX_ALERT_DELAY_MIN = 60     # ما ينبه على شمعة قفلت من أكثر من كذا دقيقة
-
 # ---- (1ك) سحب سيولة دعم ومقاومة الأسبوع السابق - فريم ساعة - لحظي على قائمة المراقبة ----
 #   الدعم = قاع شمعة الأسبوع السابق. شمعة ساعة ذيلها نزل تحت الدعم وقفلت فوقه (لونها ما يهم)
 ENABLE_PWL_1H = True             # True = شغال | False = مطفي
@@ -398,6 +397,8 @@ ALPACA_KEY = (os.environ.get("ALPACAAPIKEY") or os.environ.get("ALPACA_API_KEY")
 ALPACA_SECRET = (os.environ.get("ALPACASECRETKEY") or os.environ.get("ALPACA_SECRET_KEY")
                  or os.environ.get("APCA_API_SECRET_KEY", ""))
 ENABLE_ALGO = bool(ALPACA_KEY and ALPACA_SECRET)   # يتفعل لحاله لو المفاتيح موجودة
+# مصدر بيانات الجلسة الليلية لفريم 4 ساعات: Tiingo أول لو موجود، وإلا ألباكا
+NIGHT_SOURCE = "tiingo" if TIINGO_TOKEN else ("alpaca" if ENABLE_ALGO else "")
 # sip = كل البورصات (لحظي بالباقة المدفوعة، متأخر 15 دقيقة بالمجانية) | iex = بورصة وحدة صغيرة
 # الأسهم الصغيرة تقريباً ما تتداول على IEX، فـ sip أدق بكثير لهالنوع
 ALGO_FEED = os.environ.get("ALGO_FEED", "sip").lower()
@@ -681,24 +682,33 @@ def send_telegram(text, kind=None):
         _send_one(chat_id, text)
 
 
-def _session():
+def night_4h():
+    """فريم 4 ساعات يشتغل 24 ساعة؟ (الإعداد شغال + فيه مصدر لبيانات الليل)"""
+    return GAP_OVERNIGHT or (GAP_4H_24H and bool(NIGHT_SOURCE))
+
+
+def _session(overnight=None):
     """(بداية تقسيم الشموع، نهاية الجلسة) بالدقايق من منتصف الليل بتوقيت نيويورك.
-    نهاية None = 24 ساعة."""
-    if GAP_OVERNIGHT:
+    نهاية None = 24 ساعة. overnight=True يجبره على 24 ساعة (فريم 4 ساعات)."""
+    if overnight is None:
+        overnight = GAP_OVERNIGHT
+    if overnight:
         return 20 * 60, None          # 24 ساعة، اليوم يبدأ 8 بالليل (نفس تريدنج فيو)
     if GAP_EXTENDED:
         return 4 * 60, 20 * 60
     return 9 * 60 + 30, 16 * 60
 
 
-def us_market_open(now=None):
+def us_market_open(now=None, overnight=None):
     """السوق مفتوح حسب الجلسة المختارة (+ دقايق بعد الإغلاق عشان نلحق نفحص آخر شمعة)."""
     now = now or pd.Timestamp.now(tz=NY)
+    if overnight is None:
+        overnight = GAP_OVERNIGHT
     wd, m = now.weekday(), now.hour * 60 + now.minute
     # 20 دقيقة: ياهو أحياناً ما يعطي كل شموع الربع ساعة بعد الإغلاق، فالشمعة تعتبر مقفلة
     # بعد 15 دقيقة (only_closed). لو الوقت أقصر من كذا تضيع آخر شمعة باليوم (4-8 بالليل)
     buf = max(max(GAP_SCAN_AFTER_CLOSE_MIN) + 2, 20)
-    if GAP_OVERNIGHT:                 # من الأحد 8 بالليل إلى الجمعة 8 بالليل
+    if overnight:                     # من الأحد 8 بالليل إلى الجمعة 8 بالليل
         if wd == 5:
             return False
         if wd == 6:
@@ -827,14 +837,15 @@ def _hhmm(m):
     return f"{m // 60:02d}:{m % 60:02d}"
 
 
-def to_frame(df, minutes):
+def to_frame(df, minutes, overnight=None):
     """يحول شموع النص ساعة لشموع أكبر (60 = ساعة، 240 = 4 ساعات) بتوقيت نيويورك،
-    بنفس تقسيم تريدنج فيو. كل شمعة معها وقت إغلاقها (end) وعدد الشموع الصغيرة اللي فيها (n)."""
+    بنفس تقسيم تريدنج فيو. كل شمعة معها وقت إغلاقها (end) وعدد الشموع الصغيرة اللي فيها (n).
+    overnight=True = 24 ساعة (الشموع تبدأ 8 بالليل)."""
     df = df.dropna(subset=OHLC)
     if df.empty:
         return df
     df = to_ny(df)
-    anchor, end_min = _session()
+    anchor, end_min = _session(overnight)
     if end_min is not None:                    # مو 24 ساعة: نشيل اللي برا الجلسة
         df = df.between_time(_hhmm(anchor), _hhmm(end_min - 1))
         if df.empty:
@@ -1059,6 +1070,8 @@ def check_pattern_4h(c):
     if "n" in c and "end" in c:
         for i in (-4, -3, -2, -1):
             row = c.iloc[i]
+            if pd.Timestamp(c.index[i]).hour in (20, 0):
+                continue    # شموع الليل (8 بالليل - 4 الفجر) تداولها خفيف وكثير ربع ساعات ما فيها صفقات، فما ننرفضها
             expected = (pd.Timestamp(row["end"]) - pd.Timestamp(c.index[i])).total_seconds() / (GAP_BASE_MIN * 60)
             if expected > 0 and row["n"] / expected < GAP4H_MIN_FILL:
                 return None
@@ -1171,7 +1184,76 @@ def fetch_boats(t, now):
         return None
 
 
+def _alpaca_night_stale(fetched, now):
+    if fetched is None:
+        return True
+    if now.hour >= 20 or now.hour * 60 + now.minute < 4 * 60 + 20:
+        return fetched < now.floor(f"{GAP_BASE_MIN}min")   # وقت الليل: نجدد كل ربع ساعة
+    return fetched < now.normalize() + pd.Timedelta(hours=4, minutes=20)   # بعد الليل: نسخة وحدة تكفي
+
+
+def fetch_alpaca_night(symbols, now):
+    """شموع ربع ساعة للجلسة الليلية (8 بالليل - 4 الفجر) من ألباكا (feed=boats) لمجموعة أسهم.
+    يرجع {الرمز: DataFrame} أو None لو فشل."""
+    headers = {"APCA-API-KEY-ID": ALPACA_KEY, "APCA-API-SECRET-KEY": ALPACA_SECRET}
+    start = (now - pd.Timedelta(days=7)).tz_convert("UTC")
+    params = {"symbols": ",".join(symbols), "timeframe": f"{GAP_BASE_MIN}Min", "feed": "boats",
+              "start": start.strftime("%Y-%m-%dT%H:%M:%SZ"), "limit": 10000, "adjustment": "raw"}
+    if ALGO_DELAY_MIN:      # الباقة المجانية: بيانات الليل متأخرة 15 دقيقة
+        end = (now - pd.Timedelta(minutes=max(ALGO_DELAY_MIN, 16))).tz_convert("UTC")
+        params["end"] = end.strftime("%Y-%m-%dT%H:%M:%SZ")
+    raw = {}
+    for _ in range(50):                          # صفحات
+        _alpaca_wait()
+        try:
+            r = requests.get("https://data.alpaca.markets/v2/stocks/bars",
+                             headers=headers, params=params, timeout=30)
+        except Exception as e:
+            log("ألباكا (الليل): فشل الاتصال -", e)
+            return None
+        if r.status_code == 429:
+            time.sleep(10)
+            continue
+        if r.status_code != 200:
+            log(f"ألباكا (الليل): خطأ {r.status_code} - {r.text[:200]}")
+            return None
+        data = r.json()
+        for sym, bars in (data.get("bars") or {}).items():
+            raw.setdefault(sym, []).extend(bars or [])
+        token = data.get("next_page_token")
+        if not token:
+            break
+        params["page_token"] = token
+    out = {}
+    for sym in symbols:
+        bars = raw.get(sym) or []
+        if not bars:
+            out[sym] = pd.DataFrame(columns=OHLC)
+            continue
+        df = pd.DataFrame(bars)
+        idx = pd.DatetimeIndex(pd.to_datetime(df["t"], utc=True)).tz_convert(NY)
+        df = df.rename(columns={"o": "Open", "h": "High", "l": "Low", "c": "Close"})
+        df = df.set_index(idx)[OHLC].astype(float).dropna()
+        h = df.index.hour
+        out[sym] = df[(h >= 20) | (h < 4)]       # الليل بس، الباقي من ياهو
+    return out
+
+
 def load_boats(tickers, now):
+    if NIGHT_SOURCE == "alpaca":
+        need = [t for t in tickers if _alpaca_night_stale((_boats_cache.get(t) or (None,))[0], now)]
+        got = 0
+        for i in range(0, len(need), 200):
+            part = need[i:i + 200]
+            res = fetch_alpaca_night(part, now)
+            if res is None:
+                continue
+            for t, df in res.items():
+                _boats_cache[t] = (now, df)
+                got += 1
+        if need:
+            log(f"الجلسة الليلية: جددت {got} سهم من ألباكا")
+        return {t: v[1] for t, v in _boats_cache.items()}
     need = [t for t in tickers if _boats_stale((_boats_cache.get(t) or (None,))[0], now)]
     if need:
         with ThreadPoolExecutor(max_workers=TIINGO_WORKERS) as pool:
@@ -1192,7 +1274,8 @@ def scan_gap(tickers, already_sent, frames=None, min_price=None, max_price=None,
                   (ENABLE_GAP_1H, 60, "1h", "فريم ساعة")]
     min_price = GAP_MIN_STOCK_PRICE if min_price is None else min_price
     min_size = GAP_MIN_SIZE if min_size is None else min_size
-    boats = load_boats(tickers, now) if GAP_OVERNIGHT else {}
+    has_4h = any(fr[0] and fr[2] in ("4h", "w4h") for fr in frames)
+    boats = load_boats(tickers, now) if (GAP_OVERNIGHT or (has_4h and night_4h())) else {}
     for t, df in download_batches(tickers, 100, period="7d", interval=f"{GAP_BASE_MIN}m",
                                   prepost=GAP_EXTENDED or GAP_OVERNIGHT):
         try:
@@ -1220,7 +1303,9 @@ def scan_gap(tickers, already_sent, frames=None, min_price=None, max_price=None,
                 if (tag == "4h" and GAP4H_NASDAQ_ONLY and GAP_NASDAQ_SET
                         and t not in GAP_NASDAQ_SET and t not in GAP_ETFS):
                     continue                    # فريم 4 ساعات: ناسداك بس
-                res = checker(only_closed(to_frame(df, minutes), last_bar, now))
+                # فريم 4 ساعات: 24 ساعة (الشموع تبدأ 8 بالليل). الباقي على الجلسة العادية
+                ov = True if (tag in ("4h", "w4h") and night_4h()) else None
+                res = checker(only_closed(to_frame(df, minutes, ov), last_bar, now))
                 # فريم 4 ساعات له حده الخاص (GAP4H_MIN_SIZE) ينفحص داخل check_pattern_4h
                 need = GAP_1H_MIN_SIZE if tag == "1h" else min_size
                 if not res or round(res["gap_top"] - res["gap_bottom"], 2) < need:
@@ -2370,88 +2455,6 @@ def scan_pdl_sweep(symbols, today):
             send_telegram(head_h + f"({len(rows_h)} سهم)\n\n" + "\n".join(lines), kind="sweep")
     free_memory()
     log(f"[{datetime.now():%H:%M}] سحب قاع أمس: {len(rows)} سهم | سحب قمة أمس: {len(rows_h)} سهم")
-
-
-# ================== (1ي) دعم الشهر السابق + إغلاق 4 ساعات أخضر فوقه ==================
-_pms_support = {"day": None, "lvl": {}}
-
-
-def _pms_supports(symbols, today):
-    """قاع الشهر السابق لكل سهم (يتحدث مرة باليوم)."""
-    if _pms_support["day"] == today and _pms_support["lvl"]:
-        return _pms_support["lvl"]
-    first = pd.Timestamp(today).replace(day=1)
-    prev_first = (first - pd.Timedelta(days=1)).replace(day=1)
-    lvl = {}
-    for t, df in download_batches(symbols, 100, period="3mo", interval="1d", prepost=False):
-        try:
-            df = df.dropna(subset=OHLC)
-            d = pd.to_datetime([pd.Timestamp(i).date() for i in df.index])
-            pm = df[(d >= prev_first) & (d < first)]
-            if len(pm):
-                lvl[t] = (float(pm["Low"].min()), pd.Timestamp(pm["Low"].astype(float).idxmin()).date())
-        except Exception:
-            continue
-    _pms_support.update(day=today, lvl=lvl)
-    return lvl
-
-
-def check_pms(c4, support, month_start):
-    """c4 = شموع 4 ساعات المقفلة. آخر شمعة خضراء قفلت فوق الدعم، وهي (أو اللي قبلها) كانت تحته:
-    يا ذيلها نزل تحت الدعم، يا الشمعة اللي قبلها قفلت تحته. وكسر الدعم صار هالشهر."""
-    c4 = c4[c4.index >= month_start]
-    if len(c4) < 1:
-        return None
-    last = c4.iloc[-1]
-    if not (last["Close"] > last["Open"] and last["Close"] > support):
-        return None
-    prev_below = len(c4) > 1 and c4.iloc[-2]["Close"] < support
-    if not (last["Low"] < support or prev_below):
-        return None
-    lowest = float(c4["Low"].min())
-    if lowest >= support:
-        return None
-    return {"close": float(last["Close"]), "open": float(last["Open"]), "low": float(last["Low"]),
-            "lowest": lowest, "start": c4.index[-1], "end": last["end"]}
-
-
-def scan_pms(symbols, sent):
-    now = pd.Timestamp.now(tz=NY)
-    month_start = now.normalize().replace(day=1)
-    sup = _pms_supports(symbols, now.date())
-    hits = 0
-    for t, df in download_batches(symbols, 100, period="1mo", interval=f"{GAP_BASE_MIN}m",
-                                  prepost=GAP_EXTENDED):
-        try:
-            if t not in sup:
-                continue
-            df = to_ny(df)[OHLC]
-            if df.empty:
-                continue
-            c4 = only_closed(to_4h(df), df.index.max(), now)
-            lvl, lvl_day = sup[t]
-            r = check_pms(c4, lvl, month_start)
-            if not r or (now - pd.Timestamp(r["end"])).total_seconds() / 60 > PMS_MAX_ALERT_DELAY_MIN:
-                continue
-            key = f"{t}-pms-{r['start']:%Y%m%d%H%M}"
-            if key in sent:
-                continue
-            sent.add(key)
-            _append_line(GAP_SENT_FILE, key)
-            hits += 1
-            t1 = pd.Timestamp(r["start"]).tz_convert(LOCAL_TZ)
-            send_telegram(
-                f"🟢 دعم الشهر السابق — إغلاق 4 ساعات أخضر فوقه\n"
-                f"السهم: ${t}\n"
-                f"الدعم (قاع الشهر السابق): {lvl:.2f}  (يوم {lvl_day})\n"
-                f"أقل سعر هالشهر: {r['lowest']:.2f}  ({(r['lowest'] / lvl - 1) * 100:.1f}% تحت الدعم)\n"
-                f"شمعة 4 ساعات: افتتاح {r['open']:.2f} ← إغلاق {r['close']:.2f}\n"
-                f"وقت الشمعة: {t1:%Y-%m-%d %H:%M} (توقيتك)", kind="sweep")
-        except Exception as e:
-            log(f"دعم الشهر السابق: {t}: خطأ - {e}")
-    free_memory()
-    if hits:
-        log(f"[{datetime.now():%H:%M}] دعم الشهر السابق: {hits} تنبيه")
 
 
 # ================== (1ك) سحب سيولة دعم ومقاومة الأسبوع السابق - فريم ساعة ==================
@@ -3825,7 +3828,6 @@ def main():
             pdl_day = f.read().strip() or None
     except FileNotFoundError:
         pdl_day = None
-    pms_last = 0.0
     pwl_last = 0.0
     gap_tickers, gap_day, gap_last = [], None, None
     gap15_tickers = []
@@ -3970,11 +3972,6 @@ def main():
                     f.write(pdl_day + "\n")
             except Exception:
                 pass
-
-        # (1ي) دعم الشهر السابق + إغلاق 4 ساعات أخضر - كل 20 دقيقة وقت السوق
-        if ENABLE_PMS and (once or us_market_open()) and time.time() - pms_last >= PMS_EVERY_MIN * 60:
-            scan_pms(list(WATCH_SYMBOLS), gap_sent)
-            pms_last = time.time()
 
         # (1ك) سحب سيولة دعم ومقاومة الأسبوع السابق - فريم ساعة - كل 5 دقايق وقت السوق
         if (ENABLE_PWL_1H or ENABLE_PWH_1H) and (once or us_market_open()) and time.time() - pwl_last >= PWL_EVERY_MIN * 60:
