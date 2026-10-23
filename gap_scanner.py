@@ -18,10 +18,12 @@
       - البوت يفحص بعد إغلاق كل شمعة بدقيقة، ويعيد الفحص بعد 5 و16 دقيقة لو البيانات تأخرت
 
     🕐 تقسيم الشموع نفس تريدنج فيو:
-      - 24 ساعة (مع الجلسة الليلية): شموع الـ4 ساعات تبدأ 8 بالليل نيويورك
+      - فريم 4 ساعات شغال 24 ساعة على كل الجلسات (GAP_4H_24H): الشموع تبدأ 8 بالليل نيويورك
         (8-12، 12-4، 4-8، 8-12، 12-4، 4-8) = بتوقيتك 3، 7، 11، 15، 19، 23
-      - ⚠️ ياهو ما عنده بيانات الجلسة الليلية (8 بالليل - 4 الفجر)، فعشان الـ24 ساعة
-        تحتاج مفتاح Tiingo (باقة Power + إضافة BOATS). بدونه يشتغل على 4 الفجر - 8 بالليل بس
+      - ياهو ما عنده الجلسة الليلية (8 بالليل - 4 الفجر)، فتجي من ألباكا (feed=boats، نفس
+        مفاتيح ALPACAAPIKEY / ALPACASECRETKEY) أو من Tiingo لو حطيت TIINGO_TOKEN
+      - بالليل يفحص فريم 4 ساعات بس، بعد إغلاق شمعة 12 بالليل نيويورك (7 الصبح بتوقيتك)
+      - الساعة و15 دقيقة ما تغيروا (4 الفجر - 8 بالليل)
 
     📦 صناديق SPY و QQQ داخلة في فريم الساعة والأربع ساعات بس (GAP_ETFS)
 
@@ -532,6 +534,10 @@ class _YFNoise(logging.Filter):
 
 
 logging.getLogger("yfinance").addFilter(_YFNoise())
+# تحذيرات ياهو مع pandas الجديدة (inplace) تطلع مئات الأسطر وتخلي Railway يحذف رسائل السجل
+import warnings
+warnings.filterwarnings("ignore", message=".*inplace keyword.*")
+warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
 
 
 def free_memory():
@@ -3838,6 +3844,10 @@ def main():
             wsweep_week = f.read().strip() or None
     except FileNotFoundError:
         wsweep_week = None
+    if night_4h() and not GAP_OVERNIGHT:
+        log(f"فريم 4 ساعات: 24 ساعة (الليل من {'ألباكا' if NIGHT_SOURCE == 'alpaca' else 'Tiingo'})")
+    elif GAP_4H_24H and not night_4h():
+        log("⚠️ فريم 4 ساعات: ما فيه مفاتيح ألباكا ولا Tiingo، فيشتغل 4 الفجر - 8 بالليل بس")
     log("الجاب: " + ("24 ساعة (مع الجلسة الليلية من Tiingo)" if GAP_OVERNIGHT else
                      "الجلسة الممتدة 4 الفجر - 8 بالليل نيويورك (ياهو مجاناً)" if GAP_EXTENDED else
                      "الجلسة الرسمية بس"))
@@ -3858,7 +3868,14 @@ def main():
         # (1) الجاب - بعد إغلاق كل شمعة بدقيقة
         now_ny = pd.Timestamp.now(tz=NY)
         slot = gap_scan_due(now_ny, gap_last)
-        if ENABLE_GAP and (once or (slot is not None and us_market_open(now_ny))):
+        day_open = us_market_open(now_ny)
+        # فريم 4 ساعات 24 ساعة: يفحص بالليل بعد (8 بالليل - 4 الفجر) بس على فريم 4 ساعات
+        # شمعة 4 ساعات تقفل كل 4 ساعات بالضبط (0، 4، 8، 12، 16، 20 نيويورك)، فنفحص أول نص ساعة بعدها بس
+        h4_due = once or (now_ny.hour % 4 == 0 and now_ny.minute < 30)
+        night_open = (night_4h() and (ENABLE_GAP_4H or ENABLE_WATCH) and h4_due
+                      and us_market_open(now_ny, overnight=True))
+        if ENABLE_GAP and (once or (slot is not None and (day_open or night_open))):
+            day = once or day_open                   # False = وقت الليل، فريم 4 ساعات بس
             gap_last = slot or now_ny
             today = pd.Timestamp.now(tz=NY).date()
             need_universe = ENABLE_GAP_4H or ENABLE_GAP_1H or ENABLE_GAP_15M_CLEAN or ENABLE_GAP_15M
@@ -3875,33 +3892,36 @@ def main():
             # + صناديق SPY و QQQ (الساعة والأربع ساعات بس)
             watch = set(WATCH_SYMBOLS) if ENABLE_WATCH else set()
             normal = [t for t in gap_tickers if t not in watch]
-            if ENABLE_GAP_4H or ENABLE_GAP_1H:
-                scan_gap(normal + [e for e in GAP_ETFS if e not in normal], gap_sent)
+            if (ENABLE_GAP_4H and h4_due) or (ENABLE_GAP_1H and day):
+                scan_gap(normal + [e for e in GAP_ETFS if e not in normal], gap_sent,
+                         frames=[(ENABLE_GAP_4H and h4_due, 240, "4h", "فريم 4 ساعات"),
+                                 (ENABLE_GAP_1H and day, 60, "1h", "فريم ساعة")])
             # (هـ) قائمة المراقبة - IFVG على 15 دقيقة وساعة و4 ساعات، الجاب أكثر من 15 سنت
-            if ENABLE_WATCH and WATCH_SYMBOLS:
+            if ENABLE_WATCH and WATCH_SYMBOLS and day:
                 scan_gap(WATCH_SYMBOLS, gap_sent,
                          frames=[(False, 15, "w15", "فريم 15 دقيقة"),   # 15 دقيقة مقفول
                                  (True, 60, "w1h", "فريم ساعة")],
                          min_price=0, min_size=WATCH_MIN_SIZE,
                          tag_label=" (قائمة المراقبة)", msg_fn=_watch_message)
+            if ENABLE_WATCH and WATCH_SYMBOLS:
                 # فريم 4 ساعات - الجاب 10 سنت وفوق
                 scan_gap(WATCH_SYMBOLS, gap_sent,
                          frames=[(True, 240, "w4h", "فريم 4 ساعات")],
                          min_price=0, min_size=WATCH4H_MIN_SIZE,
                          tag_label=" (قائمة المراقبة)", msg_fn=_watch_message)
             # (ل) IFVG فريم 15 دقيقة عند دعم أو مقاومة اليوم السابق
-            if ENABLE_PD15:
+            if ENABLE_PD15 and day:
                 scan_gap(PD15_SYMBOLS or list(WATCH_SYMBOLS), gap_sent,
                          frames=[(True, 15, "pd15", "فريم 15 دقيقة", check_pattern_pd)],
                          min_price=0, min_size=PD15_MIN_SIZE,
                          tag_label=" (15 دقيقة عند مستوى أمس)", msg_fn=_pd15_message)
             # (ج) فريم 15 دقيقة النظيف - نفس أسهم الساعة، الشموع الثلاث بدون فراغ، والجاب 2$ وفوق
-            if ENABLE_GAP_15M_CLEAN:
+            if ENABLE_GAP_15M_CLEAN and day:
                 scan_gap(normal, gap_sent,
                          frames=[(True, 15, "15mc", "فريم 15 دقيقة (بدون فراغ)", check_pattern_clean)],
                          min_size=GAP15C_MIN_SIZE, tag_label=" (15 دقيقة بدون فراغ)")
             # (ب) فريم 15 دقيقة - أسهم من 1$ إلى 15$ بدون شرط القيمة السوقية
-            if ENABLE_GAP_15M and gap15_tickers:
+            if ENABLE_GAP_15M and gap15_tickers and day:
                 scan_gap(gap15_tickers, gap_sent,
                          frames=[(True, 15, "15m", "فريم 15 دقيقة")],
                          min_price=GAP15_MIN_PRICE, max_price=GAP15_MAX_PRICE,
