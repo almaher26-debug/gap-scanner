@@ -478,6 +478,9 @@ NEWS_MIN_MARKET_CAP = 5_000_000       # القيمة السوقية 5 مليون
 NEWS_EXCHANGES = ("nasdaq", "nyse", "amex")   # البورصات اللي تنجاب منها القيم السوقية
 NEWS_SENT_FILE = "news_sent.txt"      # عشان ما يعيد نفس الخبر لو البوت أعاد التشغيل
 
+# ---- قائمة IFVG الأسبوعية (كل جمعة) ----
+ENABLE_WEEKLY_IFVG = False       # True = شغال | False = مطفي (مقفول)
+
 # ---- (9) دعم ومقاومة الأسبوع والشهر السابق ----
 ENABLE_SR = False                # True = شغال | False = مطفي
 SR_SYMBOLS = [
@@ -3817,12 +3820,13 @@ def main():
             threading.Thread(target=mom_run_forever, daemon=True, name="momentum").start()
         if ENABLE_BORROW_ZERO:   # الشورت صفر اللحظي
             threading.Thread(target=bz_run_forever, daemon=True, name="borrow_zero").start()
-        try:   # قائمة IFVG الأسبوعية (كل جمعة)
-            import weekly_ifvg
-            threading.Thread(target=weekly_ifvg.run_forever, kwargs={"send": send_telegram},
-                             daemon=True, name="weekly_ifvg").start()
-        except Exception as e:
-            log(f"IFVG الأسبوعي: ما اشتغل: {e}")
+        if ENABLE_WEEKLY_IFVG:   # قائمة IFVG الأسبوعية (كل جمعة)
+            try:
+                import weekly_ifvg
+                threading.Thread(target=weekly_ifvg.run_forever, kwargs={"send": send_telegram},
+                                 daemon=True, name="weekly_ifvg").start()
+            except Exception as e:
+                log(f"IFVG الأسبوعي: ما اشتغل: {e}")
 
     try:
         with open(TUEWED_WEEK_FILE, encoding="utf-8") as f:
