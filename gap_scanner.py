@@ -324,7 +324,7 @@ SHORT_EVERY_MIN = 60             # يعيد فحص الشورت كل كم دقي
 
 # ---- (4ج) الشورت صفر اللحظي: الأسهم المتاحة للشورت وصلت صفر (Interactive Brokers كل 15 دقيقة) ----
 ENABLE_BORROW_ZERO = True        # True = شغال | False = مطفي
-BZ_MIN_PRICE = 0.70              # أقل سعر
+BZ_MIN_PRICE = 1                 # أقل سعر
 BZ_MAX_PRICE = 10                # أعلى سعر
 BZ_MAX_MARKET_CAP = 100_000_000  # القيمة السوقية أقل من 100 مليون
 BZ_EVERY_MIN = 15                # كل كم دقيقة يفحص
