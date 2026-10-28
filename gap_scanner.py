@@ -53,6 +53,15 @@
     - أمس = الجلسة الرسمية (9:30 - 4 العصر نيويورك)
     - ENABLE_PD15 = False يطفيه | python gap_scanner.py --pd15test يجربه بدون نت
 
+(1م) IFVG فريم ساعة و4 ساعات على الجلسة الممتدة - قسم جديد (الأقسام القديمة ما تغيرت)
+    - الجلسات: البري ماركت + الماركت + الأفتر ماركت (4 الفجر - 8 بالليل نيويورك)، بدون الجلسة الليلية
+    - شموع 4 ساعات نفس تريدنج فيو (Extended Hours): 4-8 بري، 8-12، 12-4 ماركت، 4-8 أفتر
+      = بتوقيتك 11، 15، 19، 23 (بعد التوقيت الشتوي الأمريكي 12، 16، 20، 24)
+    - الأسهم: كل أسهم ناسداك + نيويورك اللي قيمتها السوقية 2 مليار وفوق (بدون شرط سعر، وحتى قائمة المراقبة) + SPY و QQQ
+    - نفس نموذج الـ IFVG العادي (الثانية تغطي الجاب، والرابعة تقفل وراه، لون الشموع ما يهم)
+    - حجم الجاب: 50 سنت وفوق (ساعة) و1$ وفوق (4 ساعات)
+    - ENABLE_GAPX = False يطفيه
+
 (1د) سحب سيولة دعمين - الفريم اليومي
     - الأسهم: ناسداك + نيويورك اللي قيمتها السوقية 2 مليار دولار وفوق، وسعرها 5$ وفوق
     - الدعم = قاع يومي سابق (أنزل من 3 شموع قبله و3 بعده) خلال آخر 60 يوم،
@@ -259,6 +268,15 @@ GAP_BASE_MIN = 15                # البيانات تنحمّل بشموع 15 �
 GAP_SCAN_AFTER_CLOSE_MIN = (1, 5, 12)   # يفحص بعد الإغلاق بكذا دقيقة (الأولى هي الأساسية)
 GAP_MAX_ALERT_DELAY_MIN = 30     # ما ينبه على شمعة قفلت من أكثر من كذا دقيقة (عشان ما يرسل قديم أول ما يشتغل)
 GAP_SENT_FILE = "gap_sent.txt"   # عشان ما يعيد نفس التنبيه لو البوت أعاد التشغيل
+
+# ---- (1م) IFVG ساعة و4 ساعات على الجلسة الممتدة (بري + ماركت + أفتر، 4 الفجر - 8 بالليل نيويورك) ----
+#   قسم مستقل: الأقسام القديمة ما تتأثر، وتنبيهاته لها مفتاح خاص فما تتلخبط مع غيرها
+ENABLE_GAPX = True               # True = شغال | False = مطفي
+ENABLE_GAPX_1H = True            # فريم ساعة
+ENABLE_GAPX_4H = True            # فريم 4 ساعات
+GAPX_1H_MIN_SIZE = 0.50          # أقل حجم للجاب - فريم ساعة (دولار)
+GAPX_4H_MIN_SIZE = 1.00          # أقل حجم للجاب - فريم 4 ساعات (دولار)
+GAPX_MIN_PRICE = 0               # أقل سعر سهم (0 = بدون شرط، كل الأسهم 2 مليار وفوق)
 
 # ---- (1د) سحب سيولة دعمين - الفريم اليومي ----
 #   شمعة اليوم ذيلها نزل تحت دعمين (قاعين سابقين) وقفلت فوقهم الاثنين
@@ -1313,10 +1331,15 @@ def scan_gap(tickers, already_sent, frames=None, min_price=None, max_price=None,
                         and t not in GAP_NASDAQ_SET and t not in GAP_ETFS):
                     continue                    # فريم 4 ساعات: ناسداك بس
                 # فريم 4 ساعات: 24 ساعة (الشموع تبدأ 8 بالليل). الباقي على الجلسة العادية
+                # (1م) x1h / x4h: الجلسة الممتدة دايم (4 الفجر - 8 بالليل)، بدون الليل
                 ov = True if (tag in ("4h", "w4h") and night_4h()) else None
+                if tag.startswith("x"):
+                    ov = False
                 res = checker(only_closed(to_frame(df, minutes, ov), last_bar, now))
                 # فريم 4 ساعات له حده الخاص (GAP4H_MIN_SIZE) ينفحص داخل check_pattern_4h
                 need = GAP_1H_MIN_SIZE if tag == "1h" else min_size
+                if len(fr) > 5 and fr[5] is not None:
+                    need = fr[5]                # حد خاص بالفريم (القسم 1م)
                 if not res or round(res["gap_top"] - res["gap_bottom"], 2) < need:
                     continue
                 if (now - res["end"]).total_seconds() / 60 > GAP_MAX_ALERT_DELAY_MIN:
@@ -3882,7 +3905,8 @@ def main():
             day = once or day_open                   # False = وقت الليل، فريم 4 ساعات بس
             gap_last = slot or now_ny
             today = pd.Timestamp.now(tz=NY).date()
-            need_universe = ENABLE_GAP_4H or ENABLE_GAP_1H or ENABLE_GAP_15M_CLEAN or ENABLE_GAP_15M
+            need_universe = (ENABLE_GAP_4H or ENABLE_GAP_1H or ENABLE_GAP_15M_CLEAN or ENABLE_GAP_15M
+                             or ENABLE_GAPX)
             if need_universe and (gap_day != today or not gap_tickers):
                 gap_tickers = get_gap_universe()
                 log(f"الجاب: {len(gap_tickers)} سهم ({' + '.join(e.upper() for e in GAP_EXCHANGES)}) "
@@ -3900,6 +3924,14 @@ def main():
                 scan_gap(normal + [e for e in GAP_ETFS if e not in normal], gap_sent,
                          frames=[(ENABLE_GAP_4H and h4_due, 240, "4h", "فريم 4 ساعات"),
                                  (ENABLE_GAP_1H and day, 60, "1h", "فريم ساعة")])
+            # (1م) IFVG ساعة و4 ساعات - الجلسة الممتدة (بري + ماركت + أفتر)، كل الأسهم + SPY و QQQ
+            if ENABLE_GAPX and day and (ENABLE_GAPX_1H or (ENABLE_GAPX_4H and h4_due)):
+                scan_gap(gap_tickers + [e for e in GAP_ETFS if e not in gap_tickers], gap_sent,
+                         frames=[(ENABLE_GAPX_4H and h4_due, 240, "x4h",
+                                  "فريم 4 ساعات (بري + ماركت + أفتر)", check_pattern, GAPX_4H_MIN_SIZE),
+                                 (ENABLE_GAPX_1H, 60, "x1h",
+                                  "فريم ساعة (بري + ماركت + أفتر)", check_pattern, GAPX_1H_MIN_SIZE)],
+                         min_price=GAPX_MIN_PRICE, tag_label=" (الجلسة الممتدة)")
             # (هـ) قائمة المراقبة - IFVG على 15 دقيقة وساعة و4 ساعات، الجاب أكثر من 15 سنت
             if ENABLE_WATCH and WATCH_SYMBOLS and day:
                 scan_gap(WATCH_SYMBOLS, gap_sent,
