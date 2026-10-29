@@ -270,7 +270,7 @@ GAP_REQUIRE_MIDDLE_COVER = True  # الشمعة الثانية لازم تغطي
 GAP_BASE_MIN = 15                # البيانات تنحمّل بشموع 15 دقيقة، وكل الفريمات تنبني منها
 GAP_SCAN_AFTER_CLOSE_MIN = (1, 5, 12)   # يفحص بعد الإغلاق بكذا دقيقة (الأولى هي الأساسية)
 GAP_MAX_ALERT_DELAY_MIN = 30     # ما ينبه على شمعة قفلت من أكثر من كذا دقيقة (عشان ما يرسل قديم أول ما يشتغل)
-GAP_SENT_FILE = "gap_sent.txt"   # عشان ما يعيد نفس التنبيه لو البوت أعاد التشغيل
+GAP_SENT_FILE = os.path.join(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "."), "gap_sent.txt")   # في /data عشان ما يعيد نفس التنبيه بعد إعادة التشغيل أو الرفع
 
 # ---- (1م) IFVG ساعة و4 ساعات على الجلسة الممتدة (بري + ماركت + أفتر، 4 الفجر - 8 بالليل نيويورك) ----
 #   قسم مستقل: الأقسام القديمة ما تتأثر، وتنبيهاته لها مفتاح خاص فما تتلخبط مع غيرها
@@ -348,9 +348,10 @@ ENABLE_BORROW_ZERO = True        # True = شغال | False = مطفي
 BZ_MIN_PRICE = 0                 # أقل سعر (0 = بدون حد)
 BZ_MAX_PRICE = 0                 # أعلى سعر (0 = بدون حد)
 BZ_MAX_MARKET_CAP = 70_000_000   # القيمة السوقية 70 مليون وتحت
-BZ_FTP_HOSTS = ("ftp3.interactivebrokers.com", "ftp2.interactivebrokers.com")
-BZ_FTP_TIMEOUT = 25              # ثواني لكل محاولة
-BZ_EVERY_MIN = 15                # كل كم دقيقة يفحص
+BZ_FTP_HOSTS = ("ftp2.interactivebrokers.com", "ftp3.interactivebrokers.com")   # ftp2 أول (ftp3 يعلّق)
+BZ_FTP_TIMEOUT = 10              # ثواني لكل محاولة (كانت 25 وتضيّع دقيقة كاملة)
+BZ_EVERY_MIN = 2                 # كل كم دقيقة يفحص (كانت 15) — يمسك تحديث IBKR خلال دقيقتين
+BZ_WARN_AFTER_MIN = 60           # ينبهك لو ملف IBKR ما تحمّل من كذا دقيقة
 BZ_UNIVERSE_EVERY_MIN = 60       # كل كم دقيقة يحدث قائمة البني ستوك (السعر والقيمة السوقية)
 BZ_SHORT_DAYS = 15               # كم يوم من حجم الشورت يكتب في التنبيه
 BZ_STATE_FILE = os.path.join(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "."), "borrow_state.json")   # يُحفظ في /data عشان ما يضيع مع كل رفع
@@ -398,7 +399,7 @@ ENABLE_PDH_SWEEP = True          # True = شغال | False = مطفي
 ENABLE_PWL_1H = True             # True = شغال | False = مطفي
 PWL_EVERY_MIN = 5                # كل كم دقيقة يفحص وقت السوق
 PWL_MAX_ALERT_DELAY_MIN = 30     # ما ينبه على شمعة قفلت من أكثر من كذا دقيقة
-PWL_ONCE_PER_WEEK = False        # True = تنبيه واحد لكل سهم بالأسبوع | False = كل شمعة سحب
+PWL_ONCE_PER_WEEK = True         # True = تنبيه واحد لكل سهم بالأسبوع (دعم واحد + مقاومة واحدة) | False = كل شمعة سحب
 #   المقاومة = قمة شمعة الأسبوع السابق. شمعة ساعة ذيلها طلع فوق المقاومة وقفلت تحتها
 ENABLE_PWH_1H = True             # True = شغال | False = مطفي (نفس توقيت وإعدادات الدعم فوق)
 
@@ -2003,33 +2004,41 @@ def bz_cx_link(sym):
     return f"https://chartexchange.com/symbol/{ex}-{sym.lower()}/borrow-fee/"
 
 
+_bz_last_ok = None   # (السيرفر، سلبي؟) اللي نجح آخر مرة — يجربه أول عشان ما يضيع وقت
+
+
 def bz_download_ibkr():
-    """يحمّل ملف IBKR. يجرب السيرفرين، والوضع السلبي ثم النشط، ويكتب بالسجل وين وقف بالضبط."""
+    """يحمّل ملف IBKR. يبدأ بآخر سيرفر نجح، وبعدها الباقي، ويكتب بالسجل وين وقف بالضبط."""
     import ftplib
     import socket
+    global _bz_last_ok
     errors = []
-    for host in BZ_FTP_HOSTS:
-        for passive in (True, False):
-            stage = "الاتصال"
-            buf = io.BytesIO()
-            try:
-                ip = socket.gethostbyname(host)
-                with ftplib.FTP(timeout=BZ_FTP_TIMEOUT) as ftp:
-                    ftp.connect(ip, 21)
-                    stage = "تسجيل الدخول"
-                    ftp.login("shortstock", "")
-                    ftp.set_pasv(passive)
-                    stage = "تحميل الملف"
-                    ftp.retrbinary("RETR usa.txt", buf.write)
-                text = buf.getvalue().decode("utf-8", errors="ignore")
-                if text.strip():
-                    if errors:
-                        log(f"الشورت صفر: نجح التحميل من {host} ({'سلبي' if passive else 'نشط'}) "
-                            f"بعد: {' | '.join(errors)}")
-                    return text
-                errors.append(f"{host}: الملف فاضي")
-            except Exception as e:
-                errors.append(f"{host} {'سلبي' if passive else 'نشط'} وقف عند {stage}: {e}")
+    combos = [(h, p) for h in BZ_FTP_HOSTS for p in (True, False)]
+    if _bz_last_ok in combos:
+        combos.remove(_bz_last_ok)
+        combos.insert(0, _bz_last_ok)
+    for host, passive in combos:
+        stage = "الاتصال"
+        buf = io.BytesIO()
+        try:
+            ip = socket.gethostbyname(host)
+            with ftplib.FTP(timeout=BZ_FTP_TIMEOUT) as ftp:
+                ftp.connect(ip, 21)
+                stage = "تسجيل الدخول"
+                ftp.login("shortstock", "")
+                ftp.set_pasv(passive)
+                stage = "تحميل الملف"
+                ftp.retrbinary("RETR usa.txt", buf.write)
+            text = buf.getvalue().decode("utf-8", errors="ignore")
+            if text.strip():
+                _bz_last_ok = (host, passive)
+                if errors:
+                    log(f"الشورت صفر: نجح التحميل من {host} ({'سلبي' if passive else 'نشط'}) "
+                        f"بعد: {' | '.join(errors)}")
+                return text
+            errors.append(f"{host}: الملف فاضي")
+        except Exception as e:
+            errors.append(f"{host} {'سلبي' if passive else 'نشط'} وقف عند {stage}: {e}")
     raise RuntimeError("ما قدرت أحمل ملف IBKR — " + " | ".join(errors))
 
 
@@ -2140,11 +2149,21 @@ def bz_send_drop(text):
             log(f"الشورت: فشل الإرسال للقسم الثاني {target}: {e}")
 
 
+_bz_last_hash = None   # بصمة آخر ملف IBKR — لو ما تغير ما يعيد الفحص
+
+
 def bz_check(state, first_run, universe):
-    data = bz_parse_ibkr(bz_download_ibkr())
+    """يرجّع True لو الملف جديد وانفحص، False لو نفس الملف السابق."""
+    global _bz_last_hash
+    text = bz_download_ibkr()
+    h = hash(text)
+    if h == _bz_last_hash and not first_run:
+        return False          # IBKR ما حدّث الملف للحين
+    _bz_last_hash = h
+    data = bz_parse_ibkr(text)
     if not data:
         log("الشورت صفر: ملف IBKR فاضي أو صيغته تغيرت")
-        return
+        return True
     now = datetime.now(ZoneInfo(LOCAL_TZ))
     fee_txt = lambda f: "غير معروف" if f != f else f"{f:.2f}%"
     zero_now = alerts = 0
@@ -2216,6 +2235,7 @@ def bz_check(state, first_run, universe):
     _bz_save_state(state)
     log(f"[{datetime.now():%H:%M}] الشورت صفر: {len(universe)} سهم بني ستوك — "
         f"صفر حالياً {zero_now} — تنبيهات {alerts}")
+    return True
 
 
 BZ_TEST_ID = "1"   # غيّر الرقم لو تبي رسالة تجريبية ثانية بعد الرفع الجاي
@@ -2257,7 +2277,7 @@ def bz_run_forever():
     state = _bz_load_state()
     first_run = not state      # أول مرة يسجل الوضع بس عشان ما يجيك سيل تنبيهات
     universe, uni_last = {}, 0.0
-    fails, warned = 0, False
+    last_ok, warned = time.time(), False
     while True:
         try:
             if not universe or time.time() - uni_last >= BZ_UNIVERSE_EVERY_MIN * 60:
@@ -2270,11 +2290,10 @@ def bz_run_forever():
                 first_run = False
                 if warned:
                     send_telegram("✅ تنبيه الشورت صفر رجع يشتغل (ملف IBKR يتحمل طبيعي)")
-                fails, warned = 0, False
+                last_ok, warned = time.time(), False
         except Exception as e:
-            fails += 1
             log(f"الشورت صفر: خطأ {e}")
-            if fails >= 4 and not warned:   # ساعة كاملة بدون بيانات = يعلمك بدل ما يسكت
+            if time.time() - last_ok >= BZ_WARN_AFTER_MIN * 60 and not warned:   # ساعة بدون بيانات = يعلمك
                 warned = True
                 send_telegram("⚠️ تنبيه الشورت صفر واقف: ما قدر يحمل ملف IBKR من ساعة.\n"
                               f"آخر خطأ: {str(e)[:300]}")
