@@ -345,9 +345,11 @@ SHORT_EVERY_MIN = 60             # يعيد فحص الشورت كل كم دقي
 
 # ---- (4ج) الشورت صفر اللحظي: الأسهم المتاحة للشورت وصلت صفر (Interactive Brokers كل 15 دقيقة) ----
 ENABLE_BORROW_ZERO = True        # True = شغال | False = مطفي
-BZ_MIN_PRICE = 1                 # أقل سعر
-BZ_MAX_PRICE = 10                # أعلى سعر
-BZ_MAX_MARKET_CAP = 100_000_000  # القيمة السوقية أقل من 100 مليون
+BZ_MIN_PRICE = 0                 # أقل سعر (0 = بدون حد)
+BZ_MAX_PRICE = 0                 # أعلى سعر (0 = بدون حد)
+BZ_MAX_MARKET_CAP = 70_000_000   # القيمة السوقية 70 مليون وتحت
+BZ_FTP_HOSTS = ("ftp3.interactivebrokers.com", "ftp2.interactivebrokers.com")
+BZ_FTP_TIMEOUT = 25              # ثواني لكل محاولة
 BZ_EVERY_MIN = 15                # كل كم دقيقة يفحص
 BZ_UNIVERSE_EVERY_MIN = 60       # كل كم دقيقة يحدث قائمة البني ستوك (السعر والقيمة السوقية)
 BZ_SHORT_DAYS = 15               # كم يوم من حجم الشورت يكتب في التنبيه
@@ -1968,6 +1970,9 @@ def _bz_num(x):
         return 0.0
 
 
+BZ_EXCHANGE = {}   # الرمز -> البورصة (لرابط ChartExchange)
+
+
 def bz_universe():
     """البني ستوك: {الرمز: {"price", "cap"}} من سكرينر ناسداك (ناسداك + نيويورك + أميكس)."""
     out = {}
@@ -1981,21 +1986,51 @@ def bz_universe():
             for row in rows:
                 sym = str(row.get("symbol", "")).strip().upper()
                 price, cap = _bz_num(row.get("lastsale")), _bz_num(row.get("marketCap"))
-                if (sym.isalpha() and len(sym) <= 5 and BZ_MIN_PRICE <= price <= BZ_MAX_PRICE
-                        and 0 < cap < BZ_MAX_MARKET_CAP):
+                price_ok = (price >= BZ_MIN_PRICE if BZ_MIN_PRICE else price > 0) and \
+                           (price <= BZ_MAX_PRICE if BZ_MAX_PRICE else True)
+                if (sym.isalpha() and len(sym) <= 5 and price_ok
+                        and 0 < cap <= BZ_MAX_MARKET_CAP):
                     out[sym] = {"price": price, "cap": cap}
+                    BZ_EXCHANGE[sym] = ex
         except Exception as e:
             log(f"الشورت صفر: سكرينر {ex} خطأ: {e}")
     return out
 
 
+def bz_cx_link(sym):
+    """رابط صفحة السهم في ChartExchange عشان تتأكد بنفسك."""
+    ex = BZ_EXCHANGE.get(sym, "nasdaq")
+    return f"https://chartexchange.com/symbol/{ex}-{sym.lower()}/borrow-fee/"
+
+
 def bz_download_ibkr():
+    """يحمّل ملف IBKR. يجرب السيرفرين، والوضع السلبي ثم النشط، ويكتب بالسجل وين وقف بالضبط."""
     import ftplib
-    buf = io.BytesIO()
-    with ftplib.FTP("ftp3.interactivebrokers.com", timeout=60) as ftp:
-        ftp.login("shortstock", "")
-        ftp.retrbinary("RETR usa.txt", buf.write)
-    return buf.getvalue().decode("utf-8", errors="ignore")
+    import socket
+    errors = []
+    for host in BZ_FTP_HOSTS:
+        for passive in (True, False):
+            stage = "الاتصال"
+            buf = io.BytesIO()
+            try:
+                ip = socket.gethostbyname(host)
+                with ftplib.FTP(timeout=BZ_FTP_TIMEOUT) as ftp:
+                    ftp.connect(ip, 21)
+                    stage = "تسجيل الدخول"
+                    ftp.login("shortstock", "")
+                    ftp.set_pasv(passive)
+                    stage = "تحميل الملف"
+                    ftp.retrbinary("RETR usa.txt", buf.write)
+                text = buf.getvalue().decode("utf-8", errors="ignore")
+                if text.strip():
+                    if errors:
+                        log(f"الشورت صفر: نجح التحميل من {host} ({'سلبي' if passive else 'نشط'}) "
+                            f"بعد: {' | '.join(errors)}")
+                    return text
+                errors.append(f"{host}: الملف فاضي")
+            except Exception as e:
+                errors.append(f"{host} {'سلبي' if passive else 'نشط'} وقف عند {stage}: {e}")
+    raise RuntimeError("ما قدرت أحمل ملف IBKR — " + " | ".join(errors))
 
 
 def bz_parse_ibkr(text):
@@ -2115,9 +2150,13 @@ def bz_check(state, first_run, universe):
     zero_now = alerts = 0
     for sym, u in universe.items():
         info = data.get(sym)
+        prev = state.get(sym)
         if info is None:
-            continue
-        avail, prev = info["available"], state.get(sym)
+            # IBKR يشيل السهم من الملف لما يخلص المتاح = صفر (نفس ملاحظة ChartExchange)
+            if not isinstance(prev, (int, float)) or prev <= 0:
+                continue
+            info = {"available": 0, "fee": float("nan")}
+        avail = info["available"]
         zero_now += avail == 0
         if prev is not None and not first_run:
             if prev > 0 and avail == 0:
@@ -2128,7 +2167,8 @@ def bz_check(state, first_run, universe):
                     f"الأسهم المتاحة للشورت: 0 (كانت {prev:,})\n"
                     f"رسوم الاستلاف: {fee_txt(info['fee'])}\n"
                     f"الوقت: {now:%Y-%m-%d %H:%M} (توقيتك)\n"
-                    f"المصدر: Interactive Brokers\n\n"
+                    f"المصدر: Interactive Brokers (نفس ChartExchange)\n"
+                    f"{bz_cx_link(sym)}\n\n"
                     f"{bz_short_history_txt(sym)}")
                 alerts += 1
                 time.sleep(0.5)
@@ -2137,7 +2177,8 @@ def bz_check(state, first_run, universe):
                     f"✅ رجع الشورت متاح - ${sym}\n"
                     f"الأسهم المتاحة للشورت: {avail:,}\n"
                     f"رسوم الاستلاف: {fee_txt(info['fee'])}\n"
-                    f"الوقت: {now:%Y-%m-%d %H:%M} (توقيتك)")
+                    f"الوقت: {now:%Y-%m-%d %H:%M} (توقيتك)\n"
+                    f"{bz_cx_link(sym)}")
                 alerts += 1
                 time.sleep(0.5)
         if ENABLE_BZ_DROP:
@@ -2178,11 +2219,13 @@ def bz_check(state, first_run, universe):
 
 
 def bz_run_forever():
-    log(f"الشورت صفر: بدأ — {BZ_MIN_PRICE:g}-{BZ_MAX_PRICE:g}$، قيمة سوقية أقل من "
-        f"{BZ_MAX_MARKET_CAP / 1e6:g} مليون — كل {BZ_EVERY_MIN} دقيقة")
+    price_txt = (f"{BZ_MIN_PRICE:g}-{BZ_MAX_PRICE:g}$" if BZ_MAX_PRICE else "بدون حد سعر")
+    log(f"الشورت صفر: بدأ — {price_txt}، قيمة سوقية {BZ_MAX_MARKET_CAP / 1e6:g} مليون وتحت "
+        f"— كل {BZ_EVERY_MIN} دقيقة")
     state = _bz_load_state()
     first_run = not state      # أول مرة يسجل الوضع بس عشان ما يجيك سيل تنبيهات
     universe, uni_last = {}, 0.0
+    fails, warned = 0, False
     while True:
         try:
             if not universe or time.time() - uni_last >= BZ_UNIVERSE_EVERY_MIN * 60:
@@ -2193,8 +2236,16 @@ def bz_run_forever():
             if universe:
                 bz_check(state, first_run, universe)
                 first_run = False
+                if warned:
+                    send_telegram("✅ تنبيه الشورت صفر رجع يشتغل (ملف IBKR يتحمل طبيعي)")
+                fails, warned = 0, False
         except Exception as e:
+            fails += 1
             log(f"الشورت صفر: خطأ {e}")
+            if fails >= 4 and not warned:   # ساعة كاملة بدون بيانات = يعلمك بدل ما يسكت
+                warned = True
+                send_telegram("⚠️ تنبيه الشورت صفر واقف: ما قدر يحمل ملف IBKR من ساعة.\n"
+                              f"آخر خطأ: {str(e)[:300]}")
         time.sleep(BZ_EVERY_MIN * 60)
 
 
