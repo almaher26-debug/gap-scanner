@@ -353,7 +353,7 @@ BZ_FTP_TIMEOUT = 25              # ثواني لكل محاولة
 BZ_EVERY_MIN = 15                # كل كم دقيقة يفحص
 BZ_UNIVERSE_EVERY_MIN = 60       # كل كم دقيقة يحدث قائمة البني ستوك (السعر والقيمة السوقية)
 BZ_SHORT_DAYS = 15               # كم يوم من حجم الشورت يكتب في التنبيه
-BZ_STATE_FILE = "borrow_state.json"
+BZ_STATE_FILE = os.path.join(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "."), "borrow_state.json")   # يُحفظ في /data عشان ما يضيع مع كل رفع
 # تنبيه نزول الأسهم المتاحة للشورت أكثر من 60% (يروح لقروب/قسم ثاني)
 ENABLE_BZ_DROP = True            # True = شغال | False = مطفي
 BZ_DROP_PCT = 60                 # نسبة النزول عن أعلى رقم خلال الفترة
@@ -2218,10 +2218,42 @@ def bz_check(state, first_run, universe):
         f"صفر حالياً {zero_now} — تنبيهات {alerts}")
 
 
+BZ_TEST_ID = "1"   # غيّر الرقم لو تبي رسالة تجريبية ثانية بعد الرفع الجاي
+
+
+def bz_send_test_once():
+    """يرسل تنبيه تجريبي مرة وحدة بس (يتذكرها في مجلد /data عشان ما تتكرر مع كل تشغيل)."""
+    folder = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", ".")
+    marker = os.path.join(folder, "bz_test_sent.txt")
+    try:
+        with open(marker, encoding="utf-8") as f:
+            if f.read().strip() == BZ_TEST_ID:
+                return
+    except Exception:
+        pass
+    now = datetime.now(ZoneInfo(LOCAL_TZ))
+    send_telegram(
+        "🧪 رسالة تجريبية - هذا مو تنبيه حقيقي\n\n"
+        "🚫 الشورت صفر - $NUWE\n"
+        "السعر: 6.46$\n"
+        "الأسهم المتاحة للشورت: 0 (كانت 76)\n"
+        "رسوم الاستلاف: 173.41%\n"
+        f"الوقت: {now:%Y-%m-%d %H:%M} (توقيتك)\n"
+        "المصدر: Interactive Brokers (نفس ChartExchange)\n"
+        f"{bz_cx_link('NUWE')}\n\n"
+        "لو وصلتك هالرسالة، التنبيهات الحقيقية بتوصل لنفس المكان.")
+    try:
+        with open(marker, "w", encoding="utf-8") as f:
+            f.write(BZ_TEST_ID)
+    except Exception as e:
+        log(f"الشورت صفر: ما قدرت أحفظ علامة الرسالة التجريبية: {e}")
+
+
 def bz_run_forever():
     price_txt = (f"{BZ_MIN_PRICE:g}-{BZ_MAX_PRICE:g}$" if BZ_MAX_PRICE else "بدون حد سعر")
     log(f"الشورت صفر: بدأ — {price_txt}، قيمة سوقية {BZ_MAX_MARKET_CAP / 1e6:g} مليون وتحت "
         f"— كل {BZ_EVERY_MIN} دقيقة")
+    bz_send_test_once()
     state = _bz_load_state()
     first_run = not state      # أول مرة يسجل الوضع بس عشان ما يجيك سيل تنبيهات
     universe, uni_last = {}, 0.0
