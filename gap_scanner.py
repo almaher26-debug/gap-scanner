@@ -403,6 +403,20 @@ PWL_ONCE_PER_WEEK = True         # True = تنبيه واحد لكل سهم با
 #   المقاومة = قمة شمعة الأسبوع السابق. شمعة ساعة ذيلها طلع فوق المقاومة وقفلت تحتها
 ENABLE_PWH_1H = True             # True = شغال | False = مطفي (نفس توقيت وإعدادات الدعم فوق)
 
+# ---- (1ن) سحب سيولة اليوم السابق + إعادة اختبار - فريم 15 دقيقة - لحظي على قائمة المراقبة ----
+#   المقاومة: شمعة ذيلها طلع فوق قمة أمس وقفلت تحتها (سحب) ← السعر ابتعد تحت المستوى ←
+#   رجع يختبر المستوى وقفل تحته (إعادة اختبار) = تنبيه، ووقف الخسارة فوق أعلى سعر بشمعة الاختبار.
+#   الدعم بالعكس (قاع أمس، والوقف تحت أقل سعر بشمعة الاختبار).
+#   المستوى = قمة/قاع الجلسة الرسمية لليوم السابق. السحب والاختبار وقت السوق الرسمي (PDR_REGULAR_ONLY).
+ENABLE_PDR_15M = True            # True = شغال | False = مطفي
+PDR_EVERY_MIN = 5                # كل كم دقيقة يفحص وقت السوق
+PDR_MAX_BEYOND_PCT = 0.02        # ذيل السحب ما يتعدى المستوى أكثر من 2% (أكثر = كسر مو سحب)
+PDR_AWAY_PCT = 0.004             # بعد السحب لازم السعر يبتعد عن المستوى 0.4% على الأقل قبل الاختبار
+PDR_NEAR_PCT = 0.003             # الاختبار: الذيل يوصل للمستوى أو يقرب منه 0.3%
+PDR_STOP_BUFFER_PCT = 0.0005     # الوقف فوق/تحت ذيل شمعة الاختبار بـ 0.05% (أقل شي سنت)
+PDR_MAX_ALERT_DELAY_MIN = 30     # ما ينبه على شمعة قفلت من أكثر من كذا دقيقة
+PDR_REGULAR_ONLY = True          # True = السحب والاختبار وقت السوق الرسمي بس (9:30 - 4 نيويورك)
+
 # ---- (4ب) تجزئة عكسية + شورت صفر (أسهم البني ستوك) ----
 ENABLE_RSPLIT_SHORT = True             # شغال
 RSPLIT_MAX_PRICE = 5                 # الشورت صفر: يفحصه لأسهم البني ستوك (5$ أو أقل) من اللي سوت تجزئة
@@ -2795,6 +2809,190 @@ def pwl_self_test():
     print(_pwl_message("TEST", "high", hi, hday, r))
 
 
+# ================== (1ن) سحب سيولة اليوم السابق + إعادة اختبار (15 دقيقة) ==================
+def check_pd_retest(c, side):
+    """c = شموع 15 دقيقة مقفلة. side = "high" (مقاومة قمة أمس) أو "low" (دعم قاع أمس).
+    آخر شمعة لازم تكون شمعة الاختبار. يرجع التفاصيل أو None."""
+    lv = prev_day_levels(c)
+    if not lv:
+        return None
+    prev_d, pdh, pdl = lv
+    hi = side == "high"
+    lvl = pdh if hi else pdl
+    start = pd.Timestamp(prev_d).tz_localize(NY) + pd.Timedelta(hours=16)   # من إغلاق أمس
+    win = c[c.index >= start]
+    if PDR_REGULAR_ONLY:                    # وقت السوق الرسمي بس (9:30 - 4 نيويورك)
+        m = win.index.hour * 60 + win.index.minute
+        win = win[(m >= 9 * 60 + 30) & (m < 16 * 60)]
+    if len(win) < 3:
+        return None
+    rt, rows = win.iloc[-1], win.iloc[:-1]
+    H = lambda r: float(r["High"])
+    L = lambda r: float(r["Low"])
+    C = lambda r: float(r["Close"])
+    beyond = (lambda r: H(r) > lvl) if hi else (lambda r: L(r) < lvl)
+    back_in = (lambda r: C(r) < lvl) if hi else (lambda r: C(r) > lvl)
+
+    # آخر شمعة سحب قبل الاختبار، وما فيه ولا شمعة قفلت برا المستوى بعدها
+    i = None
+    for k in range(len(rows) - 1, -1, -1):
+        r = rows.iloc[k]
+        if not back_in(r):
+            return None                     # قفلت فوق المقاومة / تحت الدعم = كسر، مو سحب
+        if beyond(r):
+            i = k
+            break
+    if i is None:
+        return None
+    sw = rows.iloc[i]
+    ext = H(sw) if hi else L(sw)            # ذيل السحب
+    if abs(ext - lvl) / lvl > PDR_MAX_BEYOND_PCT:
+        return None
+    after = rows.iloc[i + 1:]               # بين السحب والاختبار
+    if after.empty:
+        return None
+    # لازم يبتعد عن المستوى
+    if hi:
+        far_k = int(after["Low"].astype(float).values.argmin())
+        far = float(after["Low"].iloc[far_k])
+        if far > lvl * (1 - PDR_AWAY_PCT):
+            return None
+    else:
+        far_k = int(after["High"].astype(float).values.argmax())
+        far = float(after["High"].iloc[far_k])
+        if far < lvl * (1 + PDR_AWAY_PCT):
+            return None
+    # أول رجعة للمستوى بعد الابتعاد (ما فيه اختبار قبلها)
+    near = lvl * (1 - PDR_NEAR_PCT) if hi else lvl * (1 + PDR_NEAR_PCT)
+    post = after.iloc[far_k + 1:]
+    if len(post) and ((post["High"].astype(float) >= near).any() if hi
+                      else (post["Low"].astype(float) <= near).any()):
+        return None
+    # شمعة الاختبار: وصلت المستوى، قفلت داخله، وما تعدّت ذيل السحب
+    if hi:
+        if not (H(rt) >= near and C(rt) < lvl and H(rt) <= ext):
+            return None
+        stop = H(rt) + max(0.01, H(rt) * PDR_STOP_BUFFER_PCT)
+    else:
+        if not (L(rt) <= near and C(rt) > lvl and L(rt) >= ext):
+            return None
+        stop = L(rt) - max(0.01, L(rt) * PDR_STOP_BUFFER_PCT)
+    entry = C(rt)
+    return {"side": side, "level": lvl, "prev_d": prev_d, "sweep_ext": ext,
+            "sweep_start": rows.index[i], "far": far,
+            "open": float(rt["Open"]), "high": H(rt), "low": L(rt), "close": entry,
+            "stop": stop, "risk": abs(stop - entry), "risk_pct": abs(stop - entry) / entry * 100,
+            "start": win.index[-1], "end": rt["end"]}
+
+
+def _pdr_message(t, r):
+    loc = lambda x: pd.Timestamp(x).tz_convert(LOCAL_TZ)
+    t_sw, t_rt = loc(r["sweep_start"]), loc(r["start"])
+    color = "خضراء 🟢" if r["close"] > r["open"] else "حمراء 🔴"
+    lvl = r["level"]
+    if r["side"] == "high":
+        head = "🔻 سحب سيولة مقاومة اليوم السابق + إعادة اختبار — فريم 15 دقيقة"
+        lvl_line = f"المقاومة (قمة أمس {r['prev_d']}): {lvl:.2f}"
+        sweep = (f"السحب: ذيل طلع لـ {r['sweep_ext']:.2f} (+{(r['sweep_ext'] / lvl - 1) * 100:.2f}%) "
+                 f"وقفل تحتها — {t_sw:%m-%d %H:%M}")
+        away = f"ابتعد لين: {r['far']:.2f}"
+        test = (f"الاختبار: أعلى سعر {r['high']:.2f} وقفل {r['close']:.2f} تحت المقاومة "
+                f"| الشمعة {color} — {t_rt:%m-%d %H:%M}")
+        stop = f"🛑 وقف الخسارة: {r['stop']:.2f} (فوق أعلى سعر بشمعة الاختبار)"
+    else:
+        head = "💧 سحب سيولة دعم اليوم السابق + إعادة اختبار — فريم 15 دقيقة"
+        lvl_line = f"الدعم (قاع أمس {r['prev_d']}): {lvl:.2f}"
+        sweep = (f"السحب: ذيل نزل لـ {r['sweep_ext']:.2f} (-{(1 - r['sweep_ext'] / lvl) * 100:.2f}%) "
+                 f"وقفل فوقه — {t_sw:%m-%d %H:%M}")
+        away = f"ابتعد لين: {r['far']:.2f}"
+        test = (f"الاختبار: أقل سعر {r['low']:.2f} وقفل {r['close']:.2f} فوق الدعم "
+                f"| الشمعة {color} — {t_rt:%m-%d %H:%M}")
+        stop = f"🛑 وقف الخسارة: {r['stop']:.2f} (تحت أقل سعر بشمعة الاختبار)"
+    return (f"{head}\nالسهم: ${t}\n{lvl_line}\n{sweep}\n{away}\n{test}\n"
+            f"سعر الإغلاق: {r['close']:.2f}\n{stop}\n"
+            f"المسافة للوقف: {r['risk']:.2f}$ ({r['risk_pct']:.2f}%)\n"
+            f"(الأوقات بتوقيتك)")
+
+
+def scan_pd_retest(symbols, sent):
+    now = pd.Timestamp.now(tz=NY)
+    hits = 0
+    for t, df in download_batches(symbols, 100, period="5d", interval=f"{GAP_BASE_MIN}m",
+                                  prepost=True):
+        try:
+            df = to_ny(df)[OHLC]
+            if df.empty:
+                continue
+            c = only_closed(to_frame(df, 15, False), df.index.max(), now)
+            for side in ("high", "low"):
+                r = check_pd_retest(c, side)
+                if not r or (now - pd.Timestamp(r["end"])).total_seconds() / 60 > PDR_MAX_ALERT_DELAY_MIN:
+                    continue
+                key = f"{t}-pdr-{side}-{pd.Timestamp(r['start']):%Y%m%d}"   # مرة باليوم لكل جهة
+                if key in sent:
+                    continue
+                sent.add(key)
+                _append_line(GAP_SENT_FILE, key)
+                hits += 1
+                send_telegram(_pdr_message(t, r), kind="sweep")
+        except Exception as e:
+            log(f"سحب اليوم السابق + اختبار: {t}: خطأ - {e}")
+    free_memory()
+    if hits:
+        log(f"[{datetime.now():%H:%M}] سحب اليوم السابق + اختبار (15 دقيقة): {hits} تنبيه")
+
+
+def pdr_self_test():
+    """يجرب (1ن) على بيانات مصنوعة بدون نت (نفس شكل SPCX: قمة أمس 150.24)."""
+    ny = ZoneInfo(NY)
+    # أمس: الجلسة الرسمية كاملة (26 شمعة) قمتها 150.24 وقاعها 146.00
+    y = pd.date_range("2026-10-27 09:30", "2026-10-27 15:45", freq="15min", tz=ny)
+    yh = [148.0] * len(y); yh[10] = 150.24
+    yl = [147.0] * len(y); yl[5] = 146.0
+    yd = pd.DataFrame({"Open": 147.5, "High": yh, "Low": yl, "Close": 147.6}, index=y)
+
+    def day(rows):
+        idx = pd.date_range("2026-10-28 09:30", periods=len(rows), freq="15min", tz=ny)
+        return pd.DataFrame(rows, columns=["Open", "High", "Low", "Close"], index=idx)
+
+    rows = [(149.0, 149.6, 148.8, 149.4),
+            (149.4, 151.40, 149.3, 150.00),   # سحب: ذيل فوق 150.24 وقفل تحته
+            (150.0, 150.1, 149.2, 149.3),
+            (149.3, 149.4, 148.70, 148.9),    # ابتعد
+            (148.9, 149.6, 148.8, 149.5),
+            (149.5, 150.15, 149.4, 149.70)]   # اختبار: قرب من 150.24 وقفل تحته
+
+    def frame(rows):
+        c = pd.concat([yd, day(rows)])
+        c["n"] = 1
+        c["end"] = c.index + pd.Timedelta(minutes=15)
+        return c
+
+    r = check_pd_retest(frame(rows), "high")
+    assert r and abs(r["level"] - 150.24) < 1e-9 and r["stop"] > 150.15, r
+    print(f"✅ مقاومة: سحب {r['sweep_ext']} ← ابتعد {r['far']} ← اختبار {r['high']} | الوقف {r['stop']:.2f}")
+    bad = rows[:-1] + [(149.5, 150.5, 149.4, 150.30)]           # قفل فوق المقاومة = كسر
+    assert check_pd_retest(frame(bad), "high") is None
+    bad = rows[:3] + [(149.3, 149.9, 149.8, 149.85), (149.85, 150.1, 149.8, 149.9)]   # ما ابتعد
+    assert check_pd_retest(frame(bad), "high") is None
+    bad = rows[:-1] + [(149.5, 149.6, 149.4, 149.5)]             # ما رجع للمستوى
+    assert check_pd_retest(frame(bad), "high") is None
+    bad = rows + [(149.7, 150.1, 149.6, 149.8)]                  # اختبار ثاني = ما يعيد
+    assert check_pd_retest(frame(bad), "high") is None
+    print("✅ مقاومة: كسر / ما ابتعد / ما اختبر / اختبار ثاني = ما فيه تنبيه")
+
+    mir = lambda rs: [(300 - o, 300 - l, 300 - h, 300 - c) for o, h, l, c in rs]   # نفس الشكل مقلوب
+    yd2 = yd.copy()
+    yd2["Open"], yd2["High"], yd2["Low"], yd2["Close"] = 300 - yd["Open"], 300 - yd["Low"], 300 - yd["High"], 300 - yd["Close"]
+    yd, yd_keep = yd2, yd
+    r2 = check_pd_retest(frame(mir(rows)), "low")
+    yd = yd_keep
+    assert r2 and abs(r2["level"] - (300 - 150.24)) < 1e-9 and r2["stop"] < r2["low"], r2
+    print(f"✅ دعم: سحب {r2['sweep_ext']} ← ابتعد {r2['far']} ← اختبار {r2['low']} | الوقف {r2['stop']:.2f}")
+    print()
+    print(_pdr_message("SPCX", r))
+
+
 # ================== (4ب) تجزئة عكسية + شورت صفر ==================
 def load_rsplits(tickers):
     """كل التجزئات العكسية آخر سنة.
@@ -3937,6 +4135,9 @@ def main():
     if "--pd15test" in sys.argv:
         pd15_self_test()
         return
+    if "--pdrtest" in sys.argv:
+        pdr_self_test()
+        return
     once = "--once" in sys.argv
     _load_chats()
     discover_groups()
@@ -3967,6 +4168,7 @@ def main():
     except FileNotFoundError:
         pdl_day = None
     pwl_last = 0.0
+    pdr_last = 0.0
     gap_tickers, gap_day, gap_last = [], None, None
     gap15_tickers = []
     gap1d_day = None
@@ -4141,6 +4343,11 @@ def main():
         if (ENABLE_PWL_1H or ENABLE_PWH_1H) and (once or us_market_open()) and time.time() - pwl_last >= PWL_EVERY_MIN * 60:
             scan_pwl_1h(list(WATCH_SYMBOLS), gap_sent)
             pwl_last = time.time()
+
+        # (1ن) سحب سيولة اليوم السابق + إعادة اختبار - فريم 15 دقيقة - كل 5 دقايق وقت السوق
+        if ENABLE_PDR_15M and (once or us_market_open()) and time.time() - pdr_last >= PDR_EVERY_MIN * 60:
+            scan_pd_retest(list(WATCH_SYMBOLS), gap_sent)
+            pdr_last = time.time()
 
         # (2) ماسح السيولة - وقت السوق الرسمي، كل 5 دقايق
         if ENABLE_FLOW and (regular_session_open() or once) \
