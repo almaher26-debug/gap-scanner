@@ -77,6 +77,14 @@
     - يفحص كل 5 دقايق وقت السوق، وينبه أول ما تقفل الشمعة
     - ENABLE_PWL_1H = False يطفي الدعم | ENABLE_PWH_1H = False يطفي المقاومة | python gap_scanner.py --pwltest يجربه بدون نت
 
+(1ن) اختراق كاذب لدعم ومقاومة اليوم السابق - فريم 4 ساعات - قائمة المراقبة (WATCH_SYMBOLS)
+    - 🟢 شمعة 4 ساعات ذيلها نزل تحت قاع أمس، وقفلت فوقه (لونها ما يهم)
+    - 🔴 شمعة 4 ساعات ذيلها طلع فوق قمة أمس، وقفلت تحتها
+    - أمس = الجلسة الرسمية، وشموع الليل (من 8 بالليل نيويورك) تتبع يوم التداول الجاي
+    - ينبه بعد إغلاق كل شمعة 4 ساعات (نفس توقيت IFVG 4 ساعات)
+    - تنبيه واحد بس لكل سهم باليوم: أول شمعة تسحب، والباقي يتجاهله (PD4H_ONCE_PER_DAY)
+    - ENABLE_PDL_4H / ENABLE_PDH_4H = False يطفيه | python gap_scanner.py --pd4htest يجربه بدون نت
+
 (1و) سحب سيولة دعمين - الفريم الأسبوعي
     - الأسهم: ناسداك + نيويورك اللي قيمتها السوقية 10 مليار دولار وفوق
     - الدعم = قاع أسبوعي سابق (أنزل من شمعتين قبله وشمعتين بعده) خلال آخر سنة، ولسا صامد
@@ -396,6 +404,16 @@ PWL_MAX_ALERT_DELAY_MIN = 30     # ما ينبه على شمعة قفلت من �
 PWL_ONCE_PER_WEEK = False        # True = تنبيه واحد لكل سهم بالأسبوع | False = كل شمعة سحب
 #   المقاومة = قمة شمعة الأسبوع السابق. شمعة ساعة ذيلها طلع فوق المقاومة وقفلت تحتها
 ENABLE_PWH_1H = True             # True = شغال | False = مطفي (نفس توقيت وإعدادات الدعم فوق)
+
+# ---- (1ن) اختراق كاذب لدعم ومقاومة اليوم السابق - فريم 4 ساعات - قائمة المراقبة ----
+#   🟢 شمعة 4 ساعات ذيلها نزل تحت قاع أمس وقفلت فوقه | 🔴 ذيلها طلع فوق قمة أمس وقفلت تحتها
+#   أمس = الجلسة الرسمية (9:30 - 4 العصر نيويورك). شموع 4 ساعات نفس قسم IFVG (24 ساعة لو فيه ألباكا)
+ENABLE_PDL_4H = True             # الدعم: True = شغال | False = مطفي
+ENABLE_PDH_4H = True             # المقاومة: True = شغال | False = مطفي
+PD4H_MIN_SWEEP_PCT = 0.0         # أقل كسر للمستوى (0.001 = 0.1%) | 0 = أي كسر
+PD4H_MAX_ALERT_DELAY_MIN = 30    # ما ينبه على شمعة قفلت من أكثر من كذا دقيقة
+PD4H_ONCE_PER_DAY = True         # True = تنبيه واحد بس لكل سهم باليوم | False = كل شمعة سحب
+PD4H_ONCE_PER_SIDE = False       # True = واحد للدعم وواحد للمقاومة بنفس اليوم | False = واحد بس للسهم
 
 # ---- (4ب) تجزئة عكسية + شورت صفر (أسهم البني ستوك) ----
 ENABLE_RSPLIT_SHORT = True             # شغال
@@ -2690,6 +2708,157 @@ def pwl_self_test():
     print(_pwl_message("TEST", "high", hi, hday, r))
 
 
+# ================== (1ن) سحب سيولة دعم ومقاومة اليوم السابق - فريم 4 ساعات ==================
+_pd4h_levels = {"day": None, "lvl": {}}
+
+
+def _pd4h_daily(symbols, today):
+    """الشموع اليومية الرسمية (9:30 - 4) لكل سهم، تتحدث مرة باليوم."""
+    if _pd4h_levels["day"] == today and _pd4h_levels["lvl"]:
+        return _pd4h_levels["lvl"]
+    lvl = {}
+    for t, df in download_batches(symbols, 100, period="1mo", interval="1d", prepost=False):
+        try:
+            df = df.dropna(subset=OHLC)
+            if not df.empty:
+                lvl[t] = df[["High", "Low"]].astype(float)
+        except Exception:
+            continue
+    _pd4h_levels.update(day=today, lvl=lvl)
+    return lvl
+
+
+def _trading_day(start):
+    """يوم التداول اللي تتبع له شمعة الـ 4 ساعات (نفس تريدنج فيو):
+    شموع الليل من 8 بالليل نيويورك تتبع يوم التداول الجاي."""
+    d = pd.Timestamp(start).tz_convert(NY)
+    day = d.normalize() + pd.Timedelta(days=1) if d.hour >= 20 else d.normalize()
+    while day.weekday() >= 5:
+        day += pd.Timedelta(days=1)
+    return day.date()
+
+
+def prev_day_levels(daily, tday):
+    """(قمة، قاع، تاريخ) اليوم السابق = آخر شمعة يومية قبل يوم التداول، أو None."""
+    d = [pd.Timestamp(i).date() for i in daily.index]
+    prev = daily[[x < tday for x in d]]
+    if prev.empty:
+        return None
+    row = prev.iloc[-1]
+    return float(row["High"]), float(row["Low"]), pd.Timestamp(prev.index[-1]).date()
+
+
+def check_pd4h(c4h, daily):
+    """آخر شمعة 4 ساعات مقفلة: اختراق كاذب لدعم أو مقاومة اليوم السابق.
+    🟢 الذيل نزل تحت قاع أمس وقفلت فوقه | 🔴 الذيل طلع فوق قمة أمس وقفلت تحتها.
+    يرجع قائمة (ممكن الاثنين بنفس الشمعة)."""
+    if c4h.empty:
+        return []
+    last = c4h.iloc[-1]
+    start = c4h.index[-1]
+    lv = prev_day_levels(daily, _trading_day(start))
+    if not lv:
+        return []
+    pdh, pdl, pday = lv
+    o, h, l, c = (float(last[k]) for k in OHLC)
+    base = {"open": o, "high": h, "low": l, "close": c, "start": start,
+            "end": last["end"], "pday": pday, "tday": _trading_day(start)}
+    out = []
+    if ENABLE_PDL_4H and l < pdl * (1 - PD4H_MIN_SWEEP_PCT) and c > pdl:
+        out.append({**base, "side": "low", "lvl": pdl, "depth": (pdl - l) / pdl * 100})
+    if ENABLE_PDH_4H and h > pdh * (1 + PD4H_MIN_SWEEP_PCT) and c < pdh:
+        out.append({**base, "side": "high", "lvl": pdh, "depth": (h - pdh) / pdh * 100})
+    return out
+
+
+def _pd4h_message(t, r):
+    t1 = pd.Timestamp(r["start"]).tz_convert(LOCAL_TZ)
+    t2 = pd.Timestamp(r["end"]).tz_convert(LOCAL_TZ)
+    color = "خضراء 🟢" if r["close"] > r["open"] else "حمراء 🔴"
+    if r["side"] == "low":
+        head = "💧 اختراق كاذب لدعم اليوم السابق — فريم 4 ساعات"
+        lvl_line = f"الدعم (قاع {r['pday']}): {r['lvl']:.2f}"
+        wick = f"أقل سعر بالشمعة: {r['low']:.2f}  (-{r['depth']:.2f}% تحت الدعم)"
+        close = f"الإغلاق: {r['close']:.2f} فوق الدعم | الشمعة {color}"
+    else:
+        head = "🔻 اختراق كاذب لمقاومة اليوم السابق — فريم 4 ساعات"
+        lvl_line = f"المقاومة (قمة {r['pday']}): {r['lvl']:.2f}"
+        wick = f"أعلى سعر بالشمعة: {r['high']:.2f}  (+{r['depth']:.2f}% فوق المقاومة)"
+        close = f"الإغلاق: {r['close']:.2f} تحت المقاومة | الشمعة {color}"
+    return (f"{head}\nالسهم: ${t}\n{lvl_line}\n{wick}\n{close}\n"
+            f"الشمعة: {t1:%Y-%m-%d %H:%M} - {t2:%H:%M} (توقيتك)")
+
+
+def scan_pd4h(symbols, sent):
+    """(1ن) يفحص آخر شمعة 4 ساعات مقفلة لكل سهم في القائمة."""
+    now = pd.Timestamp.now(tz=NY)
+    daily = _pd4h_daily(symbols, now.date())
+    ov = True if night_4h() else None
+    boats = load_boats(symbols, now) if night_4h() else {}
+    hits = 0
+    for t, df in download_batches(symbols, 100, period="7d", interval=f"{GAP_BASE_MIN}m",
+                                  prepost=True):
+        try:
+            if t not in daily:
+                continue
+            df = to_ny(df)[OHLC]
+            night = boats.get(t)
+            if night is not None and not night.empty:
+                df = pd.concat([df, night])
+                df = df[~df.index.duplicated(keep="first")].sort_index()
+            if df.empty:
+                continue
+            c4h = only_closed(to_frame(df, 240, ov), df.index.max(), now)
+            for r in check_pd4h(c4h, daily[t]):
+                if (now - pd.Timestamp(r["end"])).total_seconds() / 60 > PD4H_MAX_ALERT_DELAY_MIN:
+                    continue
+                # تنبيه واحد لكل سهم بيوم التداول (PD4H_ONCE_PER_SIDE = واحد للدعم وواحد للمقاومة)
+                key = (f"{t}-pd4h-{r['side'] if PD4H_ONCE_PER_SIDE else 'any'}-{r['tday']:%Y%m%d}"
+                       if PD4H_ONCE_PER_DAY else f"{t}-pd4h-{r['side']}-{r['start']:%Y%m%d%H%M}")
+                if key in sent:
+                    continue
+                sent.add(key)
+                _append_line(GAP_SENT_FILE, key)
+                hits += 1
+                send_telegram(_pd4h_message(t, r), kind="sweep")
+        except Exception as e:
+            log(f"اختراق كاذب لمستوى أمس (4 ساعات): {t}: خطأ - {e}")
+    free_memory()
+    log(f"[{datetime.now():%H:%M}] اختراق كاذب لمستوى أمس (4 ساعات): {hits} تنبيه")
+
+
+def pd4h_self_test():
+    """يجرب (1ن) على بيانات مصنوعة بدون نت."""
+    ny = ZoneInfo(NY)
+    daily = pd.DataFrame({"High": [110.0, 108.0], "Low": [100.0, 102.0]},
+                         index=pd.to_datetime(["2026-10-27", "2026-10-28"]))
+
+    def frame(start, o, h, l, c):
+        s = pd.Timestamp(start, tz=ny)
+        return pd.DataFrame({"Open": [o], "High": [h], "Low": [l], "Close": [c],
+                             "end": [s + pd.Timedelta(hours=4)]}, index=[s])
+
+    # شمعة 12-4 يوم 29: أمس = 28 (قمة 108، قاع 102)
+    r = check_pd4h(frame("2026-10-29 12:00", 103, 104, 101.5, 103.5), daily)
+    assert len(r) == 1 and r[0]["side"] == "low" and r[0]["lvl"] == 102, r
+    print(f"✅ دعم: نزل {r[0]['low']} تحت {r[0]['lvl']} وقفل {r[0]['close']} فوقه")
+    assert not check_pd4h(frame("2026-10-29 12:00", 103, 104, 101.5, 101.8), daily)
+    assert not check_pd4h(frame("2026-10-29 12:00", 103, 104, 102.1, 103.5), daily)
+    print("✅ دعم: قفل تحته / ما نزل تحته = ما فيه تنبيه")
+    r = check_pd4h(frame("2026-10-29 08:00", 107, 108.6, 106.5, 107.2), daily)
+    assert len(r) == 1 and r[0]["side"] == "high" and r[0]["lvl"] == 108, r
+    assert not check_pd4h(frame("2026-10-29 08:00", 107, 108.6, 106.5, 108.3), daily)
+    print(f"✅ مقاومة: طلع {r[0]['high']} فوق {r[0]['lvl']} وقفل {r[0]['close']} تحتها")
+    # شمعة الليل 8 بالليل يوم 28 تتبع يوم 29، فأمسها = 28
+    r = check_pd4h(frame("2026-10-28 20:00", 103, 104, 101.5, 103.5), daily)
+    assert r and r[0]["pday"] == datetime(2026, 10, 28).date(), r
+    # شمعة 12-4 يوم 28 أمسها = 27 (قاع 100) فما فيه سحب
+    assert not check_pd4h(frame("2026-10-28 12:00", 103, 104, 101.5, 103.5), daily)
+    print("✅ شمعة الليل تتبع اليوم الجاي، وشمعة النهار تقارن بأمسها الصح")
+    print()
+    print(_pd4h_message("TEST", r[0]))
+
+
 # ================== (4ب) تجزئة عكسية + شورت صفر ==================
 def load_rsplits(tickers):
     """كل التجزئات العكسية آخر سنة.
@@ -3829,6 +3998,9 @@ def main():
     if "--pwltest" in sys.argv:
         pwl_self_test()
         return
+    if "--pd4htest" in sys.argv:
+        pd4h_self_test()
+        return
     if "--pd15test" in sys.argv:
         pd15_self_test()
         return
@@ -3945,6 +4117,9 @@ def main():
                          frames=[(True, 240, "w4h", "فريم 4 ساعات")],
                          min_price=0, min_size=WATCH4H_MIN_SIZE,
                          tag_label=" (قائمة المراقبة)", msg_fn=_watch_message)
+            # (1ن) اختراق كاذب لدعم/مقاومة اليوم السابق - فريم 4 ساعات - قائمة المراقبة
+            if (ENABLE_PDL_4H or ENABLE_PDH_4H) and h4_due:
+                scan_pd4h(list(WATCH_SYMBOLS), gap_sent)
             # (ل) IFVG فريم 15 دقيقة عند دعم أو مقاومة اليوم السابق
             if ENABLE_PD15 and day:
                 scan_gap(PD15_SYMBOLS or list(WATCH_SYMBOLS), gap_sent,
