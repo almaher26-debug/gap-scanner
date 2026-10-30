@@ -345,7 +345,7 @@ SHORT_EVERY_MIN = 60             # يعيد فحص الشورت كل كم دقي
 
 # ---- (4ج) الشورت صفر اللحظي: الأسهم المتاحة للشورت وصلت صفر (Interactive Brokers كل 15 دقيقة) ----
 ENABLE_BORROW_ZERO = True        # True = شغال | False = مطفي
-BZ_MIN_PRICE = 0                 # أقل سعر (0 = بدون حد)
+BZ_MIN_PRICE = 1                 # أقل سعر: الأسهم فوق دولار بس (0 = بدون حد)
 BZ_MAX_PRICE = 0                 # أعلى سعر (0 = بدون حد)
 BZ_MAX_MARKET_CAP = 70_000_000   # القيمة السوقية 70 مليون وتحت
 BZ_FTP_HOSTS = ("ftp2.interactivebrokers.com", "ftp3.interactivebrokers.com")   # ftp2 أول (ftp3 يعلّق)
@@ -2284,7 +2284,8 @@ def bz_send_test_once():
 
 
 def bz_run_forever():
-    price_txt = (f"{BZ_MIN_PRICE:g}-{BZ_MAX_PRICE:g}$" if BZ_MAX_PRICE else "بدون حد سعر")
+    price_txt = (f"{BZ_MIN_PRICE:g}-{BZ_MAX_PRICE:g}$" if BZ_MAX_PRICE
+                 else f"السعر {BZ_MIN_PRICE:g}$ وفوق" if BZ_MIN_PRICE else "بدون حد سعر")
     log(f"الشورت صفر: بدأ — {price_txt}، قيمة سوقية {BZ_MAX_MARKET_CAP / 1e6:g} مليون وتحت "
         f"— كل {BZ_EVERY_MIN} دقيقة")
     bz_send_test_once()
