@@ -346,7 +346,7 @@ SHORT_EVERY_MIN = 60             # يعيد فحص الشورت كل كم دقي
 # ---- (4ج) الشورت صفر اللحظي: الأسهم المتاحة للشورت وصلت صفر (Interactive Brokers كل 15 دقيقة) ----
 ENABLE_BORROW_ZERO = True        # True = شغال | False = مطفي
 BZ_MIN_PRICE = 1                 # أقل سعر: الأسهم فوق دولار بس (0 = بدون حد)
-BZ_MAX_PRICE = 0                 # أعلى سعر (0 = بدون حد)
+BZ_MAX_PRICE = 7                 # أعلى سعر (0 = بدون حد)
 BZ_MAX_MARKET_CAP = 70_000_000   # القيمة السوقية 70 مليون وتحت
 BZ_FTP_HOSTS = ("ftp2.interactivebrokers.com", "ftp3.interactivebrokers.com")   # ftp2 أول (ftp3 يعلّق)
 BZ_FTP_TIMEOUT = 10              # ثواني لكل محاولة (كانت 25 وتضيّع دقيقة كاملة)
@@ -355,9 +355,9 @@ BZ_WARN_AFTER_MIN = 60           # ينبهك لو ملف IBKR ما تحمّل �
 BZ_UNIVERSE_EVERY_MIN = 60       # كل كم دقيقة يحدث قائمة البني ستوك (السعر والقيمة السوقية)
 BZ_SHORT_DAYS = 15               # كم يوم من حجم الشورت يكتب في التنبيه
 BZ_STATE_FILE = os.path.join(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "."), "borrow_state.json")   # يُحفظ في /data عشان ما يضيع مع كل رفع
-# تنبيه نزول الأسهم المتاحة للشورت أكثر من 60% (يروح لقروب/قسم ثاني)
+# تنبيه نزول الأسهم المتاحة للشورت أكثر من 90% (يروح لقروب/قسم ثاني)
 ENABLE_BZ_DROP = True            # True = شغال | False = مطفي
-BZ_DROP_PCT = 60                 # نسبة النزول عن أعلى رقم خلال الفترة
+BZ_DROP_PCT = 90                 # نسبة النزول عن أعلى رقم خلال الفترة
 BZ_DROP_DAYS = 30                # الفترة: آخر شهر
 BZ_DROP_MIN_BASE = 1_000         # يتجاهل الأسهم اللي أعلى متاح لها خلال الشهر أقل من كذا
 # رقم القروب/القسم الثاني: حطه كمتغير TELEGRAM_CHAT_ID_SHORT على Railway
