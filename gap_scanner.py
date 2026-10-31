@@ -250,6 +250,16 @@ WATCH_SYMBOLS = [
     "KLAC", "MCHP", "FTNT", "ADSK", "MDB", "CSCO", "CLS", "BE", "MOD", "TEM",
     "CELH", "CHWY", "CROX", "GRMN", "CTSH", "BBIO", "DOCS", "ADMA", "CTAS", "MSM",
     "SMH", "ABBV", "HAS", "KO", "LULU", "APH", "SNPS", "IBM", "ORLY", "HD",
+    # إعلانات أرباح أسبوع 2 نوفمبر 2026 (الموجودة فوق ما تكررت)
+    "AEHR", "APP", "DIBS", "TXG", "SMCI", "MRNA", "AMC", "NVTS", "KTOS", "CHKP",
+    "COHR", "UBER", "NET", "VSH", "BMRN", "FSLY", "ANET", "CAVA", "EL", "CIFR",
+    "PFE", "OKLO", "ETN", "ABNB", "NVO", "TEAM", "BKNG", "RIOT", "IREN", "U",
+    "MP", "GFS", "FN", "MPC", "BXSL", "ALAB", "RUN", "BROS", "FISV",
+    # باقي أسهم صورة الأرباح (أعمدة الأيام الخمسة)
+    "NSSC", "ETR", "MAR", "PEG", "TSEM", "KRYS", "LIFE", "ON", "ROKU", "O",
+    "CALX", "DT", "DOCN", "ET", "APO", "BNTX", "HL", "AMGN", "OUST", "CAR",
+    "MCD", "CVS", "CAI", "CAH", "IOVA", "EOSE", "CORZ", "CI", "TAP", "UUUU",
+    "CHTR", "WULF", "ELAN", "HUM", "DTI", "BLMN", "PAA", "UAA",
 ]
 WATCH_MIN_SIZE = 0.16            # حجم الجاب (فريم الساعة): أكثر من 15 سنت (يعني 16 سنت وفوق) | 0 = بدون شرط
 WATCH4H_MIN_SIZE = 0.10          # حجم الجاب (فريم 4 ساعات): 10 سنت وفوق
@@ -259,7 +269,7 @@ WATCH4H_MIN_SIZE = 0.10          # حجم الجاب (فريم 4 ساعات): 10
 #      والرابعة قفلت فوق أعلى الـ IFVG وفوق قاع أمس
 #   🔴 هبوطي: نفس الشي بالعكس عند قمة أمس (المقاومة)، والرابعة قفلت تحت أسفل الـ IFVG وتحت قمة أمس
 #   اليوم السابق = شمعة اليوم الرسمية (9:30 - 4 العصر نيويورك) نفس تريدنج فيو
-ENABLE_PD15 = True               # True = شغال | False = مطفي
+ENABLE_PD15 = False              # True = شغال | False = مطفي
 PD15_SYMBOLS = []                # فاضية = نفس قائمة المراقبة (WATCH_SYMBOLS)
 PD15_MIN_SIZE = 0.16             # أقل حجم للجاب (دولار)
 PD15_NEAR_PCT = 0.003            # يعتبره "عند المستوى" لو الذيل قرّب منه 0.3% حتى لو ما لمسه
@@ -399,7 +409,7 @@ ENABLE_PDH_SWEEP = True          # True = شغال | False = مطفي
 ENABLE_PWL_1H = True             # True = شغال | False = مطفي
 PWL_EVERY_MIN = 5                # كل كم دقيقة يفحص وقت السوق
 PWL_MAX_ALERT_DELAY_MIN = 30     # ما ينبه على شمعة قفلت من أكثر من كذا دقيقة
-PWL_ONCE_PER_WEEK = True         # True = تنبيه واحد لكل سهم بالأسبوع (دعم واحد + مقاومة واحدة) | False = كل شمعة سحب
+PWL_ONCE_PER_WEEK = True         # True = تنبيه واحد بس لكل سهم بالأسبوع (أول سحب: دعم أو مقاومة) | False = كل شمعة سحب
 #   المقاومة = قمة شمعة الأسبوع السابق. شمعة ساعة ذيلها طلع فوق المقاومة وقفلت تحتها
 ENABLE_PWH_1H = True             # True = شغال | False = مطفي (نفس توقيت وإعدادات الدعم فوق)
 
@@ -416,6 +426,8 @@ PDR_NEAR_PCT = 0.003             # الاختبار: الذيل يوصل للم�
 PDR_STOP_BUFFER_PCT = 0.0005     # الوقف فوق/تحت ذيل شمعة الاختبار بـ 0.05% (أقل شي سنت)
 PDR_MAX_ALERT_DELAY_MIN = 30     # ما ينبه على شمعة قفلت من أكثر من كذا دقيقة
 PDR_REGULAR_ONLY = True          # True = السحب والاختبار وقت السوق الرسمي بس (9:30 - 4 نيويورك)
+PDR_TARGETS = True               # يكتب الأهداف: كول = قمة أمس ثم قمة الأسبوع السابق | بوت = قاع أمس ثم قاع الأسبوع السابق
+PDR_TARGET_MIN_PCT = 0.003       # الهدف اللي أقرب من 0.3% عن سعر الدخول يتخطاه للي بعده
 
 # ---- (4ب) تجزئة عكسية + شورت صفر (أسهم البني ستوك) ----
 ENABLE_RSPLIT_SHORT = True             # شغال
@@ -2744,9 +2756,10 @@ def scan_pwl_1h(symbols, sent):
                 r = fn(c1h, lvl, wk0)
                 if not r or (now - pd.Timestamp(r["end"])).total_seconds() / 60 > PWL_MAX_ALERT_DELAY_MIN:
                     continue
-                key = (f"{t}-{tag}-{wk0:%Y%m%d}" if PWL_ONCE_PER_WEEK
+                key = (f"{t}-pw1h-{wk0:%Y%m%d}" if PWL_ONCE_PER_WEEK   # مفتاح واحد للدعم والمقاومة
                        else f"{t}-{tag}-{r['start']:%Y%m%d%H%M}")
-                if key in sent:
+                if key in sent or (PWL_ONCE_PER_WEEK and (
+                        f"{t}-pwl1h-{wk0:%Y%m%d}" in sent or f"{t}-pwh1h-{wk0:%Y%m%d}" in sent)):
                     continue
                 sent.add(key)
                 _append_line(GAP_SENT_FILE, key)
@@ -2879,11 +2892,32 @@ def check_pd_retest(c, side):
             return None
         stop = L(rt) - max(0.01, L(rt) * PDR_STOP_BUFFER_PCT)
     entry = C(rt)
-    return {"side": side, "level": lvl, "prev_d": prev_d, "sweep_ext": ext,
+    return {"side": side, "level": lvl, "prev_d": prev_d, "pdh": pdh, "pdl": pdl, "sweep_ext": ext,
             "sweep_start": rows.index[i], "far": far,
             "open": float(rt["Open"]), "high": H(rt), "low": L(rt), "close": entry,
             "stop": stop, "risk": abs(stop - entry), "risk_pct": abs(stop - entry) / entry * 100,
             "start": win.index[-1], "end": rt["end"]}
+
+
+def pdr_targets(r, week_lv=None):
+    """الأهداف: بوت (مقاومة) = قاع أمس ثم قاع الأسبوع السابق | كول (دعم) = قمة أمس ثم قمة الأسبوع السابق.
+    يتخطى المستوى اللي ورا سعر الدخول أو قريب منه مرة (PDR_TARGET_MIN_PCT)."""
+    entry, put = r["close"], r["side"] == "high"
+    cands = [("قاع أمس" if put else "قمة أمس", r["pdl"] if put else r["pdh"])]
+    if week_lv:
+        wk = week_lv.get("low" if put else "high")
+        if wk:
+            cands.append(("قاع الأسبوع السابق" if put else "قمة الأسبوع السابق", float(wk[0])))
+    out = []
+    for name, px in sorted(cands, key=lambda x: -x[1] if put else x[1]):
+        if px is None or (px >= entry if put else px <= entry):
+            continue
+        if abs(px - entry) / entry < PDR_TARGET_MIN_PCT:
+            continue
+        if out and abs(px - out[-1][1]) / entry < PDR_TARGET_MIN_PCT:   # نفس المستوى تقريباً
+            continue
+        out.append((name, px))
+    return out[:2]
 
 
 def _pdr_message(t, r):
@@ -2909,15 +2943,32 @@ def _pdr_message(t, r):
         test = (f"الاختبار: أقل سعر {r['low']:.2f} وقفل {r['close']:.2f} فوق الدعم "
                 f"| الشمعة {color} — {t_rt:%m-%d %H:%M}")
         stop = f"🛑 وقف الخسارة: {r['stop']:.2f} (تحت أقل سعر بشمعة الاختبار)"
+    put = r["side"] == "high"
+    trend = "📉 الاتجاه المحتمل: بوت 🔴" if put else "📈 الاتجاه المحتمل: كول 🟢"
+    tg = ""
+    if PDR_TARGETS:
+        lines = []
+        for i, (name, px) in enumerate(r.get("targets") or [], 1):
+            dist = abs(px - r["close"])
+            rr = f" | العائد/المخاطرة 1:{dist / r['risk']:.1f}" if r["risk"] > 0 else ""
+            lines.append(f"🎯 الهدف {i}: {px:.2f} ({name}) — {dist / r['close'] * 100:.2f}%{rr}")
+        tg = ("\n".join(lines) if lines else
+              f"🎯 ما فيه هدف واضح {'تحت' if put else 'فوق'} السعر من دعوم/مقاومات أمس والأسبوع السابق") + "\n"
     return (f"{head}\nالسهم: ${t}\n{lvl_line}\n{sweep}\n{away}\n{test}\n"
-            f"سعر الإغلاق: {r['close']:.2f}\n{stop}\n"
-            f"المسافة للوقف: {r['risk']:.2f}$ ({r['risk_pct']:.2f}%)\n"
+            f"سعر الإغلاق: {r['close']:.2f}\n{trend}\n{stop}\n"
+            f"المسافة للوقف: {r['risk']:.2f}$ ({r['risk_pct']:.2f}%)\n{tg}"
             f"(الأوقات بتوقيتك)")
 
 
 def scan_pd_retest(symbols, sent):
     now = pd.Timestamp.now(tz=NY)
     hits = 0
+    week_lv = {}
+    if PDR_TARGETS:
+        try:
+            week_lv = _pwl_supports(symbols, now.date())   # قمة وقاع الأسبوع السابق (مرة باليوم)
+        except Exception as e:
+            log("أهداف إعادة الاختبار: ما قدرت أجيب مستويات الأسبوع السابق:", e)
     for t, df in download_batches(symbols, 100, period="5d", interval=f"{GAP_BASE_MIN}m",
                                   prepost=True):
         try:
@@ -2935,6 +2986,7 @@ def scan_pd_retest(symbols, sent):
                 sent.add(key)
                 _append_line(GAP_SENT_FILE, key)
                 hits += 1
+                r["targets"] = pdr_targets(r, week_lv.get(t))
                 send_telegram(_pdr_message(t, r), kind="sweep")
         except Exception as e:
             log(f"سحب اليوم السابق + اختبار: {t}: خطأ - {e}")
@@ -2990,8 +3042,15 @@ def pdr_self_test():
     yd = yd_keep
     assert r2 and abs(r2["level"] - (300 - 150.24)) < 1e-9 and r2["stop"] < r2["low"], r2
     print(f"✅ دعم: سحب {r2['sweep_ext']} ← ابتعد {r2['far']} ← اختبار {r2['low']} | الوقف {r2['stop']:.2f}")
+    r["targets"] = pdr_targets(r, {"low": (145.10, None), "high": (152.0, None)})
+    assert [round(x[1], 2) for x in r["targets"]] == [146.0, 145.1], r["targets"]
+    r2["targets"] = pdr_targets(r2, {"low": (140.0, None), "high": (300 - 145.10, None)})
+    assert [round(x[1], 2) for x in r2["targets"]] == [154.0, 154.9], r2["targets"]
+    print("✅ الأهداف: بوت = قاع أمس ثم قاع الأسبوع | كول = قمة أمس ثم قمة الأسبوع")
     print()
     print(_pdr_message("SPCX", r))
+    print()
+    print(_pdr_message("SPCX", r2))
 
 
 # ================== (4ب) تجزئة عكسية + شورت صفر ==================
