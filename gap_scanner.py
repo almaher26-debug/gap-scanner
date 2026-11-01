@@ -355,6 +355,7 @@ SHORT_EVERY_MIN = 60             # يعيد فحص الشورت كل كم دقي
 
 # ---- (4ج) الشورت صفر اللحظي: الأسهم المتاحة للشورت وصلت صفر (Interactive Brokers كل 15 دقيقة) ----
 ENABLE_BORROW_ZERO = True        # True = شغال | False = مطفي
+ENABLE_BZ_BACK = False           # رسالة "✅ رجع الشورت متاح" — False = ملغية | True = ترجع
 BZ_MIN_PRICE = 1                 # أقل سعر: الأسهم فوق دولار بس (0 = بدون حد)
 BZ_MAX_PRICE = 7                 # أعلى سعر (0 = بدون حد)
 BZ_MAX_MARKET_CAP = 70_000_000   # القيمة السوقية 70 مليون وتحت
@@ -2217,7 +2218,7 @@ def bz_check(state, first_run, universe):
                     f"{bz_short_history_txt(sym)}")
                 alerts += 1
                 time.sleep(0.5)
-            elif prev == 0 and avail > 0:
+            elif ENABLE_BZ_BACK and prev == 0 and avail > 0:
                 send_telegram(
                     f"✅ رجع الشورت متاح - ${sym}\n"
                     f"الأسهم المتاحة للشورت: {avail:,}\n"
