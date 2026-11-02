@@ -420,6 +420,8 @@ ENABLE_PWH_1H = True             # True = شغال | False = مطفي (نفس ت
 #   الدعم بالعكس (قاع أمس، والوقف تحت أقل سعر بشمعة الاختبار).
 #   المستوى = قمة/قاع الجلسة الرسمية لليوم السابق. السحب والاختبار وقت السوق الرسمي (PDR_REGULAR_ONLY).
 ENABLE_PDR_15M = True            # True = شغال | False = مطفي
+PDR_ENABLE_CALL = False          # كول (إعادة اختبار دعم قاع أمس): False = ملغي | True = يرجع
+PDR_ENABLE_PUT = True            # بوت (إعادة اختبار مقاومة قمة أمس): True = شغال
 PDR_EVERY_MIN = 5                # كل كم دقيقة يفحص وقت السوق
 PDR_MAX_BEYOND_PCT = 0.02        # ذيل السحب ما يتعدى المستوى أكثر من 2% (أكثر = كسر مو سحب)
 PDR_AWAY_PCT = 0.004             # بعد السحب لازم السعر يبتعد عن المستوى 0.4% على الأقل قبل الاختبار
@@ -2977,7 +2979,7 @@ def scan_pd_retest(symbols, sent):
             if df.empty:
                 continue
             c = only_closed(to_frame(df, 15, False), df.index.max(), now)
-            for side in ("high", "low"):
+            for side in (("high",) if PDR_ENABLE_PUT else ()) + (("low",) if PDR_ENABLE_CALL else ()):
                 r = check_pd_retest(c, side)
                 if not r or (now - pd.Timestamp(r["end"])).total_seconds() / 60 > PDR_MAX_ALERT_DELAY_MIN:
                     continue
