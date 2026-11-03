@@ -439,6 +439,24 @@ PDR_OPT_MAX_DTE = 45             # أبعد انتهاء يدوّر فيه (لو
 PDR_OPT_RATE = 0.04              # الفائدة لحساب الدلتا لو المصدر ما أعطاها
 PDR_OPT_STOP = True              # يحسب وقف خسارة العقد = سعر العقد المتوقع لو السهم وصل وقف السهم
 
+# ---- (1ن-2) سحب سيولة دعم اليوم السابق + إعادة اختبار - فريم ساعة - كول ----
+#   نفس (1ن) بس على شموع ساعة (الجلسة الرسمية، تبدأ 9:30 مثل تريدنج فيو)، وجهة الدعم بس:
+#   شمعة ساعة ذيلها نزل تحت قاع أمس وقفلت فوقه (سحب) ← السعر ابتعد فوق المستوى ←
+#   رجع يختبر الدعم وقفل فوقه = تنبيه كول، والوقف تحت أقل سعر بشمعة الاختبار.
+#   الأهداف: قمة أمس ثم قمة الأسبوع السابق. ويختار عقد كول ويحسب وقف خسارة العقد.
+ENABLE_PDR_1H_CALL = True        # True = شغال | False = مطفي
+PDR1H_EVERY_MIN = 5              # كل كم دقيقة يفحص وقت السوق
+PDR1H_MAX_ALERT_DELAY_MIN = 30   # ما ينبه على شمعة قفلت من أكثر من كذا دقيقة
+# شروط العقد:
+PDR1H_OPT_MIN_COST = 100         # سعر العقد (للعقد كامل = السعر × 100): من 100$
+PDR1H_OPT_MAX_COST = 300         # إلى 300$
+PDR1H_OPT_MIN_IV = 0.30          # IV من 30%
+PDR1H_OPT_MAX_IV = 0.80          # إلى 80%
+PDR1H_OPT_MIN_DELTA = 0.13       # الدلتا فوق 0.1300
+PDR1H_OPT_MIN_VOLUME = 500       # حجم التداول في العقد فوق 500
+PDR1H_OPT_MIN_DTE = 7            # المدة: 7 أيام وفوق
+PDR1H_OPT_MAX_DTE = 45           # أبعد انتهاء يدوّر فيه
+
 # ---- (4ب) تجزئة عكسية + شورت صفر (أسهم البني ستوك) ----
 ENABLE_RSPLIT_SHORT = True             # قوائم التجزئة العكسية شغالة
 ENABLE_RSPLIT_SHORT_ZERO = False       # تنبيه الشورت صفر بعد التجزئة: False = مطفي | True = يرجع
@@ -907,7 +925,7 @@ def _hhmm(m):
     return f"{m // 60:02d}:{m % 60:02d}"
 
 
-def to_frame(df, minutes, overnight=None):
+def to_frame(df, minutes, overnight=None, session=None):
     """يحول شموع النص ساعة لشموع أكبر (60 = ساعة، 240 = 4 ساعات) بتوقيت نيويورك،
     بنفس تقسيم تريدنج فيو. كل شمعة معها وقت إغلاقها (end) وعدد الشموع الصغيرة اللي فيها (n).
     overnight=True = 24 ساعة (الشموع تبدأ 8 بالليل)."""
@@ -915,7 +933,7 @@ def to_frame(df, minutes, overnight=None):
     if df.empty:
         return df
     df = to_ny(df)
-    anchor, end_min = _session(overnight)
+    anchor, end_min = session or _session(overnight)   # session = (بداية، نهاية) بالدقايق لو تبي جلسة معينة
     if end_min is not None:                    # مو 24 ساعة: نشيل اللي برا الجلسة
         df = df.between_time(_hhmm(anchor), _hhmm(end_min - 1))
         if df.empty:
@@ -3105,10 +3123,11 @@ def pwl_self_test():
 
 
 # ================== (1ن) سحب سيولة اليوم السابق + إعادة اختبار (15 دقيقة) ==================
-def check_pd_retest(c, side):
+def check_pd_retest(c, side, levels=None):
     """c = شموع 15 دقيقة مقفلة. side = "high" (مقاومة قمة أمس) أو "low" (دعم قاع أمس).
-    آخر شمعة لازم تكون شمعة الاختبار. يرجع التفاصيل أو None."""
-    lv = prev_day_levels(c)
+    آخر شمعة لازم تكون شمعة الاختبار. يرجع التفاصيل أو None.
+    levels = (التاريخ، القمة، القاع) لليوم السابق لو محسوبة من فريم ثاني (فريم الساعة)."""
+    lv = levels or prev_day_levels(c)
     if not lv:
         return None
     prev_d, pdh, pdl = lv
@@ -3330,7 +3349,7 @@ def _pdr_option_line(t, r):
     put = r["side"] == "high"
     c = r.get("option")
     if not c:
-        return f"📄 العقد: ما لقيت عقد {'بوت' if put else 'كول'} دلتاه فوق {PDR_OPT_MIN_DELTA:.4f}\n"
+        return r.get("option_none") or f"📄 العقد: ما لقيت عقد {'بوت' if put else 'كول'} دلتاه فوق {PDR_OPT_MIN_DELTA:.4f}\n"
     exp, k, delta, bid, ask, sym, iv, gamma, src = c
     px = ""
     if ask:
@@ -3342,7 +3361,7 @@ def _pdr_option_line(t, r):
                    f"— خسارة ~{st[1]:.0f}% = {(mid - st[0]) * 100:.0f}$ للعقد")
     return (f"📄 العقد: {'بوت 🔴' if put else 'كول 🟢'} ${t} — انتهاء {exp:%Y-%m-%d} "
             f"({(exp - pd.Timestamp.now(tz=NY).date()).days} يوم)\n"
-            f"السترايك: {k:g} | الدلتا: {delta:.4f}{px}\n"
+            f"السترايك: {k:g} | الدلتا: {delta:.4f}{r.get('option_extra', '')}{px}\n"
             f"الرمز: {sym} | المصدر: {src}\n")
 
 
@@ -3352,7 +3371,7 @@ def _pdr_message(t, r):
     color = "خضراء 🟢" if r["close"] > r["open"] else "حمراء 🔴"
     lvl = r["level"]
     if r["side"] == "high":
-        head = "🔻 سحب سيولة مقاومة اليوم السابق + إعادة اختبار — فريم 15 دقيقة"
+        head = f"🔻 سحب سيولة مقاومة اليوم السابق + إعادة اختبار — {r.get('frame', 'فريم 15 دقيقة')}"
         lvl_line = f"المقاومة (قمة أمس {r['prev_d']}): {lvl:.2f}"
         sweep = (f"السحب: ذيل طلع لـ {r['sweep_ext']:.2f} (+{(r['sweep_ext'] / lvl - 1) * 100:.2f}%) "
                  f"وقفل تحتها — {t_sw:%m-%d %H:%M}")
@@ -3361,7 +3380,7 @@ def _pdr_message(t, r):
                 f"| الشمعة {color} — {t_rt:%m-%d %H:%M}")
         stop = f"🛑 وقف الخسارة: {r['stop']:.2f} (فوق أعلى سعر بشمعة الاختبار)"
     else:
-        head = "💧 سحب سيولة دعم اليوم السابق + إعادة اختبار — فريم 15 دقيقة"
+        head = f"💧 سحب سيولة دعم اليوم السابق + إعادة اختبار — {r.get('frame', 'فريم 15 دقيقة')}"
         lvl_line = f"الدعم (قاع أمس {r['prev_d']}): {lvl:.2f}"
         sweep = (f"السحب: ذيل نزل لـ {r['sweep_ext']:.2f} (-{(1 - r['sweep_ext'] / lvl) * 100:.2f}%) "
                  f"وقفل فوقه — {t_sw:%m-%d %H:%M}")
@@ -3422,6 +3441,136 @@ def scan_pd_retest(symbols, sent):
     free_memory()
     if hits:
         log(f"[{datetime.now():%H:%M}] سحب اليوم السابق + اختبار (15 دقيقة): {hits} تنبيه")
+
+
+def _pdr1h_option_rows(t, put, spot, d1, d2):
+    """كل العقود بين التاريخين: (انتهاء، سترايك، دلتا، bid، ask، رمز، IV، جاما، حجم التداول، المصدر)."""
+    import re
+    rows = []
+    if ALPACA_KEY and ALPACA_SECRET:
+        try:
+            token = None
+            for _ in range(10):
+                p = {"feed": "indicative", "type": "put" if put else "call", "limit": 1000,
+                     "expiration_date_gte": d1.isoformat(), "expiration_date_lte": d2.isoformat()}
+                if token:
+                    p["page_token"] = token
+                _alpaca_wait()
+                js = _mom_get(f"/v1beta1/options/snapshots/{t}", p)
+                for sym, sn in (js.get("snapshots") or {}).items():
+                    m = re.match(r"^(.+?)(\d{6})([CP])(\d{8})$", sym)
+                    if not m:
+                        continue
+                    exp = datetime.strptime(m.group(2), "%y%m%d").date()
+                    k = int(m.group(4)) / 1000
+                    q, g = sn.get("latestQuote") or {}, sn.get("greeks") or {}
+                    iv = sn.get("impliedVolatility")
+                    delta = g.get("delta")
+                    if delta is None:
+                        delta = _bs_delta(spot, k, _opt_years(exp), iv, put)
+                    vol = (sn.get("dailyBar") or {}).get("v") or 0
+                    rows.append((exp, k, delta, q.get("bp"), q.get("ap"), sym, iv, g.get("gamma"), vol, "Alpaca"))
+                token = js.get("next_page_token")
+                if not token:
+                    break
+        except Exception as e:
+            log(f"عقد الساعة: {t}: Alpaca: {e}")
+    if not rows:
+        try:
+            import yfinance as yf
+            with _YF_LOCK:
+                tk = yf.Ticker(t)
+                exps = [e for e in (tk.options or []) if d1 <= pd.Timestamp(e).date() <= d2]
+            for e in sorted(exps)[:4]:
+                with _YF_LOCK:
+                    ch = tk.option_chain(e)
+                df = ch.puts if put else ch.calls
+                exp = pd.Timestamp(e).date()
+                yrs = _opt_years(exp)
+                for x in df.itertuples():
+                    iv = float(x.impliedVolatility or 0)
+                    vol = 0 if pd.isna(x.volume) else int(x.volume)
+                    rows.append((exp, float(x.strike), _bs_delta(spot, float(x.strike), yrs, iv, put),
+                                 float(x.bid or 0), float(x.ask or 0), x.contractSymbol, iv, None, vol,
+                                 "Yahoo (دلتا محسوبة)"))
+        except Exception as e:
+            log(f"عقد الساعة: {t}: Yahoo: {e}")
+    return rows
+
+
+def pdr1h_pick_option(t, r):
+    """عقد كول (أو بوت) بشروط (1ن-2): سعر العقد 100$-300$، IV 30%-80%، الدلتا فوق 0.13،
+    حجم التداول فوق 500، والمدة 7 أيام وفوق. أقرب انتهاء، وفيه الأرخص اللي يحقق الشروط.
+    يرجع (العقد بنفس شكل pdr_pick_option، الحجم) أو (None، None)."""
+    put = r["side"] == "high"
+    today = pd.Timestamp.now(tz=NY).date()
+    d1, d2 = today + timedelta(days=PDR1H_OPT_MIN_DTE), today + timedelta(days=PDR1H_OPT_MAX_DTE)
+    ok = []
+    for x in _pdr1h_option_rows(t, put, r["close"], d1, d2):
+        exp, k, delta, bid, ask, sym, iv, gamma, vol, src = x
+        if delta is None or abs(delta) <= PDR1H_OPT_MIN_DELTA:
+            continue
+        if not iv or not (PDR1H_OPT_MIN_IV <= iv <= PDR1H_OPT_MAX_IV):
+            continue
+        if (vol or 0) <= PDR1H_OPT_MIN_VOLUME or not ask:
+            continue
+        mid = (bid + ask) / 2 if bid else ask
+        if not (PDR1H_OPT_MIN_COST <= mid * 100 <= PDR1H_OPT_MAX_COST):
+            continue
+        ok.append(x)
+    if not ok:
+        return None, None
+    exp = min(x[0] for x in ok)                                    # أقرب انتهاء
+    best = min((x for x in ok if x[0] == exp), key=lambda x: abs(x[2]))   # الأرخص (أقل دلتا) اللي يحقق الشروط
+    return best[:8] + (best[9],), best[8]
+
+
+def scan_pd_retest_1h(symbols, sent):
+    """(1ن-2) سحب سيولة دعم اليوم السابق + إعادة اختبار على فريم ساعة → تنبيه كول."""
+    now = pd.Timestamp.now(tz=NY)
+    hits = 0
+    week_lv = {}
+    if PDR_TARGETS:
+        try:
+            week_lv = _pwl_supports(symbols, now.date())
+        except Exception as e:
+            log("أهداف سحب الساعة: ما قدرت أجيب مستويات الأسبوع السابق:", e)
+    for t, df in download_batches(symbols, 100, period="5d", interval=f"{GAP_BASE_MIN}m",
+                                  prepost=True):
+        try:
+            df = to_ny(df)[OHLC]
+            if df.empty:
+                continue
+            # قمة وقاع أمس من شموع الربع ساعة (أدق)، والسحب والاختبار على شموع الساعة
+            lv = prev_day_levels(to_frame(df, 15, False))
+            if not lv:
+                continue
+            c = only_closed(to_frame(df, 60, session=(9 * 60 + 30, 16 * 60)), df.index.max(), now)
+            r = check_pd_retest(c, "low", levels=lv)
+            if not r or (now - pd.Timestamp(r["end"])).total_seconds() / 60 > PDR1H_MAX_ALERT_DELAY_MIN:
+                continue
+            key = f"{t}-pdr1h-low-{pd.Timestamp(r['start']):%Y%m%d}"   # مرة باليوم لكل سهم
+            if key in sent:
+                continue
+            sent.add(key)
+            _append_line(GAP_SENT_FILE, key)
+            hits += 1
+            r["frame"] = "فريم ساعة"
+            r["targets"] = pdr_targets(r, week_lv.get(t))
+            if PDR_OPTION:
+                opt, vol = pdr1h_pick_option(t, r)
+                r["option"] = opt
+                if opt:
+                    r["option_extra"] = f" | IV: {(opt[6] or 0) * 100:.0f}% | حجم التداول: {int(vol):,}"
+                r["option_none"] = (f"📄 العقد: ما لقيت كول بالشروط (سعره {PDR1H_OPT_MIN_COST}$-{PDR1H_OPT_MAX_COST}$، "
+                                    f"IV {PDR1H_OPT_MIN_IV:.0%}-{PDR1H_OPT_MAX_IV:.0%}، دلتا فوق {PDR1H_OPT_MIN_DELTA:.4f}، "
+                                    f"حجم فوق {PDR1H_OPT_MIN_VOLUME}، {PDR1H_OPT_MIN_DTE} أيام وفوق)\n")
+            send_telegram(_pdr_message(t, r), kind="sweep")
+        except Exception as e:
+            log(f"سحب دعم أمس (ساعة): {t}: خطأ - {e}")
+    free_memory()
+    if hits:
+        log(f"[{datetime.now():%H:%M}] سحب دعم اليوم السابق + اختبار (ساعة): {hits} تنبيه")
 
 
 def pdr_self_test():
@@ -4674,6 +4823,7 @@ def main():
         pdl_day = None
     pwl_last = 0.0
     pdr_last = 0.0
+    pdr1h_last = 0.0
     gap_tickers, gap_day, gap_last = [], None, None
     gap15_tickers = []
     gap1d_day = None
@@ -4853,6 +5003,9 @@ def main():
         if ENABLE_PDR_15M and (once or us_market_open()) and time.time() - pdr_last >= PDR_EVERY_MIN * 60:
             scan_pd_retest(list(WATCH_SYMBOLS), gap_sent)
             pdr_last = time.time()
+        if ENABLE_PDR_1H_CALL and (once or us_market_open()) and time.time() - pdr1h_last >= PDR1H_EVERY_MIN * 60:
+            scan_pd_retest_1h(list(WATCH_SYMBOLS), gap_sent)
+            pdr1h_last = time.time()
 
         # (2) ماسح السيولة - وقت السوق الرسمي، كل 5 دقايق
         if ENABLE_FLOW and (regular_session_open() or once) \
