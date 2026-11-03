@@ -367,7 +367,7 @@ BZ_UNIVERSE_EVERY_MIN = 60       # كل كم دقيقة يحدث قائمة ال
 BZ_SHORT_DAYS = 15               # كم يوم من حجم الشورت يكتب في التنبيه
 BZ_STATE_FILE = os.path.join(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "."), "borrow_state.json")   # يُحفظ في /data عشان ما يضيع مع كل رفع
 # تنبيه نزول الأسهم المتاحة للشورت أكثر من 90% (يروح لقروب/قسم ثاني)
-ENABLE_BZ_DROP = True            # True = شغال | False = مطفي
+ENABLE_BZ_DROP = False           # True = شغال | False = مطفي
 BZ_DROP_PCT = 90                 # نسبة النزول عن أعلى رقم خلال الفترة
 BZ_DROP_DAYS = 30                # الفترة: آخر شهر
 BZ_DROP_MIN_BASE = 1_000         # يتجاهل الأسهم اللي أعلى متاح لها خلال الشهر أقل من كذا
@@ -431,6 +431,12 @@ PDR_MAX_ALERT_DELAY_MIN = 30     # ما ينبه على شمعة قفلت من �
 PDR_REGULAR_ONLY = True          # True = السحب والاختبار وقت السوق الرسمي بس (9:30 - 4 نيويورك)
 PDR_TARGETS = True               # يكتب الأهداف: كول = قمة أمس ثم قمة الأسبوع السابق | بوت = قاع أمس ثم قاع الأسبوع السابق
 PDR_TARGET_MIN_PCT = 0.003       # الهدف اللي أقرب من 0.3% عن سعر الدخول يتخطاه للي بعده
+# اختيار العقد: أقرب انتهاء، والسترايك = أول سترايك دلتاه فوق PDR_OPT_MIN_DELTA (الأرخص اللي يحقق الشرط)
+PDR_OPTION = True                # True = يكتب العقد المقترح بالتنبيه | False = بدون عقد
+PDR_OPT_MIN_DELTA = 0.15         # الدلتا (بالقيمة المطلقة) لازم تكون فوق 0.1500
+PDR_OPT_MIN_DTE = 1              # أقل أيام للانتهاء (0 = يسمح بعقد ينتهي نفس اليوم)
+PDR_OPT_MAX_DTE = 45             # أبعد انتهاء يدوّر فيه (لو السهم ما عنده عقود أسبوعية)
+PDR_OPT_RATE = 0.04              # الفائدة لحساب الدلتا لو المصدر ما أعطاها
 
 # ---- (4ب) تجزئة عكسية + شورت صفر (أسهم البني ستوك) ----
 ENABLE_RSPLIT_SHORT = True             # شغال
@@ -2923,6 +2929,112 @@ def pdr_targets(r, week_lv=None):
     return out[:2]
 
 
+def _bs_delta(spot, strike, years, iv, put):
+    """دلتا بلاك شولز (لو المصدر ما أعطى الدلتا)."""
+    if not (spot and strike and years > 0 and iv and iv > 0.01):
+        return None
+    d1 = (math.log(spot / strike) + (PDR_OPT_RATE + iv * iv / 2) * years) / (iv * math.sqrt(years))
+    n = 0.5 * (1 + math.erf(d1 / math.sqrt(2)))
+    return n - 1 if put else n
+
+
+def _opt_years(exp):
+    end = pd.Timestamp(exp).tz_localize(NY) + pd.Timedelta(hours=16)
+    return max((end - pd.Timestamp.now(tz=NY)).total_seconds(), 60) / (365 * 24 * 3600)
+
+
+def _pick_contract(rows):
+    """rows = [(انتهاء, سترايك, دلتا, bid, ask, رمز)] لنفس الانتهاء.
+    يرجع العقد اللي دلتاه فوق الحد وأقرب له (أول سترايك يحقق الشرط)."""
+    ok = [x for x in rows if x[2] is not None and abs(x[2]) > PDR_OPT_MIN_DELTA]
+    quoted = [x for x in ok if (x[4] or 0) > 0]
+    ok = quoted or ok
+    return min(ok, key=lambda x: abs(x[2])) if ok else None
+
+
+def _pdr_option_alpaca(t, put, spot, d1, d2):
+    import re
+    if not (ALPACA_KEY and ALPACA_SECRET):
+        return None
+    rows, token = [], None
+    for _ in range(10):
+        p = {"feed": "indicative", "type": "put" if put else "call", "limit": 1000,
+             "expiration_date_gte": d1.isoformat(), "expiration_date_lte": d2.isoformat()}
+        if token:
+            p["page_token"] = token
+        _alpaca_wait()
+        js = _mom_get(f"/v1beta1/options/snapshots/{t}", p)
+        for sym, s in (js.get("snapshots") or {}).items():
+            m = re.match(r"^(.+?)(\d{6})([CP])(\d{8})$", sym)
+            if not m:
+                continue
+            exp = datetime.strptime(m.group(2), "%y%m%d").date()
+            k = int(m.group(4)) / 1000
+            q = s.get("latestQuote") or {}
+            delta = (s.get("greeks") or {}).get("delta")
+            if delta is None:
+                delta = _bs_delta(spot, k, _opt_years(exp), s.get("impliedVolatility"), put)
+            rows.append((exp, k, delta, q.get("bp"), q.get("ap"), sym))
+        token = js.get("next_page_token")
+        if not token:
+            break
+    for exp in sorted({x[0] for x in rows}):              # أقرب انتهاء فيه عقد يحقق الشرط
+        c = _pick_contract([x for x in rows if x[0] == exp])
+        if c:
+            return c + ("Alpaca",)
+    return None
+
+
+def _pdr_option_yahoo(t, put, spot, d1, d2):
+    import yfinance as yf
+    tk = yf.Ticker(t)
+    exps = [e for e in (tk.options or []) if d1 <= pd.Timestamp(e).date() <= d2]
+    for e in sorted(exps)[:3]:
+        ch = tk.option_chain(e)
+        df = ch.puts if put else ch.calls
+        exp = pd.Timestamp(e).date()
+        yrs = _opt_years(exp)
+        rows = [(exp, float(x.strike), _bs_delta(spot, float(x.strike), yrs, float(x.impliedVolatility or 0), put),
+                 float(x.bid or 0), float(x.ask or 0), x.contractSymbol) for x in df.itertuples()]
+        c = _pick_contract(rows)
+        if c:
+            return c + ("Yahoo (دلتا محسوبة)",)
+    return None
+
+
+def pdr_pick_option(t, r):
+    """عقد مقترح للتنبيه: بوت لسحب المقاومة، كول لسحب الدعم."""
+    put = r["side"] == "high"
+    today = pd.Timestamp.now(tz=NY).date()
+    d1, d2 = today + timedelta(days=PDR_OPT_MIN_DTE), today + timedelta(days=PDR_OPT_MAX_DTE)
+    for fn in (_pdr_option_alpaca, _pdr_option_yahoo):
+        try:
+            c = fn(t, put, r["close"], d1, d2)
+            if c:
+                return c
+        except Exception as e:
+            log(f"عقد إعادة الاختبار: {t}: {fn.__name__}: {e}")
+    return None
+
+
+def _pdr_option_line(t, r):
+    if not PDR_OPTION:
+        return ""
+    put = r["side"] == "high"
+    c = r.get("option")
+    if not c:
+        return f"📄 العقد: ما لقيت عقد {'بوت' if put else 'كول'} دلتاه فوق {PDR_OPT_MIN_DELTA:.4f}\n"
+    exp, k, delta, bid, ask, sym, src = c
+    px = ""
+    if ask:
+        mid = (bid + ask) / 2 if bid else ask
+        px = f"\nBid/Ask: {bid or 0:.2f} / {ask:.2f} (الوسط ~{mid:.2f}$ = {mid * 100:.0f}$ للعقد)"
+    return (f"📄 العقد: {'بوت 🔴' if put else 'كول 🟢'} ${t} — انتهاء {exp:%Y-%m-%d} "
+            f"({(exp - pd.Timestamp.now(tz=NY).date()).days} يوم)\n"
+            f"السترايك: {k:g} | الدلتا: {delta:.4f}{px}\n"
+            f"الرمز: {sym} | المصدر: {src}\n")
+
+
 def _pdr_message(t, r):
     loc = lambda x: pd.Timestamp(x).tz_convert(LOCAL_TZ)
     t_sw, t_rt = loc(r["sweep_start"]), loc(r["start"])
@@ -2960,6 +3072,7 @@ def _pdr_message(t, r):
     return (f"{head}\nالسهم: ${t}\n{lvl_line}\n{sweep}\n{away}\n{test}\n"
             f"سعر الإغلاق: {r['close']:.2f}\n{trend}\n{stop}\n"
             f"المسافة للوقف: {r['risk']:.2f}$ ({r['risk_pct']:.2f}%)\n{tg}"
+            f"{_pdr_option_line(t, r)}"
             f"(الأوقات بتوقيتك)")
 
 
@@ -2990,6 +3103,8 @@ def scan_pd_retest(symbols, sent):
                 _append_line(GAP_SENT_FILE, key)
                 hits += 1
                 r["targets"] = pdr_targets(r, week_lv.get(t))
+                if PDR_OPTION:
+                    r["option"] = pdr_pick_option(t, r)
                 send_telegram(_pdr_message(t, r), kind="sweep")
         except Exception as e:
             log(f"سحب اليوم السابق + اختبار: {t}: خطأ - {e}")
@@ -3050,6 +3165,14 @@ def pdr_self_test():
     r2["targets"] = pdr_targets(r2, {"low": (140.0, None), "high": (300 - 145.10, None)})
     assert [round(x[1], 2) for x in r2["targets"]] == [154.0, 154.9], r2["targets"]
     print("✅ الأهداف: بوت = قاع أمس ثم قاع الأسبوع | كول = قمة أمس ثم قمة الأسبوع")
+    exp = pd.Timestamp.now(tz=NY).date() + timedelta(days=3)
+    chain = [(exp, k, _bs_delta(149.7, k, _opt_years(exp), 0.45, True), 0.5, 0.55, f"SPCX-P{k}")
+             for k in range(130, 155)]
+    c = _pick_contract(chain)
+    assert c and abs(c[2]) > PDR_OPT_MIN_DELTA, c
+    assert all(abs(x[2]) <= PDR_OPT_MIN_DELTA or abs(x[2]) >= abs(c[2]) for x in chain)
+    print(f"✅ العقد: سترايك {c[1]} دلتا {c[2]:.4f} (أول سترايك دلتاه فوق {PDR_OPT_MIN_DELTA})")
+    r["option"] = c + ("تجربة",)
     print()
     print(_pdr_message("SPCX", r))
     print()
