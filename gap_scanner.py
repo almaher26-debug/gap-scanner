@@ -260,6 +260,13 @@ WATCH_SYMBOLS = [
     "CALX", "DT", "DOCN", "ET", "APO", "BNTX", "HL", "AMGN", "OUST", "CAR",
     "MCD", "CVS", "CAI", "CAH", "IOVA", "EOSE", "CORZ", "CI", "TAP", "UUUU",
     "CHTR", "WULF", "ELAN", "HUM", "DTI", "BLMN", "PAA", "UAA",
+    # ناسداك 100 - الأسهم اللي ما كانت بالقائمة (أُضيفت 3 نوفمبر 2026)
+    "WMT", "COST", "NFLX", "TMUS", "PEP", "ASML", "TXN", "LIN", "ISRG", "INTU",
+    "ADI", "NXPI", "MPWR", "TER", "CDNS", "WDAY", "TTWO", "EA", "PDD", "MELI",
+    "DASH", "PYPL", "GILD", "VRTX", "REGN", "IDXX", "DXCM", "GEHC", "ALNY", "SBUX",
+    "ROST", "MDLZ", "MNST", "KDP", "KHC", "CCEP", "CMCSA", "WBD", "HON", "HONA",
+    "CSX", "PCAR", "ODFL", "FAST", "CPRT", "ROP", "AXON", "ADP", "PAYX", "TRI",
+    "CEG", "AEP", "XEL", "EXC", "FANG", "BKR", "FER",
 ]
 WATCH_MIN_SIZE = 0.16            # حجم الجاب (فريم الساعة): أكثر من 15 سنت (يعني 16 سنت وفوق) | 0 = بدون شرط
 WATCH4H_MIN_SIZE = 0.10          # حجم الجاب (فريم 4 ساعات): 10 سنت وفوق
@@ -467,7 +474,7 @@ RSPLIT_WORKERS = 3
 RSPLIT_SENT_FILE = "rsplit_sent.txt"     # تنبيهات الشورت صفر
 RSPLIT_NEW_FILE = "rsplit_new.txt"       # التجزئات الجديدة اللي انرسلت
 RSPLIT_WEEKLY = True                 # قائمة كل جمعة بتجزئات آخر 7 أيام
-RSPLIT_MONTHLY = True                # قائمة أول كل شهر بتجزئات الشهر اللي راح
+RSPLIT_MONTHLY = False               # قائمة أول كل شهر بتجزئات الشهر اللي راح: False = مطفية | True = ترجع
 RSPLIT_STATE_FILE = "rsplit_state.txt"   # يحفظ آخر يوم/أسبوع/شهر انرسل عشان ما يتكرر
 
 # ---- (6) كشف خوارزميات التنفيذ (أوامر متكررة بنفس الحجم) - من ألباكا ----
@@ -525,7 +532,7 @@ ALGO_BIG_MIN_MARKET_CAP = 1_000_000_000   # مليار دولار وفوق
 ALGO_BIG_MIN_STREAK = 300                 # أقل عدد صفقات متتالية بنفس الحجم
 ALGO_BIG_MAX_SIZE = 1                     # حجم الصفقة: سهم واحد بس (1، 1، 1...)
 ALGO_BIG_MAX_GAP_SEC = 5                  # لو مر أكثر من كذا ثانية بين صفقتين، تنقطع السلسلة
-ALGO_BIG_MAX_SYMBOLS = int(os.environ.get("ALGO_BIG_MAX_SYMBOLS", "200"))   # الأنشط أول
+ALGO_BIG_MAX_SYMBOLS = int(os.environ.get("ALGO_BIG_MAX_SYMBOLS", "250"))   # الأنشط أول
 ALGO_BIG_SYMBOLS = ([s.strip().upper() for s in os.environ.get("ALGO_BIG_SYMBOLS", "").split(",")
                      if s.strip()] or list(WATCH_SYMBOLS))   # الافتراضي: قائمة المراقبة
 ALGO_BIG_REGULAR_ONLY = True              # وقت السوق الرسمي بس (9:30 - 4 نيويورك)
@@ -566,13 +573,20 @@ SR_SYMBOLS = [
     "AXON", "COIN", "T", "CRWD", "SWKS", "MU", "HOOD", "TSLA", "META", "AAPL",
     "SPCX", "HPE", "VST", "MET", "INTC", "AMD", "AVGO", "PLTR", "NFLX", "ORCL",
     "TSM", "CRM", "NOW", "ADBE", "MRVL", "CRDO", "SNDK",
+    # + ناسداك 100 الناقصة
+    "WMT", "COST", "TMUS", "PEP", "ASML", "TXN", "LIN", "ISRG", "INTU",
+    "ADI", "NXPI", "MPWR", "TER", "CDNS", "WDAY", "TTWO", "EA", "PDD", "MELI",
+    "DASH", "PYPL", "GILD", "VRTX", "REGN", "IDXX", "DXCM", "GEHC", "ALNY", "SBUX",
+    "ROST", "MDLZ", "MNST", "KDP", "KHC", "CCEP", "CMCSA", "WBD", "HON", "HONA",
+    "CSX", "PCAR", "ODFL", "FAST", "CPRT", "ROP", "ADP", "PAYX", "TRI",
+    "CEG", "AEP", "XEL", "EXC", "FANG", "BKR", "FER",
 ]
 SR_TOLERANCE = 0.005             # يعتبره لمس لو السعر وصل لنص بالمية من المستوى
 SR_EVERY_MIN = 5                 # كل كم دقيقة يفحص
 SR_SENT_FILE = "sr_sent.txt"     # عشان ما يعيد نفس التنبيه لو البوت أعاد التشغيل
 
 # ---- المحتوى التعليمي ----
-ADD_EDUCATION = True             # يضيف شرح تعليمي قصير للنموذج تحت كل تنبيه
+ADD_EDUCATION = False            # الشرح التعليمي تحت التنبيهات: False = محذوف (رسائل أقصر) | True = يرجع
 ADD_DISCLAIMER = True            # يضيف سطر إخلاء المسؤولية تحت كل رسالة
 DISCLAIMER = "⚠️ محتوى تعليمي فقط، وليس توصية بيع أو شراء."
 
@@ -757,7 +771,108 @@ EDUCATION = {
 }
 
 
-def send_telegram(text, kind=None):
+# ================== القطاع (تقنية، صحة، ...) - يتكتب تحت اسم السهم بالتنبيه ==================
+SHOW_SECTOR = True               # True = يكتب قطاع السهم بتنبيهات الانفيرجن والخوارزميات وإعادة الاختبار
+SECTOR_FILE = os.path.join(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "."), "sectors.txt")
+SECTOR_AR = {
+    "technology": "تقنية 💻", "health care": "صحة 🏥", "healthcare": "صحة 🏥",
+    "finance": "مالية 🏦", "financial services": "مالية 🏦", "financials": "مالية 🏦",
+    "consumer discretionary": "استهلاكية كمالية 🛍️", "consumer cyclical": "استهلاكية كمالية 🛍️",
+    "consumer staples": "استهلاكية أساسية 🛒", "consumer defensive": "استهلاكية أساسية 🛒",
+    "industrials": "صناعة 🏭", "energy": "طاقة ⛽", "utilities": "مرافق ⚡",
+    "real estate": "عقار 🏢", "basic materials": "مواد أساسية ⛏️",
+    "telecommunications": "اتصالات 📡", "communication services": "اتصالات وإعلام 📡",
+}
+SECTOR_ETFS = {"SPY", "QQQ", "SMH", "IWM", "DIA", "SOXX", "XLK", "XLF", "XLE", "XLV", "ARKK", "TQQQ", "SQQQ", "SOXL"}
+_SECTORS = {}
+_SECTORS_DAY = None
+_SECTOR_LOCK = threading.Lock()
+
+
+def _load_sectors():
+    """خريطة السهم ← القطاع من سكرينر ناسداك (ناسداك + نيويورك + أمكس)، مرة باليوم، ومحفوظة بملف."""
+    global _SECTORS_DAY
+    today = datetime.now().date()
+    if _SECTORS_DAY == today and _SECTORS:
+        return
+    if not _SECTORS:                                  # من الملف أول (لو الموقع ما رد)
+        try:
+            with open(SECTOR_FILE, encoding="utf-8") as f:
+                for line in f:
+                    k, _, v = line.rstrip("\n").partition("\t")
+                    if k and v:
+                        _SECTORS[k] = v
+        except FileNotFoundError:
+            pass
+    got = {}
+    for ex in ("nasdaq", "nyse", "amex"):
+        url = ("https://api.nasdaq.com/api/screener/stocks"
+               f"?tableonly=true&limit=10000&exchange={ex}&download=true")
+        try:
+            r = requests.get(url, headers={**HEADERS, "Accept": "application/json"}, timeout=30)
+            data = r.json().get("data") or {}
+            for row in data.get("rows") or (data.get("table") or {}).get("rows") or []:
+                sym = str(row.get("symbol", "")).strip().upper()
+                sec = str(row.get("sector") or "").strip()
+                if sym and sec:
+                    got[sym] = sec
+        except Exception as e:
+            log(f"القطاعات: ما قدرت أجيب {ex.upper()}: {e}")
+    if len(got) > 1000:
+        _SECTORS.update(got)
+        try:
+            with open(SECTOR_FILE, "w", encoding="utf-8") as f:
+                f.writelines(f"{k}\t{v}\n" for k, v in _SECTORS.items())
+        except Exception:
+            pass
+        log(f"القطاعات: {len(got)} سهم")
+    _SECTORS_DAY = today
+
+
+def sector_of(sym):
+    """قطاع السهم بالعربي، أو "" لو ما عرفناه."""
+    sym = (sym or "").upper()
+    if sym in SECTOR_ETFS:
+        return "صندوق مؤشرات 📊"
+    with _SECTOR_LOCK:
+        try:
+            _load_sectors()
+        except Exception as e:
+            log(f"القطاعات: خطأ - {e}")
+        sec = _SECTORS.get(sym) or _SECTORS.get(sym.replace(".", "/"))
+        if not sec:                                   # احتياطي: ياهو (مرة لكل سهم)
+            try:
+                import yfinance as yf
+                with _YF_LOCK:
+                    sec = (yf.Ticker(sym).info or {}).get("sector") or ""
+            except Exception:
+                sec = ""
+            _SECTORS[sym] = sec or "-"
+    if not sec or sec == "-":
+        return ""
+    return SECTOR_AR.get(sec.lower(), sec)
+
+
+def _with_sector(text, sym):
+    """يضيف سطر "القطاع" تحت السطر اللي فيه اسم السهم."""
+    sec = sector_of(sym)
+    if not sec:
+        return text
+    lines = text.split("\n")
+    tag = f"${sym}"
+    for i, ln in enumerate(lines):
+        if tag in ln:
+            lines.insert(i + 1, f"القطاع: {sec}")
+            return "\n".join(lines)
+    return f"القطاع: {sec}\n" + text
+
+
+def send_telegram(text, kind=None, sym=None):
+    if sym and SHOW_SECTOR:
+        try:
+            text = _with_sector(text, sym)
+        except Exception as e:
+            log(f"القطاع: {sym}: {e}")
     text = "للمتابعة\n" + text
     if ADD_EDUCATION and kind in EDUCATION:
         text += "\n\n" + EDUCATION[kind]
@@ -1413,7 +1528,7 @@ def scan_gap(tickers, already_sent, frames=None, min_price=None, max_price=None,
                 already_sent.add(key)
                 _append_line(GAP_SENT_FILE, key)
                 hits += 1
-                send_telegram((msg_fn or _gap_message)(t, res, label), kind="gap")
+                send_telegram((msg_fn or _gap_message)(t, res, label), kind="gap", sym=t)
         except Exception as e:
             log(f"{t}: خطأ - {e}")
     free_memory()
@@ -1445,7 +1560,7 @@ def scan_gap_daily(tickers, already_sent):
             already_sent.add(key)
             _append_line(GAP_SENT_FILE, key)
             hits += 1
-            send_telegram(_gap_message(t, res, "فريم يومي"), kind="gap")
+            send_telegram(_gap_message(t, res, "فريم يومي"), kind="gap", sym=t)
         except Exception as e:
             log(f"{t}: خطأ جاب يومي - {e}")
     free_memory()
@@ -1657,7 +1772,7 @@ def mkt4h_scan(tickers, sent):
                 log(f"{MKT4H_LABEL}: {t} طلع فيه النموذج بس ما فيه عقد مطابق، ما أرسلته")
                 continue
             hits += 1
-            send_telegram(mkt4h_message(t, res, ct), kind="gap")
+            send_telegram(mkt4h_message(t, res, ct), kind="gap", sym=t)
         except Exception as e:
             log(f"{t}: خطأ {MKT4H_LABEL} - {e}")
     free_memory()
@@ -3435,7 +3550,7 @@ def scan_pd_retest(symbols, sent):
                 r["targets"] = pdr_targets(r, week_lv.get(t))
                 if PDR_OPTION:
                     r["option"] = pdr_pick_option(t, r)
-                send_telegram(_pdr_message(t, r), kind="sweep")
+                send_telegram(_pdr_message(t, r), kind="sweep", sym=t)
         except Exception as e:
             log(f"سحب اليوم السابق + اختبار: {t}: خطأ - {e}")
     free_memory()
@@ -3565,7 +3680,7 @@ def scan_pd_retest_1h(symbols, sent):
                 r["option_none"] = (f"📄 العقد: ما لقيت كول بالشروط (سعره {PDR1H_OPT_MIN_COST}$-{PDR1H_OPT_MAX_COST}$، "
                                     f"IV {PDR1H_OPT_MIN_IV:.0%}-{PDR1H_OPT_MAX_IV:.0%}، دلتا فوق {PDR1H_OPT_MIN_DELTA:.4f}، "
                                     f"حجم فوق {PDR1H_OPT_MIN_VOLUME}، {PDR1H_OPT_MIN_DTE} أيام وفوق)\n")
-            send_telegram(_pdr_message(t, r), kind="sweep")
+            send_telegram(_pdr_message(t, r), kind="sweep", sym=t)
         except Exception as e:
             log(f"سحب دعم أمس (ساعة): {t}: خطأ - {e}")
     free_memory()
@@ -4134,7 +4249,7 @@ def algo_loop(name, section, get_universe, fixed=None, exclude=None, once_hours=
                                 once_last[sym] = now_utc
                                 _append_line(ALGO_ONCE_FILE, f"{once_tag}|{sym}|{now_utc.isoformat()}")
                             cap, note = caps.get(sym, (None, ""))
-                            send_telegram(_algo_message(sym, res, cap, section, note), kind="algo")
+                            send_telegram(_algo_message(sym, res, cap, section, note), kind="algo", sym=sym)
         except Exception as e:
             log(f"{name}: خطأ -", e)
         time.sleep(ALGO_POLL_SEC)
@@ -4328,11 +4443,11 @@ def algo_big_loop():
                             else:
                                 res = None                 # مخلوطة بيع وشراء: ما ينبه
                             if res:
-                                send_telegram(_big_message(sym, res, caps.get(sym)), kind="algo_big")
+                                send_telegram(_big_message(sym, res, caps.get(sym)), kind="algo_big", sym=sym)
                         if ice is not None:
                             res = ice.add(sym, tr)
                             if res:
-                                send_telegram(_ice_message(sym, res, caps.get(sym)), kind="ice")
+                                send_telegram(_ice_message(sym, res, caps.get(sym)), kind="ice", sym=sym)
                 del got
         except Exception as e:
             log("خوارزميات الكبيرة: خطأ -", e)
