@@ -775,7 +775,7 @@ EDUCATION = {
 
 
 # ================== القطاع (تقنية، صحة، ...) - يتكتب تحت اسم السهم بالتنبيه ==================
-SHOW_SECTOR = True               # True = يكتب قطاع السهم بتنبيهات الانفيرجن والخوارزميات وإعادة الاختبار
+SHOW_SECTOR = True               # True = يكتب قطاع السهم بكل الأقسام
 SECTOR_FILE = os.path.join(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "."), "sectors.txt")
 SECTOR_AR = {
     "technology": "تقنية 💻", "health care": "صحة 🏥", "healthcare": "صحة 🏥",
@@ -868,6 +868,17 @@ def _with_sector(text, sym):
             lines.insert(i + 1, f"القطاع: {sec}")
             return "\n".join(lines)
     return f"القطاع: {sec}\n" + text
+
+
+def sec_tag(sym, sep=" | "):
+    """للرسايل اللي فيها أكثر من سهم: يرجع " | القطاع" يتحط بآخر سطر السهم."""
+    if not SHOW_SECTOR:
+        return ""
+    try:
+        sec = sector_of(sym)
+    except Exception:
+        sec = ""
+    return f"{sep}{sec}" if sec else ""
 
 
 def send_telegram(text, kind=None, sym=None):
@@ -1904,7 +1915,7 @@ def scan_sweep_daily(tickers, already_sent):
             already_sent.add(key)
             _append_line(GAP_SENT_FILE, key)
             hits += 1
-            send_telegram(_sweep_message(t, r), kind="sweep")
+            send_telegram(_sweep_message(t, r), kind="sweep", sym=t)
         except Exception as e:
             log(f"{t}: خطأ سحب السيولة - {e}")
     free_memory()
@@ -1952,7 +1963,7 @@ def scan_sweep_weekly(tickers, already_sent):
             already_sent.add(key)
             _append_line(GAP_SENT_FILE, key)
             hits += 1
-            send_telegram(_sweep_message(t, r, "فريم أسبوعي", "الأسبوع", "أسبوع"), kind="sweep")
+            send_telegram(_sweep_message(t, r, "فريم أسبوعي", "الأسبوع", "أسبوع"), kind="sweep", sym=t)
         except Exception as e:
             log(f"{t}: خطأ سحب السيولة الأسبوعي - {e}")
     free_memory()
@@ -2148,7 +2159,7 @@ def scan_flow(tickers, already_sent):
         already_sent.add(key)
         _append_line(FLOW_SENT_FILE, key)
         hits += 1
-        send_telegram(_flow_message(t, r, flt), kind="flow")
+        send_telegram(_flow_message(t, r, flt), kind="flow", sym=t)
     free_memory()
     log(f"[{datetime.now():%H:%M}] ماسح السيولة: خلص الفحص - {len(cands)} مرشح، {hits} تنبيه جديد")
 
@@ -2266,7 +2277,7 @@ def _scan_patterns_frame(tickers):
                 day = pd.Timestamp(df.index[i]).strftime("%Y-%m-%d")
                 chg = (last / neck - 1) * 100
                 row = (day, f"• ${t} | الاختراق: {day} | خط العنق: {neck:.2f} | "
-                            f"السعر الحين: {last:.2f} ({chg:+.1f}%)")
+                            f"السعر الحين: {last:.2f} ({chg:+.1f}%)" + sec_tag(t))
                 found.setdefault(name, {})
                 if t not in found[name] or day > found[name][t][0]:
                     found[name][t] = row
@@ -2381,7 +2392,7 @@ def scan_short(tickers, already_sent):
                 f"السعر: {price}\n"
                 f"الشورت الحالي: 0\n"
                 f"الشورت الشهر اللي قبله: {prior_txt}\n"
-                f"تاريخ البيانات: {d}", kind="short"
+                f"تاريخ البيانات: {d}", kind="short", sym=t
             )
     free_memory()
     log(f"[{datetime.now():%H:%M}] الشورت: خلص الفحص - {hits} تنبيه جديد")
@@ -2553,11 +2564,16 @@ def _bz_save_state(state):
         log(f"الشورت صفر: ما قدرت أحفظ الحالة: {e}")
 
 
-def bz_send_drop(text):
+def bz_send_drop(text, sym=None):
     """يرسل تنبيه النزول للقسم الثاني بس. لو ما انحط رقمه يرسل للقروب الأساسي."""
     if not BZ_DROP_CHAT:
-        send_telegram(text)
+        send_telegram(text, sym=sym)
         return
+    if sym and SHOW_SECTOR:
+        try:
+            text = _with_sector(text, sym)
+        except Exception as e:
+            log(f"القطاع: {sym}: {e}")
     text = "للمتابعة\n" + text
     if ADD_DISCLAIMER:
         text += "\n\n" + DISCLAIMER
@@ -2614,7 +2630,7 @@ def bz_check(state, first_run, universe):
                     f"الوقت: {now:%Y-%m-%d %H:%M} (توقيتك)\n"
                     f"المصدر: Interactive Brokers (نفس ChartExchange)\n"
                     f"{bz_cx_link(sym)}\n\n"
-                    f"{bz_short_history_txt(sym)}")
+                    f"{bz_short_history_txt(sym)}", sym=sym)
                 alerts += 1
                 time.sleep(0.5)
             elif ENABLE_BZ_BACK and prev == 0 and avail > 0:
@@ -2623,7 +2639,7 @@ def bz_check(state, first_run, universe):
                     f"الأسهم المتاحة للشورت: {avail:,}\n"
                     f"رسوم الاستلاف: {fee_txt(info['fee'])}\n"
                     f"الوقت: {now:%Y-%m-%d %H:%M} (توقيتك)\n"
-                    f"{bz_cx_link(sym)}")
+                    f"{bz_cx_link(sym)}", sym=sym)
                 alerts += 1
                 time.sleep(0.5)
         if ENABLE_BZ_DROP:
@@ -2654,7 +2670,7 @@ def bz_check(state, first_run, universe):
                     f"رسوم الاستلاف: {fee_txt(info['fee'])}\n"
                     f"الوقت: {now:%Y-%m-%d %H:%M} (توقيتك)\n"
                     f"المصدر: Interactive Brokers\n\n"
-                    f"{bz_short_history_txt(sym)}")
+                    f"{bz_short_history_txt(sym)}", sym=sym)
                 alerts += 1
                 time.sleep(0.5)
         state[sym] = avail
@@ -2864,7 +2880,7 @@ def mom_run_forever():
                 for sym, snap in snaps.items():
                     msg = mom_check(sym, snap, frac)
                     if msg:
-                        send_telegram(msg)
+                        send_telegram(msg, sym=sym)
                         hits += 1
                         time.sleep(0.5)
                 if hits:
@@ -2935,7 +2951,7 @@ def scan_tuewed(tickers):
         lv = " / ".join(f"{lvl:.2f}" for _, lvl in r["supports"])
         vr = f" | فوليوم {r['vol_rel']:.1f}x" if r["vol_rel"] else ""
         lines.append(f"${t}: دعم {lv} | قاع الثلاثاء {r['tue_low']:.2f} | "
-                     f"إغلاق الأربعاء {r['wed_close']:.2f}{vr}")
+                     f"إغلاق الأربعاء {r['wed_close']:.2f}{vr}" + sec_tag(t))
     for i in range(0, len(lines), 30):
         send_telegram(head + f"({len(rows)} سهم)\n\n" + "\n".join(lines[i:i + 30]), kind="sweep")
         time.sleep(3)
@@ -3003,7 +3019,7 @@ def scan_pdl_sweep(symbols, today):
     else:
         lines = [f"${t}: قاع أمس {r['y_low']:.2f} | أقل سعر {r['low']:.2f} (-{r['depth']:.1f}%) | "
                  f"إغلاق {r['close']:.2f}" + (f" | فوليوم {r['vol_rel']:.1f}x" if r["vol_rel"] else "")
-                 for t, r in rows]
+                 + sec_tag(t) for t, r in rows]
         send_telegram(head + f"({len(rows)} سهم)\n\n" + "\n".join(lines), kind="sweep")
     if ENABLE_PDH_SWEEP:
         rows_h.sort(key=lambda x: -(x[1]["vol_rel"] or 0))
@@ -3015,7 +3031,7 @@ def scan_pdl_sweep(symbols, today):
         else:
             lines = [f"${t}: قمة أمس {r['y_high']:.2f} | أعلى سعر {r['high']:.2f} (+{r['depth']:.1f}%) | "
                      f"إغلاق {r['close']:.2f}" + (f" | فوليوم {r['vol_rel']:.1f}x" if r["vol_rel"] else "")
-                     for t, r in rows_h]
+                     + sec_tag(t) for t, r in rows_h]
             send_telegram(head_h + f"({len(rows_h)} سهم)\n\n" + "\n".join(lines), kind="sweep")
     free_memory()
     log(f"[{datetime.now():%H:%M}] سحب قاع أمس: {len(rows)} سهم | سحب قمة أمس: {len(rows_h)} سهم")
@@ -3164,7 +3180,7 @@ def scan_pwl_1h(symbols, sent):
                 sent.add(key)
                 _append_line(GAP_SENT_FILE, key)
                 hits += 1
-                send_telegram(_pwl_message(t, side, lvl, lvl_day, r), kind="sweep")
+                send_telegram(_pwl_message(t, side, lvl, lvl_day, r), kind="sweep", sym=t)
         except Exception as e:
             log(f"سحب دعم/مقاومة الأسبوع السابق: {t}: خطأ - {e}")
     free_memory()
@@ -3803,7 +3819,7 @@ def load_rsplits(tickers):
 
 def _rsplit_line(t, info, split):
     d, ratio, opn = split
-    return (f"• ${t}\n"
+    return (f"• ${t}{sec_tag(t)}\n"
             f"   تاريخ التجزئة: {d:%Y-%m-%d} | النسبة: كل {1 / ratio:g} أسهم = سهم\n"
             f"   افتتح بعد التجزئة على: {opn:.2f}$ | السعر الحين: {info['last']:.2f}$\n"
             f"   عدد التجزئات العكسية آخر سنة: {len(info['splits'])}")
@@ -3866,7 +3882,7 @@ def scan_rsplit_short(new, already_sent):
                     f"السعر: {price or info['last']:.2f}$\n"
                     f"التجزئة العكسية: {sdate:%Y-%m-%d} (كل {1 / ratio:g} أسهم = سهم)\n"
                     f"الشورت الحالي: 0\n"
-                    f"تاريخ بيانات الشورت: {d}", kind="rsplit"
+                    f"تاريخ بيانات الشورت: {d}", kind="rsplit", sym=t
                 )
     log(f"[{datetime.now():%H:%M}] التجزئة العكسية + شورت صفر: {hits} تنبيه جديد")
 
@@ -4696,7 +4712,7 @@ def _news_message(item, cat, syms, prices, caps=None):
     lines = []
     for s in syms:
         px = prices.get(s)
-        lines.append(f"${s} ({px:.2f}$)" if px else f"${s}")
+        lines.append((f"${s} ({px:.2f}$)" if px else f"${s}") + sec_tag(s, " - "))
     return (f"📰 خبر إيجابي — {cat}\n"
             f"السهم: {' | '.join(lines)}\n"
             + (f"القيمة السوقية: {' | '.join(_cap_txt(caps[s]) for s in syms if s in caps)}\n"
@@ -4872,7 +4888,7 @@ def scan_sr(tickers, already_sent):
                 already_sent.add(key)
                 _append_line(SR_SENT_FILE, key)
                 hits += 1
-                send_telegram(_sr_message(t, fr, kind, level, lv), kind="sr")
+                send_telegram(_sr_message(t, fr, kind, level, lv), kind="sr", sym=t)
         except Exception as e:
             log(f"{t}: خطأ دعم/مقاومة - {e}")
     free_memory()
