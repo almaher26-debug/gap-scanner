@@ -454,15 +454,18 @@ PDR_OPT_STOP = True              # يحسب وقف خسارة العقد = سع�
 ENABLE_PDR_1H_CALL = True        # True = شغال | False = مطفي
 PDR1H_EVERY_MIN = 5              # كل كم دقيقة يفحص وقت السوق
 PDR1H_MAX_ALERT_DELAY_MIN = 30   # ما ينبه على شمعة قفلت من أكثر من كذا دقيقة
-# شروط العقد:
+# شروط العقد — موحدة لكل الأقسام اللي تختار عقد (سحب أمس ساعة/15 دقيقة، و4 ساعات الجلسة العادية):
 PDR1H_OPT_MIN_COST = 100         # سعر العقد (للعقد كامل = السعر × 100): من 100$
 PDR1H_OPT_MAX_COST = 300         # إلى 300$
 PDR1H_OPT_MIN_IV = 0.30          # IV من 30%
 PDR1H_OPT_MAX_IV = 0.80          # إلى 80%
 PDR1H_OPT_MIN_DELTA = 0.13       # الدلتا فوق 0.1300
 PDR1H_OPT_MIN_VOLUME = 500       # حجم التداول في العقد فوق 500
+PDR1H_OPT_MIN_OI = 1000          # العقود المفتوحة (الكمية غير إغلاق المركز): 1000 وفوق
 PDR1H_OPT_MIN_DTE = 7            # المدة: 7 أيام وفوق
 PDR1H_OPT_MAX_DTE = 45           # أبعد انتهاء يدوّر فيه
+PDR1H_OPT_MAX_SPREAD = 0.20      # فرق البيد والأسك ما يتعدى 20% من سعر العقد (أوسع = عقد ميت)
+# شروط العقد فوق تنطبق بعد على عقد سحب مقاومة أمس (15 دقيقة - بوت)
 
 # ---- (4ب) تجزئة عكسية + شورت صفر (أسهم البني ستوك) ----
 ENABLE_RSPLIT_SHORT = True             # قوائم التجزئة العكسية شغالة
@@ -1575,8 +1578,7 @@ def scan_gap_daily(tickers, already_sent):
 # الأسهم: كل أسهم ناسداك، قيمة سوقية 2 مليار وفوق، وسعر 30$ وفوق
 # النموذج: نفس شروط فريم 4 ساعات (متراصة، بدون فراغ، الثانية تغطي الجاب، الرابعة بلون الاتجاه)
 #   🟢 صعودي: الرابعة خضراء وتقفل فوق أعلى الجاب | 🔴 هبوطي: الرابعة حمراء وتقفل تحت أسفل الجاب
-# العقد: Call للصعودي، Put للهبوطي. حجم التداول فوق 500، و IV من 30% إلى 70%
-#   أقرب تاريخ انتهاء فيه عقد مطابق، وأقرب سترايك لسعر السهم
+# العقد: Call للصعودي، Put للهبوطي — بالشروط الموحدة (PDR1H_OPT_*)، مع وقف خسارة للعقد
 # وقف الخسارة: الطرف الثاني من الجاب (قاع الجاب للصعودي، قمته للهبوطي) - على إغلاق شمعة 4 ساعات
 # الأهداف: 1R و 2R و 3R من سعر الإغلاق (R = المسافة بين الدخول ووقف الخسارة)
 ENABLE_MKT4H = True              # True = شغال | False = مطفي
@@ -1584,10 +1586,7 @@ MKT4H_MIN_MARKET_CAP = 2_000_000_000
 MKT4H_MIN_PRICE = 30
 MKT4H_MIN_GAP = 0.30             # أقل حجم للجاب (دولار)
 MKT4H_REQUIRE_CONTRACT = True    # True = ما يرسل إلا لو لقى عقد مطابق
-MKT4H_OPT_MIN_VOLUME = 500       # حجم التداول في العقد: فوق 500
-MKT4H_OPT_MIN_IV = 0.30          # IV من 30%
-MKT4H_OPT_MAX_IV = 0.70          # إلى 70%
-MKT4H_OPT_MAX_EXPIRIES = 6       # كم تاريخ انتهاء يفحص (من الأقرب)
+# شروط العقد: نفس الشروط الموحدة لكل الأقسام (PDR1H_OPT_* فوق)
 MKT4H_TARGETS_R = (1, 2, 3)      # الأهداف بمضاعفات المخاطرة
 MKT4H_SCAN_AFTER_MIN = 3         # يفحص بعد إغلاق الشمعة بكم دقيقة
 MKT4H_SCAN_WINDOW_MIN = 30
@@ -1680,43 +1679,24 @@ def mkt4h_check(c, now):
             "candles": c.iloc[-4:]}
 
 
-def mkt4h_contract(t, side, price):
-    """Call للصعودي، Put للهبوطي: حجم تداول فوق الحد و IV بين الحدين.
-    أقرب تاريخ انتهاء (بعد اليوم) فيه عقد مطابق، وأقرب سترايك لسعر السهم."""
-    import yfinance as yf
-    try:
-        with _YF_LOCK:
-            tk = yf.Ticker(t)
-            expiries = list(tk.options or [])
-    except Exception as e:
-        log(f"{t}: ما قدرت أجيب العقود - {e}")
+def mkt4h_contract(t, side, price, stop=None):
+    """Call للصعودي، Put للهبوطي — بنفس شروط العقد الموحدة (PDR1H_OPT_*):
+    سعره 100$-300$، IV 30%-80%، دلتا فوق 0.13، حجم فوق 500، عقود مفتوحة 1000+، 7 أيام وفوق، فرق بيد/أسك 20% وأقل."""
+    r = {"side": "low" if side == "bull" else "high", "close": price}
+    opt, vo = pdr1h_pick_option(t, r)
+    if not opt:
         return None
-    today = pd.Timestamp.now(tz=NY).date()
-    for exp in [e for e in expiries if pd.Timestamp(e).date() > today][:MKT4H_OPT_MAX_EXPIRIES]:
-        try:
-            with _YF_LOCK:
-                ch = tk.option_chain(exp)
-        except Exception:
-            continue
-        df = (ch.calls if side == "bull" else ch.puts)
-        if df is None or df.empty:
-            continue
-        df = df.copy()
-        df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0)
-        df["impliedVolatility"] = pd.to_numeric(df["impliedVolatility"], errors="coerce")
-        ok = df[(df["volume"] > MKT4H_OPT_MIN_VOLUME)
-                & df["impliedVolatility"].between(MKT4H_OPT_MIN_IV, MKT4H_OPT_MAX_IV)]
-        if ok.empty:
-            continue
-        row = ok.loc[(ok["strike"] - price).abs().idxmin()]
-        oi = pd.to_numeric(row.get("openInterest"), errors="coerce")
-        return {"type": "Call" if side == "bull" else "Put", "exp": exp,
-                "strike": float(row["strike"]), "volume": int(row["volume"]),
-                "oi": 0 if pd.isna(oi) else int(oi), "iv": float(row["impliedVolatility"]),
-                "last": float(row.get("lastPrice") or 0),
-                "bid": float(row.get("bid") or 0), "ask": float(row.get("ask") or 0)}
-    return None
-
+    exp, k, delta, bid, ask, sym, iv, gamma, src = opt
+    vol, oi = vo
+    ct = {"type": "Call" if side == "bull" else "Put", "exp": f"{exp:%Y-%m-%d}", "strike": float(k),
+          "volume": int(vol or 0), "oi": int(oi or 0), "iv": float(iv or 0), "delta": float(delta),
+          "bid": float(bid or 0), "ask": float(ask or 0), "symbol": sym,
+          "days": (exp - pd.Timestamp.now(tz=NY).date()).days}
+    if stop is not None:
+        st = pdr_option_stop(opt, price, stop)
+        if st:
+            ct["stop"], ct["stop_pct"] = st
+    return ct
 
 def mkt4h_levels(res):
     """وقف الخسارة = الطرف الثاني من الجاب. الأهداف = 1R و 2R و 3R من سعر الإغلاق."""
@@ -1743,9 +1723,15 @@ def mkt4h_message(t, res, ct):
         lines.append(f"✅ الهدف {r}: {tg:.2f}  ({sign}{abs(tg - entry):.2f}$ | {r}R)")
     msg += "\n".join(lines)
     if ct:
-        msg += (f"\n\n📄 العقد: {ct['type']} {ct['strike']:g} - ينتهي {ct['exp']}\n"
-                f"حجم التداول: {ct['volume']:,} | العقود المفتوحة: {ct['oi']:,} | IV: {ct['iv'] * 100:.0f}%\n"
-                f"آخر سعر: {ct['last']:.2f} | بيد {ct['bid']:.2f} / أسك {ct['ask']:.2f}")
+        mid = (ct["bid"] + ct["ask"]) / 2
+        msg += (f"\n\n📄 العقد: {ct['type']} {ct['strike']:g} - ينتهي {ct['exp']} ({ct['days']} يوم)\n"
+                f"الدلتا: {ct['delta']:.4f} | IV: {ct['iv'] * 100:.0f}%\n"
+                f"حجم التداول: {ct['volume']:,} | العقود المفتوحة: {ct['oi']:,}\n"
+                f"Bid/Ask: {ct['bid']:.2f} / {ct['ask']:.2f} (الوسط ~{mid:.2f}$ = {mid * 100:.0f}$ للعقد)")
+        if ct.get("stop") is not None:
+            msg += (f"\n🛑 وقف خسارة العقد: {ct['stop']:.2f} — خسارة ~{ct['stop_pct']:.0f}% "
+                    f"= {(mid - ct['stop']) * 100:.0f}$ للعقد")
+        msg += f"\nالرمز: {ct['symbol']}"
     else:
         msg += "\n\n📄 العقد: ما لقيت عقد مطابق للشروط"
     return msg
@@ -1767,7 +1753,7 @@ def mkt4h_scan(tickers, sent):
                 continue
             sent.add(key)
             _append_line(MKT4H_SENT_FILE, key)
-            ct = mkt4h_contract(t, res["side"], float(res["price"]))
+            ct = mkt4h_contract(t, res["side"], float(res["price"]), mkt4h_levels(res)[1])
             if MKT4H_REQUIRE_CONTRACT and not ct:
                 log(f"{MKT4H_LABEL}: {t} طلع فيه النموذج بس ما فيه عقد مطابق، ما أرسلته")
                 continue
@@ -1781,8 +1767,7 @@ def mkt4h_scan(tickers, sent):
 
 def mkt4h_run_forever(once=False):
     """يفحص بعد إغلاق كل شمعة 4 ساعات في الجلسة العادية (1:30 و 4:00 نيويورك)."""
-    log(f"{MKT4H_LABEL}: شغال - الجاب {MKT4H_MIN_GAP}$+، العقد حجم {MKT4H_OPT_MIN_VOLUME}+ "
-        f"و IV {MKT4H_OPT_MIN_IV:.0%}-{MKT4H_OPT_MAX_IV:.0%}")
+    log(f"{MKT4H_LABEL}: شغال - الجاب {MKT4H_MIN_GAP}$+، العقد بالشروط الموحدة")
     sent = _load_set(MKT4H_SENT_FILE)
     tickers, day, done = [], None, set()
     while True:
@@ -1830,8 +1815,9 @@ def mkt4h_self_test():
     if not res:
         print("ما فيه تنبيه")
         return
-    ct = {"type": "Call", "exp": "2026-11-07", "strike": 105.0, "volume": 1234, "oi": 5000,
-          "iv": 0.42, "last": 1.85, "bid": 1.80, "ask": 1.90}
+    ct = {"type": "Call", "exp": "2026-11-13", "strike": 106.0, "volume": 1234, "oi": 5000, "days": 10,
+          "iv": 0.42, "delta": 0.31, "bid": 1.80, "ask": 1.90, "symbol": "TEST261113C00106000",
+          "stop": 1.25, "stop_pct": 32.4}
     print(mkt4h_message("TEST", res, ct))
 
 
@@ -3549,7 +3535,7 @@ def scan_pd_retest(symbols, sent):
                 hits += 1
                 r["targets"] = pdr_targets(r, week_lv.get(t))
                 if PDR_OPTION:
-                    r["option"] = pdr_pick_option(t, r)
+                    pdr_attach_option(t, r)          # نفس شروط عقد الساعة
                 send_telegram(_pdr_message(t, r), kind="sweep", sym=t)
         except Exception as e:
             log(f"سحب اليوم السابق + اختبار: {t}: خطأ - {e}")
@@ -3605,12 +3591,35 @@ def _pdr1h_option_rows(t, put, spot, d1, d2):
                 for x in df.itertuples():
                     iv = float(x.impliedVolatility or 0)
                     vol = 0 if pd.isna(x.volume) else int(x.volume)
+                    _OI_CACHE[x.contractSymbol] = 0 if pd.isna(x.openInterest) else int(x.openInterest)
                     rows.append((exp, float(x.strike), _bs_delta(spot, float(x.strike), yrs, iv, put),
                                  float(x.bid or 0), float(x.ask or 0), x.contractSymbol, iv, None, vol,
                                  "Yahoo (دلتا محسوبة)"))
         except Exception as e:
             log(f"عقد الساعة: {t}: Yahoo: {e}")
     return rows
+
+
+_OI_CACHE = {}
+
+
+def _opt_open_interest(t, x):
+    """العقود المفتوحة للعقد. ألباكا ما يعطيها بالسناب شوت، فنجيبها من ياهو (سلسلة الانتهاء مرة وحدة)."""
+    sym = x[5]
+    if sym in _OI_CACHE:
+        return _OI_CACHE[sym]
+    try:
+        import yfinance as yf
+        with _YF_LOCK:
+            ch = yf.Ticker(t).option_chain(x[0].isoformat())
+        for df in (ch.calls, ch.puts):
+            for y in df.itertuples():
+                _OI_CACHE[y.contractSymbol] = 0 if pd.isna(y.openInterest) else int(y.openInterest)
+    except Exception as e:
+        log(f"العقود المفتوحة: {t} {x[0]}: {e}")
+    if len(_OI_CACHE) > 50000:
+        _OI_CACHE.clear()
+    return _OI_CACHE.setdefault(sym, None)
 
 
 def pdr1h_pick_option(t, r):
@@ -3629,15 +3638,34 @@ def pdr1h_pick_option(t, r):
             continue
         if (vol or 0) <= PDR1H_OPT_MIN_VOLUME or not ask:
             continue
-        mid = (bid + ask) / 2 if bid else ask
+        if not bid:
+            continue
+        mid = (bid + ask) / 2
         if not (PDR1H_OPT_MIN_COST <= mid * 100 <= PDR1H_OPT_MAX_COST):
             continue
+        if (ask - bid) / mid > PDR1H_OPT_MAX_SPREAD:
+            continue
         ok.append(x)
+    ok = [x for x in ok if (_opt_open_interest(t, x) or 0) >= PDR1H_OPT_MIN_OI]   # العقود المفتوحة
     if not ok:
         return None, None
     exp = min(x[0] for x in ok)                                    # أقرب انتهاء
     best = min((x for x in ok if x[0] == exp), key=lambda x: abs(x[2]))   # الأرخص (أقل دلتا) اللي يحقق الشروط
-    return best[:8] + (best[9],), best[8]
+    return best[:8] + (best[9],), (best[8], _opt_open_interest(t, best))
+
+
+def pdr_attach_option(t, r):
+    """يختار العقد بالشروط (سعر، IV، دلتا، حجم، مدة، فرق البيد/أسك) ويحطه في التنبيه."""
+    put = r["side"] == "high"
+    opt, vo = pdr1h_pick_option(t, r)
+    r["option"] = opt
+    if opt:
+        vol, oi = vo
+        r["option_extra"] = (f" | IV: {(opt[6] or 0) * 100:.0f}%\n"
+                             f"حجم التداول: {int(vol):,} | العقود المفتوحة: {int(oi or 0):,}")
+    r["option_none"] = (f"📄 العقد: ما لقيت {'بوت' if put else 'كول'} بالشروط (سعره {PDR1H_OPT_MIN_COST}$-{PDR1H_OPT_MAX_COST}$، "
+                        f"IV {PDR1H_OPT_MIN_IV:.0%}-{PDR1H_OPT_MAX_IV:.0%}، دلتا فوق {PDR1H_OPT_MIN_DELTA:.2f}، "
+                        f"حجم فوق {PDR1H_OPT_MIN_VOLUME}، عقود مفتوحة {PDR1H_OPT_MIN_OI}+، {PDR1H_OPT_MIN_DTE} أيام وفوق، فرق بيد/أسك {PDR1H_OPT_MAX_SPREAD:.0%} وأقل)\n")
 
 
 def scan_pd_retest_1h(symbols, sent):
@@ -3673,13 +3701,7 @@ def scan_pd_retest_1h(symbols, sent):
             r["frame"] = "فريم ساعة"
             r["targets"] = pdr_targets(r, week_lv.get(t))
             if PDR_OPTION:
-                opt, vol = pdr1h_pick_option(t, r)
-                r["option"] = opt
-                if opt:
-                    r["option_extra"] = f" | IV: {(opt[6] or 0) * 100:.0f}% | حجم التداول: {int(vol):,}"
-                r["option_none"] = (f"📄 العقد: ما لقيت كول بالشروط (سعره {PDR1H_OPT_MIN_COST}$-{PDR1H_OPT_MAX_COST}$، "
-                                    f"IV {PDR1H_OPT_MIN_IV:.0%}-{PDR1H_OPT_MAX_IV:.0%}، دلتا فوق {PDR1H_OPT_MIN_DELTA:.4f}، "
-                                    f"حجم فوق {PDR1H_OPT_MIN_VOLUME}، {PDR1H_OPT_MIN_DTE} أيام وفوق)\n")
+                pdr_attach_option(t, r)
             send_telegram(_pdr_message(t, r), kind="sweep", sym=t)
         except Exception as e:
             log(f"سحب دعم أمس (ساعة): {t}: خطأ - {e}")
