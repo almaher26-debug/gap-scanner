@@ -354,7 +354,7 @@ SHORT_SENT_FILE = "short_sent.txt"   # عشان ما يعيد نفس التنب�
 SHORT_EVERY_MIN = 60             # يعيد فحص الشورت كل كم دقيقة (عشان يمسك البيانات الجديدة أول ما تنزل)
 
 # ---- (4ج) الشورت صفر اللحظي: الأسهم المتاحة للشورت وصلت صفر (Interactive Brokers كل 15 دقيقة) ----
-ENABLE_BORROW_ZERO = True        # True = شغال | False = مطفي
+ENABLE_BORROW_ZERO = False       # True = شغال | False = مطفي
 ENABLE_BZ_BACK = False           # رسالة "✅ رجع الشورت متاح" — False = ملغية | True = ترجع
 BZ_MIN_PRICE = 1                 # أقل سعر: الأسهم فوق دولار بس (0 = بدون حد)
 BZ_MAX_PRICE = 7                 # أعلى سعر (0 = بدون حد)
@@ -440,7 +440,8 @@ PDR_OPT_RATE = 0.04              # الفائدة لحساب الدلتا لو �
 PDR_OPT_STOP = True              # يحسب وقف خسارة العقد = سعر العقد المتوقع لو السهم وصل وقف السهم
 
 # ---- (4ب) تجزئة عكسية + شورت صفر (أسهم البني ستوك) ----
-ENABLE_RSPLIT_SHORT = True             # شغال
+ENABLE_RSPLIT_SHORT = True             # قوائم التجزئة العكسية شغالة
+ENABLE_RSPLIT_SHORT_ZERO = False       # تنبيه الشورت صفر بعد التجزئة: False = مطفي | True = يرجع
 RSPLIT_MAX_PRICE = 5                 # الشورت صفر: يفحصه لأسهم البني ستوك (5$ أو أقل) من اللي سوت تجزئة
 RSPLIT_NEW_DAYS = 4                  # "جديد" = تجزئة صارت خلال آخر كذا يوم (يغطي الويكند) وما انرسلت قبل
 RSPLIT_CHECK_AFTER_NY = 10           # الفحص اليومي بعد الساعة 10 الصبح نيويورك (عشان سعر الافتتاح يكون موجود)
@@ -3344,7 +3345,8 @@ def rsplit_job(state, new_sent, short_sent, force=False):
     log(f"التجزئة العكسية: {len(data)} سهم سوى تجزئة عكسية آخر سنة")
 
     new = scan_rsplit_new(data, new_sent)
-    scan_rsplit_short(new, short_sent)
+    if ENABLE_RSPLIT_SHORT_ZERO:
+        scan_rsplit_short(new, short_sent)
 
     week = f"{today.isocalendar()[0]}-W{today.isocalendar()[1]:02d}"
     if RSPLIT_WEEKLY and now.weekday() == 4 and state.get("week") != week:     # الجمعة
