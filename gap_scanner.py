@@ -1380,7 +1380,9 @@ def scan_gap(tickers, already_sent, frames=None, min_price=None, max_price=None,
                     ov = False
                 res = checker(only_closed(to_frame(df, minutes, ov), last_bar, now))
                 # فريم 4 ساعات له حده الخاص (GAP4H_MIN_SIZE) ينفحص داخل check_pattern_4h
-                need = GAP_1H_MIN_SIZE if tag == "1h" else min_size
+                need = (GAP_1H_MIN_SIZE if tag == "1h"
+                        else GAP4H_MIN_SIZE if tag == "4h"     # فريم 4 ساعات 24 ساعة: 30 سنت وفوق
+                        else min_size)
                 if len(fr) > 5 and fr[5] is not None:
                     need = fr[5]                # حد خاص بالفريم (القسم 1م)
                 if not res or round(res["gap_top"] - res["gap_bottom"], 2) < need:
@@ -1430,6 +1432,274 @@ def scan_gap_daily(tickers, already_sent):
             log(f"{t}: خطأ جاب يومي - {e}")
     free_memory()
     log(f"[{datetime.now():%H:%M}] الجاب اليومي: خلص الفحص - {hits} تنبيه جديد")
+
+
+# ================== (1ن) IFVG فريم 4 ساعات - الجلسة العادية بس (9:30 - 4 العصر نيويورك) ==================
+# سكنر مستقل بخيط لحاله، ما يأثر على فريم 4 ساعات الـ 24 ساعة.
+# الشموع نفس تريدنج فيو بدون Extended Hours:
+#   الشمعة 1: 9:30 - 1:30 نيويورك (تقفل 9:30 بالليل بتوقيتك)
+#   الشمعة 2: 1:30 - 4:00 نيويورك (تقفل 12:00 بالليل بتوقيتك)
+# الأسهم: كل أسهم ناسداك، قيمة سوقية 2 مليار وفوق، وسعر 30$ وفوق
+# النموذج: نفس شروط فريم 4 ساعات (متراصة، بدون فراغ، الثانية تغطي الجاب، الرابعة بلون الاتجاه)
+#   🟢 صعودي: الرابعة خضراء وتقفل فوق أعلى الجاب | 🔴 هبوطي: الرابعة حمراء وتقفل تحت أسفل الجاب
+# العقد: Call للصعودي، Put للهبوطي. حجم التداول فوق 500، و IV من 30% إلى 70%
+#   أقرب تاريخ انتهاء فيه عقد مطابق، وأقرب سترايك لسعر السهم
+# وقف الخسارة: الطرف الثاني من الجاب (قاع الجاب للصعودي، قمته للهبوطي) - على إغلاق شمعة 4 ساعات
+# الأهداف: 1R و 2R و 3R من سعر الإغلاق (R = المسافة بين الدخول ووقف الخسارة)
+ENABLE_MKT4H = True              # True = شغال | False = مطفي
+MKT4H_MIN_MARKET_CAP = 2_000_000_000
+MKT4H_MIN_PRICE = 30
+MKT4H_MIN_GAP = 0.30             # أقل حجم للجاب (دولار)
+MKT4H_REQUIRE_CONTRACT = True    # True = ما يرسل إلا لو لقى عقد مطابق
+MKT4H_OPT_MIN_VOLUME = 500       # حجم التداول في العقد: فوق 500
+MKT4H_OPT_MIN_IV = 0.30          # IV من 30%
+MKT4H_OPT_MAX_IV = 0.70          # إلى 70%
+MKT4H_OPT_MAX_EXPIRIES = 6       # كم تاريخ انتهاء يفحص (من الأقرب)
+MKT4H_TARGETS_R = (1, 2, 3)      # الأهداف بمضاعفات المخاطرة
+MKT4H_SCAN_AFTER_MIN = 3         # يفحص بعد إغلاق الشمعة بكم دقيقة
+MKT4H_SCAN_WINDOW_MIN = 30
+MKT4H_LABEL = "فريم 4 ساعات (الجلسة العادية)"
+MKT4H_SENT_FILE = os.path.join(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "."), "mkt4h_sent.txt")
+_MKT4H_START, _MKT4H_SPLIT, _MKT4H_END = 9 * 60 + 30, 13 * 60 + 30, 16 * 60
+
+
+def mkt4h_universe():
+    """أسهم ناسداك: قيمة سوقية 2 مليار وفوق، وسعر 30$ وفوق."""
+    url = ("https://api.nasdaq.com/api/screener/stocks"
+           "?tableonly=true&limit=10000&exchange=nasdaq&download=true")
+    for _ in range(3):
+        try:
+            r = requests.get(url, headers={**HEADERS, "Accept": "application/json"}, timeout=30)
+            data = r.json().get("data") or {}
+            rows = data.get("rows") or (data.get("table") or {}).get("rows") or []
+            out = set()
+            for row in rows:
+                sym = str(row.get("symbol", "")).strip().upper()
+                if (sym.isalpha() and len(sym) <= 5
+                        and _to_number(row.get("marketCap")) >= MKT4H_MIN_MARKET_CAP
+                        and _to_number(row.get("lastsale")) >= MKT4H_MIN_PRICE):
+                    out.add(sym)
+            if len(out) > 50:
+                log(f"{MKT4H_LABEL}: {len(out)} سهم ناسداك (2 مليار+، سعر {MKT4H_MIN_PRICE}$+)")
+                return sorted(out)
+        except Exception as e:
+            log(f"{MKT4H_LABEL}: ما قدرت أجيب أسهم ناسداك: {e}")
+        time.sleep(10)
+    return []
+
+
+def mkt4h_candles(df):
+    """شموع النص ساعة (الجلسة العادية) → شموع 4 ساعات: 9:30-1:30 و 1:30-4:00.
+    كل شمعة معها end (وقت الإغلاق) و n (عدد الشموع) و need (المطلوب)."""
+    df = to_ny(df)
+    if df.empty:
+        return df
+    m = df.index.hour * 60 + df.index.minute
+    df = df[(m >= _MKT4H_START) & (m < _MKT4H_END)]
+    if df.empty:
+        return df
+    m = pd.Series(df.index.hour * 60 + df.index.minute, index=df.index)
+    first = m < _MKT4H_SPLIT
+    start = df.index.normalize() + pd.to_timedelta(
+        first.map({True: _MKT4H_START, False: _MKT4H_SPLIT}).values, unit="m")
+    out = df.groupby(start).agg(Open=("Open", "first"), High=("High", "max"),
+                                Low=("Low", "min"), Close=("Close", "last"),
+                                n=("Close", "size"))
+    sm = pd.Series(out.index.hour * 60 + out.index.minute, index=out.index)
+    em = sm.map(lambda s: _MKT4H_SPLIT if s == _MKT4H_START else _MKT4H_END)
+    out["end"] = out.index.normalize() + pd.to_timedelta(em.values, unit="m")
+    out["need"] = ((em - sm) / 30).values
+    return out
+
+
+def mkt4h_check(c, now):
+    """يفحص آخر 4 شموع مقفلة. يرجع التفاصيل لو تحقق النموذج، وإلا None."""
+    if c.empty:
+        return None
+    done = (c["end"] <= now) & ((c["n"] >= c["need"]) | (now >= c["end"] + pd.Timedelta(minutes=15)))
+    c = c[done.values]
+    if len(c) < 4:
+        return None
+    if any(c.iloc[i]["n"] / c.iloc[i]["need"] < 0.9 for i in (-4, -3, -2, -1)):
+        return None                                 # بيانات ناقصة (أو يوم نص دوام)
+    c1, c2, c3, c4 = (c.iloc[i] for i in (-4, -3, -2, -1))
+    for a, b in ((c1, c2), (c2, c3)):               # ما بينها فراغ
+        if b["Low"] > a["High"] or b["High"] < a["Low"]:
+            return None
+    if c1["Low"] > c3["High"]:                      # 🟢 صعودي
+        side, lo, hi = "bull", c3["High"], c1["Low"]
+        ok = (c4["Close"] > hi and c4["Close"] > c4["Open"]
+              and c2["Low"] < c1["Low"] and c3["Low"] < c2["Low"]
+              and c2["High"] < c1["High"] and c3["High"] < c2["High"])
+    elif c1["High"] < c3["Low"]:                    # 🔴 هبوطي
+        side, lo, hi = "bear", c1["High"], c3["Low"]
+        ok = (c4["Close"] < lo and c4["Close"] < c4["Open"]
+              and c2["High"] > c1["High"] and c3["High"] > c2["High"]
+              and c2["Low"] > c1["Low"] and c3["Low"] > c2["Low"])
+    else:
+        return None
+    if not ok or not (c2["High"] >= hi and c2["Low"] <= lo):   # الثانية تغطي الجاب كامل
+        return None
+    if round(hi - lo, 2) < MKT4H_MIN_GAP:
+        return None
+    return {"side": side, "gap_bottom": lo, "gap_top": hi, "price": c4["Close"],
+            "open": c4["Open"], "candle_time": c.index[-1], "end": c4["end"],
+            "candles": c.iloc[-4:]}
+
+
+def mkt4h_contract(t, side, price):
+    """Call للصعودي، Put للهبوطي: حجم تداول فوق الحد و IV بين الحدين.
+    أقرب تاريخ انتهاء (بعد اليوم) فيه عقد مطابق، وأقرب سترايك لسعر السهم."""
+    import yfinance as yf
+    try:
+        with _YF_LOCK:
+            tk = yf.Ticker(t)
+            expiries = list(tk.options or [])
+    except Exception as e:
+        log(f"{t}: ما قدرت أجيب العقود - {e}")
+        return None
+    today = pd.Timestamp.now(tz=NY).date()
+    for exp in [e for e in expiries if pd.Timestamp(e).date() > today][:MKT4H_OPT_MAX_EXPIRIES]:
+        try:
+            with _YF_LOCK:
+                ch = tk.option_chain(exp)
+        except Exception:
+            continue
+        df = (ch.calls if side == "bull" else ch.puts)
+        if df is None or df.empty:
+            continue
+        df = df.copy()
+        df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0)
+        df["impliedVolatility"] = pd.to_numeric(df["impliedVolatility"], errors="coerce")
+        ok = df[(df["volume"] > MKT4H_OPT_MIN_VOLUME)
+                & df["impliedVolatility"].between(MKT4H_OPT_MIN_IV, MKT4H_OPT_MAX_IV)]
+        if ok.empty:
+            continue
+        row = ok.loc[(ok["strike"] - price).abs().idxmin()]
+        oi = pd.to_numeric(row.get("openInterest"), errors="coerce")
+        return {"type": "Call" if side == "bull" else "Put", "exp": exp,
+                "strike": float(row["strike"]), "volume": int(row["volume"]),
+                "oi": 0 if pd.isna(oi) else int(oi), "iv": float(row["impliedVolatility"]),
+                "last": float(row.get("lastPrice") or 0),
+                "bid": float(row.get("bid") or 0), "ask": float(row.get("ask") or 0)}
+    return None
+
+
+def mkt4h_levels(res):
+    """وقف الخسارة = الطرف الثاني من الجاب. الأهداف = 1R و 2R و 3R من سعر الإغلاق."""
+    entry = float(res["price"])
+    if res["side"] == "bull":
+        stop = float(res["gap_bottom"])
+        risk = entry - stop
+        targets = [entry + r * risk for r in MKT4H_TARGETS_R]
+    else:
+        stop = float(res["gap_top"])
+        risk = stop - entry
+        targets = [entry - r * risk for r in MKT4H_TARGETS_R]
+    return entry, stop, risk, targets
+
+
+def mkt4h_message(t, res, ct):
+    msg = _gap_message(t, res, MKT4H_LABEL)
+    entry, stop, risk, targets = mkt4h_levels(res)
+    sign = "+" if res["side"] == "bull" else "-"
+    lines = [f"\n\n🎯 الدخول: {entry:.2f}",
+             f"⛔ وقف الخسارة: {stop:.2f}  (إغلاق شمعة 4 ساعات {'تحت' if res['side'] == 'bull' else 'فوق'} الجاب، "
+             f"المخاطرة {risk:.2f}$ = {risk / entry * 100:.1f}%)"]
+    for r, tg in zip(MKT4H_TARGETS_R, targets):
+        lines.append(f"✅ الهدف {r}: {tg:.2f}  ({sign}{abs(tg - entry):.2f}$ | {r}R)")
+    msg += "\n".join(lines)
+    if ct:
+        msg += (f"\n\n📄 العقد: {ct['type']} {ct['strike']:g} - ينتهي {ct['exp']}\n"
+                f"حجم التداول: {ct['volume']:,} | العقود المفتوحة: {ct['oi']:,} | IV: {ct['iv'] * 100:.0f}%\n"
+                f"آخر سعر: {ct['last']:.2f} | بيد {ct['bid']:.2f} / أسك {ct['ask']:.2f}")
+    else:
+        msg += "\n\n📄 العقد: ما لقيت عقد مطابق للشروط"
+    return msg
+
+
+def mkt4h_scan(tickers, sent):
+    now = pd.Timestamp.now(tz=NY)
+    hits = 0
+    for t, df in download_batches(tickers, 100, period="10d", interval="30m", prepost=False):
+        try:
+            df = df[OHLC]
+            if float(df["Close"].iloc[-1]) < MKT4H_MIN_PRICE:
+                continue
+            res = mkt4h_check(mkt4h_candles(df), now)
+            if not res or (now - res["end"]).total_seconds() / 60 > 60:
+                continue                            # شمعة قديمة، مو إغلاق جديد
+            key = f"{t}-mkt4h-{res['side']}-{res['candle_time']}"
+            if key in sent:
+                continue
+            sent.add(key)
+            _append_line(MKT4H_SENT_FILE, key)
+            ct = mkt4h_contract(t, res["side"], float(res["price"]))
+            if MKT4H_REQUIRE_CONTRACT and not ct:
+                log(f"{MKT4H_LABEL}: {t} طلع فيه النموذج بس ما فيه عقد مطابق، ما أرسلته")
+                continue
+            hits += 1
+            send_telegram(mkt4h_message(t, res, ct), kind="gap")
+        except Exception as e:
+            log(f"{t}: خطأ {MKT4H_LABEL} - {e}")
+    free_memory()
+    log(f"[{datetime.now():%H:%M}] {MKT4H_LABEL}: خلص الفحص - {hits} تنبيه جديد")
+
+
+def mkt4h_run_forever(once=False):
+    """يفحص بعد إغلاق كل شمعة 4 ساعات في الجلسة العادية (1:30 و 4:00 نيويورك)."""
+    log(f"{MKT4H_LABEL}: شغال - الجاب {MKT4H_MIN_GAP}$+، العقد حجم {MKT4H_OPT_MIN_VOLUME}+ "
+        f"و IV {MKT4H_OPT_MIN_IV:.0%}-{MKT4H_OPT_MAX_IV:.0%}")
+    sent = _load_set(MKT4H_SENT_FILE)
+    tickers, day, done = [], None, set()
+    while True:
+        try:
+            now = pd.Timestamp.now(tz=NY)
+            slot = None
+            if now.weekday() < 5:
+                m = now.hour * 60 + now.minute
+                for close in (_MKT4H_SPLIT, _MKT4H_END):
+                    if close + MKT4H_SCAN_AFTER_MIN <= m < close + MKT4H_SCAN_WINDOW_MIN:
+                        slot = now.normalize() + pd.Timedelta(minutes=close)
+            if once or (slot is not None and slot not in done):
+                if day != now.date() or not tickers:
+                    tickers = mkt4h_universe() or tickers
+                    day = now.date()
+                if tickers:
+                    mkt4h_scan(tickers, sent)
+                if slot is not None:
+                    done.add(slot)
+                if once:
+                    return
+        except Exception as e:
+            log(f"{MKT4H_LABEL}: خطأ - {e}")
+        time.sleep(30)
+
+
+def mkt4h_self_test():
+    """يجرب السكنر على شموع مصنوعة (بدون نت): نموذج صعودي على الجلسة العادية."""
+    days = pd.bdate_range("2026-10-26", periods=3)
+    # (فتح، أعلى، أقل، إغلاق) لكل شمعة 4 ساعات: ثلاث متراصة نازلة، الجاب بين قاع الأولى وقمة الثالثة
+    bars4 = [(105, 106, 103, 103.5), (103.5, 104, 100.6, 101), (101, 102, 99, 99.5), (99.5, 104.2, 99.2, 104)]
+    rows, idx = [], []
+    for k, (o, h, l, c) in enumerate(bars4):
+        d = days[k // 2]
+        start = 9 * 60 + 30 if k % 2 == 0 else 13 * 60 + 30
+        n = 8 if k % 2 == 0 else 5
+        for j in range(n):
+            ts = pd.Timestamp(d, tz=NY) + pd.Timedelta(minutes=start + 30 * j)
+            idx.append(ts.tz_convert("UTC"))
+            rows.append((o if j == 0 else (o + c) / 2, h, l, c if j == n - 1 else (o + c) / 2))
+    df = pd.DataFrame(rows, index=pd.DatetimeIndex(idx), columns=OHLC)
+    c = mkt4h_candles(df)
+    print(c[["Open", "High", "Low", "Close", "n", "need", "end"]])
+    res = mkt4h_check(c, c["end"].iloc[-1] + pd.Timedelta(minutes=5))
+    if not res:
+        print("ما فيه تنبيه")
+        return
+    ct = {"type": "Call", "exp": "2026-11-07", "strike": 105.0, "volume": 1234, "oi": 5000,
+          "iv": 0.42, "last": 1.85, "bid": 1.80, "ask": 1.90}
+    print(mkt4h_message("TEST", res, ct))
 
 
 # ================== (1د) سحب سيولة دعمين - يومي ==================
@@ -4365,6 +4635,9 @@ def main():
     if "--pd15test" in sys.argv:
         pd15_self_test()
         return
+    if "--mkt4htest" in sys.argv:
+        mkt4h_self_test()
+        return
     if "--pdrtest" in sys.argv:
         pdr_self_test()
         return
@@ -4375,6 +4648,8 @@ def main():
     if not once:
         start_algo_thread()
         start_news_thread()
+        if ENABLE_MKT4H:         # (1ن) IFVG فريم 4 ساعات - الجلسة العادية بس
+            threading.Thread(target=mkt4h_run_forever, daemon=True, name="mkt4h").start()
         if ENABLE_MOMENTUM:      # سكنر الزخم
             threading.Thread(target=mom_run_forever, daemon=True, name="momentum").start()
         if ENABLE_BORROW_ZERO:   # الشورت صفر اللحظي
