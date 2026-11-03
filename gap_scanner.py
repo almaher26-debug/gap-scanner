@@ -434,9 +434,10 @@ PDR_TARGET_MIN_PCT = 0.003       # الهدف اللي أقرب من 0.3% عن �
 # اختيار العقد: أقرب انتهاء، والسترايك = أول سترايك دلتاه فوق PDR_OPT_MIN_DELTA (الأرخص اللي يحقق الشرط)
 PDR_OPTION = True                # True = يكتب العقد المقترح بالتنبيه | False = بدون عقد
 PDR_OPT_MIN_DELTA = 0.15         # الدلتا (بالقيمة المطلقة) لازم تكون فوق 0.1500
-PDR_OPT_MIN_DTE = 1              # أقل أيام للانتهاء (0 = يسمح بعقد ينتهي نفس اليوم)
+PDR_OPT_MIN_DTE = 7              # أقل أيام للانتهاء: العقد 7 أيام وفوق
 PDR_OPT_MAX_DTE = 45             # أبعد انتهاء يدوّر فيه (لو السهم ما عنده عقود أسبوعية)
 PDR_OPT_RATE = 0.04              # الفائدة لحساب الدلتا لو المصدر ما أعطاها
+PDR_OPT_STOP = True              # يحسب وقف خسارة العقد = سعر العقد المتوقع لو السهم وصل وقف السهم
 
 # ---- (4ب) تجزئة عكسية + شورت صفر (أسهم البني ستوك) ----
 ENABLE_RSPLIT_SHORT = True             # شغال
@@ -2938,6 +2939,38 @@ def _bs_delta(spot, strike, years, iv, put):
     return n - 1 if put else n
 
 
+def _bs_price(spot, strike, years, iv, put):
+    """سعر بلاك شولز للعقد."""
+    if not (spot and strike and years > 0 and iv and iv > 0.01):
+        return None
+    sq = iv * math.sqrt(years)
+    d1 = (math.log(spot / strike) + (PDR_OPT_RATE + iv * iv / 2) * years) / sq
+    d2 = d1 - sq
+    N = lambda x: 0.5 * (1 + math.erf(x / math.sqrt(2)))
+    disc = strike * math.exp(-PDR_OPT_RATE * years)
+    return disc * N(-d2) - spot * N(-d1) if put else spot * N(d1) - disc * N(d2)
+
+
+def pdr_option_stop(c, spot, stop):
+    """وقف خسارة العقد: سعر العقد المتوقع لو السهم وصل وقف السهم.
+    يحسب بلاك شولز بنفس التذبذب الضمني (فرق السعرين يُطرح من سعر العقد الحالي)،
+    ولو ما فيه تذبذب يستخدم الدلتا والجاما. يرجع (الوقف، الخسارة %) أو None."""
+    exp, k, delta, bid, ask, sym, iv, gamma = c[:8]
+    if not ask:
+        return None
+    mid = (bid + ask) / 2 if bid else ask
+    put = delta < 0
+    yrs = _opt_years(exp)
+    p0, p1 = _bs_price(spot, k, yrs, iv, put), _bs_price(stop, k, yrs, iv, put)
+    if p0 is not None and p1 is not None:
+        px = mid + (p1 - p0)
+    else:
+        ds = stop - spot
+        px = mid + delta * ds + 0.5 * (gamma or 0) * ds * ds
+    px = max(round(px, 2), 0.01)
+    return px, (1 - px / mid) * 100
+
+
 def _opt_years(exp):
     end = pd.Timestamp(exp).tz_localize(NY) + pd.Timedelta(hours=16)
     return max((end - pd.Timestamp.now(tz=NY)).total_seconds(), 60) / (365 * 24 * 3600)
@@ -2974,7 +3007,9 @@ def _pdr_option_alpaca(t, put, spot, d1, d2):
             delta = (s.get("greeks") or {}).get("delta")
             if delta is None:
                 delta = _bs_delta(spot, k, _opt_years(exp), s.get("impliedVolatility"), put)
-            rows.append((exp, k, delta, q.get("bp"), q.get("ap"), sym))
+            g = s.get("greeks") or {}
+            rows.append((exp, k, delta, q.get("bp"), q.get("ap"), sym,
+                         s.get("impliedVolatility"), g.get("gamma")))
         token = js.get("next_page_token")
         if not token:
             break
@@ -2995,7 +3030,8 @@ def _pdr_option_yahoo(t, put, spot, d1, d2):
         exp = pd.Timestamp(e).date()
         yrs = _opt_years(exp)
         rows = [(exp, float(x.strike), _bs_delta(spot, float(x.strike), yrs, float(x.impliedVolatility or 0), put),
-                 float(x.bid or 0), float(x.ask or 0), x.contractSymbol) for x in df.itertuples()]
+                 float(x.bid or 0), float(x.ask or 0), x.contractSymbol, float(x.impliedVolatility or 0), None)
+                for x in df.itertuples()]
         c = _pick_contract(rows)
         if c:
             return c + ("Yahoo (دلتا محسوبة)",)
@@ -3024,11 +3060,15 @@ def _pdr_option_line(t, r):
     c = r.get("option")
     if not c:
         return f"📄 العقد: ما لقيت عقد {'بوت' if put else 'كول'} دلتاه فوق {PDR_OPT_MIN_DELTA:.4f}\n"
-    exp, k, delta, bid, ask, sym, src = c
+    exp, k, delta, bid, ask, sym, iv, gamma, src = c
     px = ""
     if ask:
         mid = (bid + ask) / 2 if bid else ask
         px = f"\nBid/Ask: {bid or 0:.2f} / {ask:.2f} (الوسط ~{mid:.2f}$ = {mid * 100:.0f}$ للعقد)"
+        st = pdr_option_stop(c, r["close"], r["stop"]) if PDR_OPT_STOP else None
+        if st:
+            px += (f"\n🛑 وقف خسارة العقد: {st[0]:.2f} (لو السهم وصل {r['stop']:.2f}) "
+                   f"— خسارة ~{st[1]:.0f}% = {(mid - st[0]) * 100:.0f}$ للعقد")
     return (f"📄 العقد: {'بوت 🔴' if put else 'كول 🟢'} ${t} — انتهاء {exp:%Y-%m-%d} "
             f"({(exp - pd.Timestamp.now(tz=NY).date()).days} يوم)\n"
             f"السترايك: {k:g} | الدلتا: {delta:.4f}{px}\n"
@@ -3165,13 +3205,15 @@ def pdr_self_test():
     r2["targets"] = pdr_targets(r2, {"low": (140.0, None), "high": (300 - 145.10, None)})
     assert [round(x[1], 2) for x in r2["targets"]] == [154.0, 154.9], r2["targets"]
     print("✅ الأهداف: بوت = قاع أمس ثم قاع الأسبوع | كول = قمة أمس ثم قمة الأسبوع")
-    exp = pd.Timestamp.now(tz=NY).date() + timedelta(days=3)
-    chain = [(exp, k, _bs_delta(149.7, k, _opt_years(exp), 0.45, True), 0.5, 0.55, f"SPCX-P{k}")
+    exp = pd.Timestamp.now(tz=NY).date() + timedelta(days=PDR_OPT_MIN_DTE + 3)
+    chain = [(exp, k, _bs_delta(149.7, k, _opt_years(exp), 0.45, True), 0.5, 0.55, f"SPCX-P{k}", 0.45, None)
              for k in range(130, 155)]
     c = _pick_contract(chain)
     assert c and abs(c[2]) > PDR_OPT_MIN_DELTA, c
     assert all(abs(x[2]) <= PDR_OPT_MIN_DELTA or abs(x[2]) >= abs(c[2]) for x in chain)
     print(f"✅ العقد: سترايك {c[1]} دلتا {c[2]:.4f} (أول سترايك دلتاه فوق {PDR_OPT_MIN_DELTA})")
+    st = pdr_option_stop(c, r["close"], r["stop"])
+    assert st and st[0] < 0.525, st                          # السهم طلع للوقف = البوت ينزل
     r["option"] = c + ("تجربة",)
     print()
     print(_pdr_message("SPCX", r))
