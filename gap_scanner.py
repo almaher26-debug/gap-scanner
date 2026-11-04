@@ -108,6 +108,12 @@
     - كل جمعة: قائمة بتجزئات الأسبوع | أول كل شهر: قائمة بتجزئات الشهر اللي راح
     - وتنبيه لو سهم جديد منها سعره 5$ أو أقل والشورت عنده صفر
 
+(10) إعلانات أرباح الأسبوع القادم - كل جمعة بعد الإغلاق (4:30 العصر نيويورك)
+    - ناسداك + نيويورك: القيمة السوقية 2 مليار وفوق، والسعر فوق 20$
+    - مرتبة حسب يوم الإعلان، وداخل اليوم من الأكبر قيمة سوقية
+    - لكل سهم: القطاع، الموعد (قبل الافتتاح/بعد الإغلاق)، آخر إعلان (الربحية مقابل التوقع)، مكرر الأرباح
+    - ENABLE_EARN = False يطفيه | --earntest بروفة بدون نت | --earnnow يرسلها الحين
+
 التشغيل:
   pip install yfinance pandas requests lxml
   python gap_scanner.py          # يشتغل باستمرار
@@ -4912,6 +4918,247 @@ def sr_self_test():
     print("SR TEST OK")
 
 
+
+# ================== (10) إعلانات أرباح الأسبوع القادم - كل جمعة ==================
+#   الأسهم: ناسداك + نيويورك، القيمة السوقية 2 مليار وفوق، والسعر فوق 20$
+#   المصدر: تقويم أرباح ناسداك (الموعد + القيمة السوقية) + ياهو (السعر ومكرر الأرباح)
+#   الترتيب: حسب يوم الإعلان، وداخل اليوم من الأكبر قيمة سوقية للأصغر
+#   ENABLE_EARN = False يطفيه | python gap_scanner.py --earntest بروفة بدون نت
+#   python gap_scanner.py --earnnow يجيب قائمة الأسبوع الجاي الحين ويرسلها
+ENABLE_EARN = True
+EARN_MIN_CAP = 2_000_000_000
+EARN_MIN_PRICE = 20.0
+EARN_WEEKDAY = 4                  # 4 = الجمعة
+EARN_AFTER_NY = (16, 30)          # بعد إغلاق الجمعة (= 12:30 بالليل بتوقيتك، 11:30 بعد التوقيت الشتوي)
+EARN_MAX_CHARS = 3700             # حد طول الرسالة (تيليجرام يقبل 4096 حرف بالكثير)
+EARN_WEEK_FILE = os.path.join(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "."), "earn_week.txt")
+
+EARN_DAYS_AR = ["الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"]
+EARN_TIME_AR = {"time-pre-market": "قبل الافتتاح ☀️", "time-after-hours": "بعد الإغلاق 🌙"}
+
+
+def _earn_next_week(today):
+    """تواريخ أيام الأسبوع الجاي (الاثنين - الجمعة)."""
+    monday = today + timedelta(days=7 - today.weekday())
+    return [monday + timedelta(days=i) for i in range(5)]
+
+
+def _earn_calendar_day(day):
+    """صفوف تقويم أرباح ناسداك ليوم واحد."""
+    url = f"https://api.nasdaq.com/api/calendar/earnings?date={day:%Y-%m-%d}"
+    for _ in range(3):
+        try:
+            r = requests.get(url, headers={**HEADERS, "Accept": "application/json"}, timeout=30)
+            return ((r.json().get("data") or {}).get("rows")) or []
+        except Exception as e:
+            log(f"الأرباح: تقويم {day}: {e}")
+            time.sleep(5)
+    return []
+
+
+def _earn_last_report(sym):
+    """آخر إعلان: (التاريخ، الربحية الفعلية، المتوقعة، المفاجأة %) - ناسداك ثم ياهو."""
+    try:
+        r = requests.get(f"https://api.nasdaq.com/api/company/{sym}/earnings-surprise",
+                         headers={**HEADERS, "Accept": "application/json"}, timeout=20)
+        rows = (((r.json().get("data") or {}).get("earningsSurpriseTable") or {}).get("rows")) or []
+        if rows:
+            x = rows[0]
+            d = datetime.strptime(x.get("dateReported", ""), "%m/%d/%Y").date()
+            return d, _num_or_none(x.get("eps")), _num_or_none(x.get("consensusForecast")), \
+                _num_or_none(x.get("percentageSurprise"))
+    except Exception:
+        pass
+    try:
+        import yfinance as yf
+        with _YF_LOCK:
+            ed = yf.Ticker(sym).get_earnings_dates(limit=8)
+        ed = ed.dropna(subset=["Reported EPS"])
+        if not ed.empty:
+            row = ed.iloc[0]
+            return ed.index[0].date(), float(row["Reported EPS"]), \
+                _num_or_none(row.get("EPS Estimate")), _num_or_none(row.get("Surprise(%)"))
+    except Exception:
+        pass
+    return None
+
+
+def _num_or_none(x):
+    try:
+        v = float(str(x).replace("$", "").replace(",", "").replace("%", "").strip())
+        return None if math.isnan(v) else v
+    except Exception:
+        return None
+
+
+def _earn_info(sym):
+    """(مكرر الأرباح، المكرر المتوقع، القيمة السوقية) من ياهو."""
+    try:
+        import yfinance as yf
+        with _YF_LOCK:
+            info = yf.Ticker(sym).info or {}
+        return (_num_or_none(info.get("trailingPE")), _num_or_none(info.get("forwardPE")),
+                _num_or_none(info.get("marketCap")))
+    except Exception:
+        return None, None, None
+
+
+def _earn_cap_txt(cap):
+    if not cap:
+        return "—"
+    if cap >= 1e12:
+        return f"{cap / 1e12:.2f} ترليون"
+    return f"{cap / 1e9:.1f} مليار"
+
+
+def _earn_line(i, x):
+    sec = sector_of(x["sym"]) if SHOW_SECTOR else ""
+    lines = [f"{i}) ${x['sym']} - {x['name'][:30]}" + (f" | {sec}" if sec else "")]
+    lines.append(f"   📅 {EARN_DAYS_AR[x['day'].weekday()]} {x['day']:%d/%m} - {x['when']}")
+    lr = x.get("last")
+    if lr:
+        d, eps, est, sur = lr
+        t = f"   🧾 آخر إعلان: {d:%d/%m/%Y}"
+        if eps is not None:
+            t += f" | الربحية {eps:g}"
+            if est is not None:
+                t += f" مقابل توقع {est:g} " + ("✅ تفوّق" if eps > est else "❌ أقل" if eps < est else "➖ مطابق")
+                if sur is not None:
+                    t += f" ({sur:+.1f}%)"
+        lines.append(t)
+    else:
+        lines.append("   🧾 آخر إعلان: غير متوفر")
+    pe, fpe = x.get("pe"), x.get("fpe")
+    pe_t = f"{pe:.1f}" if pe else "سالب/غير متوفر"
+    if fpe:
+        pe_t += f" (المتوقع {fpe:.1f})"
+    lines.append(f"   📊 مكرر الأرباح: {pe_t}")
+    lines.append(f"   💰 القيمة: {_earn_cap_txt(x['cap'])} | السعر: {x['price']:.2f}$")
+    return "\n".join(lines)
+
+
+def earn_send(items, days):
+    """يرسل القائمة مرتبة: حسب اليوم ثم القيمة السوقية."""
+    items = sorted(items, key=lambda x: (x["day"], -(x["cap"] or 0)))
+    rng = f"{days[0]:%d/%m} - {days[-1]:%d/%m/%Y}"
+    if not items:
+        send_telegram(f"📢 إعلانات أرباح الأسبوع القادم ({rng})\nما فيه أسهم هالأسبوع")
+        return
+    # قائمة وحدة: العدد فوق ثم كل الأسهم مرتبة. لو طالت فوق حد تيليجرام (4096 حرف) تكمل برسالة ثانية
+    blocks, cur = [], None
+    for n, x in enumerate(items, 1):
+        if x["day"] != cur:
+            cur = x["day"]
+            blocks.append(f"━━ {EARN_DAYS_AR[cur.weekday()]} {cur:%d/%m} ━━")
+        blocks.append(_earn_line(n, x))
+    msgs = [f"📢 إعلانات أرباح الأسبوع القادم ({rng})\nالعدد: {len(items)} سهم"]
+    for blk in blocks:
+        if len(msgs[-1]) + len(blk) + 2 > EARN_MAX_CHARS:
+            msgs.append("📢 تكملة أرباح الأسبوع القادم")
+        msgs[-1] += "\n\n" + blk
+    for i, m in enumerate(msgs):
+        if i == len(msgs) - 1:
+            m += "\n\n⚠️ المواعيد ممكن تتغير، تأكد منها قبل أي صفقة"
+        send_telegram(m)
+        time.sleep(2)
+
+
+def earn_scan(today=None):
+    """يجيب أرباح الأسبوع الجاي، يفلتر، ويرسل."""
+    today = today or pd.Timestamp.now(tz=NY).date()
+    days = _earn_next_week(today)
+    cands = {}
+    for d in days:
+        for row in _earn_calendar_day(d):
+            sym = str(row.get("symbol", "")).strip().upper()
+            if not sym or not sym.replace(".", "").isalpha() or sym in cands:
+                continue
+            cands[sym] = {"sym": sym, "name": str(row.get("name") or sym).strip(), "day": d,
+                          "when": EARN_TIME_AR.get(row.get("time"), "الوقت غير محدد"),
+                          "cap": _num_or_none(row.get("marketCap"))}
+    log(f"الأرباح: {len(cands)} سهم بالتقويم ({days[0]} - {days[-1]})")
+    # فلتر القيمة السوقية مبدئي من التقويم (اللي ما لها قيمة نتأكد منها من ياهو بعدين)
+    pool = [s for s, x in cands.items() if x["cap"] is None or x["cap"] >= EARN_MIN_CAP]
+    prices = {}
+    for t, df in download_batches(pool, 100, period="5d", interval="1d"):
+        prices[t] = float(df["Close"].iloc[-1])
+    pool = [s for s in pool if prices.get(s, 0) > EARN_MIN_PRICE]
+    items = []
+    for s in pool:
+        x = cands[s]
+        x["price"] = prices[s]
+        x["pe"], x["fpe"], ycap = _earn_info(s)
+        if x["cap"] is None:
+            x["cap"] = ycap
+        if not x["cap"] or x["cap"] < EARN_MIN_CAP:
+            continue
+        x["last"] = _earn_last_report(s)
+        items.append(x)
+        time.sleep(0.3)
+    log(f"الأرباح: {len(items)} سهم بعد الفلتر")
+    earn_send(items, days)
+    return items
+
+
+def earn_run_forever():
+    try:
+        with open(EARN_WEEK_FILE, encoding="utf-8") as f:
+            done = f.read().strip() or None
+    except FileNotFoundError:
+        done = None
+    while True:
+        try:
+            now = pd.Timestamp.now(tz=NY)
+            iso = now.isocalendar()
+            wk = f"{iso[0]}-W{iso[1]:02d}"
+            if done != wk and now.weekday() == EARN_WEEKDAY and (now.hour, now.minute) >= EARN_AFTER_NY:
+                earn_scan(now.date())
+                done = wk
+                with open(EARN_WEEK_FILE, "w", encoding="utf-8") as f:
+                    f.write(wk + "\n")
+        except Exception as e:
+            log(f"الأرباح: خطأ - {e}")
+        time.sleep(60)
+
+
+def earn_self_test():
+    """بروفة للرسالة ببيانات تجريبية (بدون نت)."""
+    global SHOW_SECTOR
+    SHOW_SECTOR = False
+    from datetime import date
+    days = _earn_next_week(date(2026, 11, 6))
+    demo = [
+        ("NVDA", "NVIDIA Corporation", 2, "time-after-hours", 4.4e12, 181.2, 51.3, 32.0,
+         (date(2026, 8, 26), 1.05, 1.01, 4.0), "تقنية 💻"),
+        ("HD", "Home Depot Inc.", 1, "time-pre-market", 3.7e11, 372.5, 25.4, 24.1,
+         (date(2026, 8, 19), 4.68, 4.71, -0.6), "استهلاكية كمالية 🛍️"),
+        ("LOW", "Lowe's Companies", 2, "time-pre-market", 1.4e11, 248.0, 20.6, 19.8,
+         (date(2026, 8, 20), 4.33, 4.24, 2.1), "استهلاكية كمالية 🛍️"),
+        ("TJX", "TJX Companies", 2, "time-pre-market", 1.6e11, 142.9, 33.1, 30.2,
+         (date(2026, 8, 20), 1.10, 1.01, 8.9), "استهلاكية كمالية 🛍️"),
+        ("WMT", "Walmart Inc.", 3, "time-pre-market", 8.1e11, 101.4, 38.7, 35.5,
+         (date(2026, 8, 21), 0.68, 0.73, -6.8), "استهلاكية أساسية 🛒"),
+        ("INTU", "Intuit Inc.", 3, "time-after-hours", 1.8e11, 655.0, 48.2, 30.4,
+         (date(2026, 8, 21), 2.75, 2.66, 3.4), "تقنية 💻"),
+        ("BIDU", "Baidu Inc.", 1, "time-not-supplied", 4.0e10, 118.3, None, 11.2,
+         None, "اتصالات وإعلام 📡"),
+    ]
+    items = []
+    for sym, name, di, tm, cap, px, pe, fpe, last, sec in demo:
+        _SECTORS[sym] = sec
+        items.append({"sym": sym, "name": name, "day": days[di], "when": EARN_TIME_AR.get(tm, "الوقت غير محدد"),
+                      "cap": cap, "price": px, "pe": pe, "fpe": fpe, "last": last})
+    SHOW_SECTOR = True
+    global sector_of
+    real = sector_of
+    sector_of = lambda s: _SECTORS.get(s, "")
+    try:
+        earn_send(items, days)
+    finally:
+        sector_of = real
+
+
+
 def main():
     if "--test" in sys.argv:
         self_test()
@@ -4943,6 +5190,13 @@ def main():
     if "--pdrtest" in sys.argv:
         pdr_self_test()
         return
+    if "--earntest" in sys.argv:
+        earn_self_test()
+        return
+    if "--earnnow" in sys.argv:
+        _load_chats()
+        earn_scan()
+        return
     once = "--once" in sys.argv
     _load_chats()
     discover_groups()
@@ -4952,6 +5206,8 @@ def main():
         start_news_thread()
         if ENABLE_MKT4H:         # (1ن) IFVG فريم 4 ساعات - الجلسة العادية بس
             threading.Thread(target=mkt4h_run_forever, daemon=True, name="mkt4h").start()
+        if ENABLE_EARN:          # (10) إعلانات أرباح الأسبوع القادم - كل جمعة
+            threading.Thread(target=earn_run_forever, daemon=True, name="earnings").start()
         if ENABLE_MOMENTUM:      # سكنر الزخم
             threading.Thread(target=mom_run_forever, daemon=True, name="momentum").start()
         if ENABLE_BORROW_ZERO:   # الشورت صفر اللحظي
