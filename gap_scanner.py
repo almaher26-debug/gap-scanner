@@ -77,6 +77,11 @@
     - يفحص كل 5 دقايق وقت السوق، وينبه أول ما تقفل الشمعة
     - ENABLE_PWL_1H = False يطفي الدعم | ENABLE_PWH_1H = False يطفي المقاومة | python gap_scanner.py --pwltest يجربه بدون نت
 
+(1ك-2) سحب سيولة دعم الأسبوع السابق - فريم 4 ساعات - نفس قائمة المراقبة
+    - شمعة 4 ساعات ذيلها نزل تحت قاع الأسبوع السابق، وقفلت فوقه (لونها ما يهم)
+    - شموع 4 ساعات نفس تريدنج فيو (الجلسة الممتدة)، تنبيه واحد لكل سهم بالأسبوع
+    - ENABLE_PWL_4H = False يطفيه
+
 (1و) سحب سيولة دعمين - الفريم الأسبوعي
     - الأسهم: ناسداك + نيويورك اللي قيمتها السوقية 10 مليار دولار وفوق
     - الدعم = قاع أسبوعي سابق (أنزل من شمعتين قبله وشمعتين بعده) خلال آخر سنة، ولسا صامد
@@ -426,6 +431,10 @@ PWL_MAX_ALERT_DELAY_MIN = 30     # ما ينبه على شمعة قفلت من �
 PWL_ONCE_PER_WEEK = True         # True = تنبيه واحد بس لكل سهم بالأسبوع (أول سحب: دعم أو مقاومة) | False = كل شمعة سحب
 #   المقاومة = قمة شمعة الأسبوع السابق. شمعة ساعة ذيلها طلع فوق المقاومة وقفلت تحتها
 ENABLE_PWH_1H = True             # True = شغال | False = مطفي (نفس توقيت وإعدادات الدعم فوق)
+# ---- (1ك-2) سحب سيولة دعم الأسبوع السابق - فريم 4 ساعات - نفس القائمة ----
+#   شمعة 4 ساعات (من هالأسبوع) ذيلها نزل تحت قاع الأسبوع السابق وقفلت فوقه (لونها ما يهم)
+#   مستقل عن فريم الساعة: تنبيه واحد لكل سهم بالأسبوع على فريم 4 ساعات
+ENABLE_PWL_4H = True             # True = شغال | False = مطفي
 
 # ---- (1ن) سحب سيولة اليوم السابق + إعادة اختبار - فريم 15 دقيقة - لحظي على قائمة المراقبة ----
 #   المقاومة: شمعة ذيلها طلع فوق قمة أمس وقفلت تحتها (سحب) ← السعر ابتعد تحت المستوى ←
@@ -433,8 +442,8 @@ ENABLE_PWH_1H = True             # True = شغال | False = مطفي (نفس ت
 #   الدعم بالعكس (قاع أمس، والوقف تحت أقل سعر بشمعة الاختبار).
 #   المستوى = قمة/قاع الجلسة الرسمية لليوم السابق. السحب والاختبار وقت السوق الرسمي (PDR_REGULAR_ONLY).
 ENABLE_PDR_15M = True            # True = شغال | False = مطفي
-PDR_ENABLE_CALL = False          # كول (إعادة اختبار دعم قاع أمس): False = ملغي | True = يرجع
-PDR_ENABLE_PUT = True            # بوت (إعادة اختبار مقاومة قمة أمس): True = شغال
+PDR_ENABLE_CALL = True           # كول (إعادة اختبار دعم قاع أمس): True = شغال | False = ملغي
+PDR_ENABLE_PUT = True            # بوت (إعادة اختبار مقاومة قمة أمس): True = شغال | False = ملغي
 PDR_EVERY_MIN = 5                # كل كم دقيقة يفحص وقت السوق
 PDR_MAX_BEYOND_PCT = 0.02        # ذيل السحب ما يتعدى المستوى أكثر من 2% (أكثر = كسر مو سحب)
 PDR_AWAY_PCT = 0.004             # بعد السحب لازم السعر يبتعد عن المستوى 0.4% على الأقل قبل الاختبار
@@ -457,7 +466,7 @@ PDR_OPT_STOP = True              # يحسب وقف خسارة العقد = سع�
 #   شمعة ساعة ذيلها نزل تحت قاع أمس وقفلت فوقه (سحب) ← السعر ابتعد فوق المستوى ←
 #   رجع يختبر الدعم وقفل فوقه = تنبيه كول، والوقف تحت أقل سعر بشمعة الاختبار.
 #   الأهداف: قمة أمس ثم قمة الأسبوع السابق. ويختار عقد كول ويحسب وقف خسارة العقد.
-ENABLE_PDR_1H_CALL = True        # True = شغال | False = مطفي
+ENABLE_PDR_1H_CALL = False       # True = شغال | False = مطفي (ملغي 5 نوفمبر 2026)
 PDR1H_EVERY_MIN = 5              # كل كم دقيقة يفحص وقت السوق
 PDR1H_MAX_ALERT_DELAY_MIN = 30   # ما ينبه على شمعة قفلت من أكثر من كذا دقيقة
 # شروط العقد — موحدة لكل الأقسام اللي تختار عقد (سحب أمس ساعة/15 دقيقة، و4 ساعات الجلسة العادية):
@@ -3131,17 +3140,17 @@ def check_pwh_1h(c1h, resistance, week_start):
             "first_touch": bool(before.empty or before["High"].max() <= resistance)}
 
 
-def _pwl_message(t, side, lvl, lvl_day, r):
+def _pwl_message(t, side, lvl, lvl_day, r, frame="فريم ساعة"):
     t1 = pd.Timestamp(r["start"]).tz_convert(LOCAL_TZ)
     color = "خضراء 🟢" if r["close"] > r["open"] else "حمراء 🔴"
     if side == "low":
-        head = "💧 سحب سيولة دعم الأسبوع السابق — فريم ساعة"
+        head = f"💧 سحب سيولة دعم الأسبوع السابق — {frame}"
         lvl_line = f"الدعم (قاع الأسبوع السابق): {lvl:.2f}  (يوم {lvl_day})"
         wick = f"أقل سعر بالشمعة: {r['low']:.2f}  (-{r['depth']:.2f}% تحت الدعم)"
         close = f"الإغلاق: {r['close']:.2f} فوق الدعم | الشمعة {color}"
         word, where = "الدعم", "تحت"
     else:
-        head = "🔻 سحب سيولة مقاومة الأسبوع السابق — فريم ساعة"
+        head = f"🔻 سحب سيولة مقاومة الأسبوع السابق — {frame}"
         lvl_line = f"المقاومة (قمة الأسبوع السابق): {lvl:.2f}  (يوم {lvl_day})"
         wick = f"أعلى سعر بالشمعة: {r['high']:.2f}  (+{r['depth']:.2f}% فوق المقاومة)"
         close = f"الإغلاق: {r['close']:.2f} تحت المقاومة | الشمعة {color}"
@@ -3172,6 +3181,19 @@ def scan_pwl_1h(symbols, sent):
             df = to_ny(df)[OHLC]
             if df.empty:
                 continue
+            # (1ك-2) فريم 4 ساعات - الدعم بس، تنبيه واحد لكل سهم بالأسبوع
+            if ENABLE_PWL_4H:
+                c4h = only_closed(to_frame(df, 240), df.index.max(), now)
+                lvl, lvl_day = lv[t]["low"]
+                r = check_pwl_1h(c4h, lvl, wk0)
+                key = f"{t}-pwl4h-{wk0:%Y%m%d}"
+                if r and key not in sent and \
+                        (now - pd.Timestamp(r["end"])).total_seconds() / 60 <= PWL_MAX_ALERT_DELAY_MIN:
+                    sent.add(key)
+                    _append_line(GAP_SENT_FILE, key)
+                    hits += 1
+                    send_telegram(_pwl_message(t, "low", lvl, lvl_day, r, frame="فريم 4 ساعات"),
+                                  kind="sweep", sym=t)
             c1h = only_closed(to_frame(df, 60), df.index.max(), now)
             for side, tag, fn in checks:
                 lvl, lvl_day = lv[t][side]
@@ -3191,7 +3213,7 @@ def scan_pwl_1h(symbols, sent):
             log(f"سحب دعم/مقاومة الأسبوع السابق: {t}: خطأ - {e}")
     free_memory()
     if hits:
-        log(f"[{datetime.now():%H:%M}] سحب دعم/مقاومة الأسبوع السابق (ساعة): {hits} تنبيه")
+        log(f"[{datetime.now():%H:%M}] سحب دعم/مقاومة الأسبوع السابق (ساعة/4 ساعات): {hits} تنبيه")
 
 
 def pwl_self_test():
@@ -5404,7 +5426,7 @@ def main():
                 pass
 
         # (1ك) سحب سيولة دعم ومقاومة الأسبوع السابق - فريم ساعة - كل 5 دقايق وقت السوق
-        if (ENABLE_PWL_1H or ENABLE_PWH_1H) and (once or us_market_open()) and time.time() - pwl_last >= PWL_EVERY_MIN * 60:
+        if (ENABLE_PWL_1H or ENABLE_PWH_1H or ENABLE_PWL_4H) and (once or us_market_open()) and time.time() - pwl_last >= PWL_EVERY_MIN * 60:
             scan_pwl_1h(list(WATCH_SYMBOLS), gap_sent)
             pwl_last = time.time()
 
