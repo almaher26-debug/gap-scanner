@@ -278,6 +278,8 @@ WATCH_SYMBOLS = [
     "ROST", "MDLZ", "MNST", "KDP", "KHC", "CCEP", "CMCSA", "WBD", "HON", "HONA",
     "CSX", "PCAR", "ODFL", "FAST", "CPRT", "ROP", "AXON", "ADP", "PAYX", "TRI",
     "CEG", "AEP", "XEL", "EXC", "FANG", "BKR", "FER",
+    # أُضيفت 6 نوفمبر 2026
+    "TSM", "BABA",
 ]
 WATCH_MIN_SIZE = 0.16            # حجم الجاب (فريم الساعة): أكثر من 15 سنت (يعني 16 سنت وفوق) | 0 = بدون شرط
 WATCH4H_MIN_SIZE = 0.10          # حجم الجاب (فريم 4 ساعات): 10 سنت وفوق
