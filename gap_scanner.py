@@ -253,6 +253,7 @@ GAP15C_OPEN_TOL = 0.01           # سماحية فرق الافتتاح عن إ�
 #   الجاب 15 سنت أو أقل يتجاهله. الأسهم هذي تنشال من الفحص العادي عشان ما يجيك تنبيهين
 ENABLE_WATCH = True              # True = شغال | False = مطفي
 # ⭐ قائمتك الموحدة (163 سهم + مؤشرين) - ONE_LIST = True يخلي كل الأقسام تشتغل عليها بس
+TEST_ON_START = True             # True = يرسل رسالة اختبار كل ما البوت يشتغل | False = بدون
 ONE_LIST = True                  # True = كل الأقسام على القائمة هذي | False = كل قسم يرجع لأسهمه القديمة
 WATCH_SYMBOLS = [
     "NVDA", "CRM", "AVGO", "META", "TSLA", "SPCX", "AMD", "LITE", "FICO", "AAPL",
@@ -5299,6 +5300,10 @@ def main():
     _load_chats()
     discover_groups()
     log(f"التنبيهات بتروح لـ {len(CHATS)} محادثة: {', '.join(CHATS) or 'ولا وحدة'}")
+    if TEST_ON_START and not once:
+        send_telegram("🧪 رسالة اختبار - البوت اشتغل\n"
+                      f"القائمة الموحدة: {len(stocks_only(WATCH_SYMBOLS))} سهم + {len(INDEX_SYMBOLS)} مؤشر\n"
+                      f"الوقت: {pd.Timestamp.now(tz=LOCAL_TZ):%Y-%m-%d %H:%M} (توقيتك)")
     if not once:
         start_algo_thread()
         start_news_thread()
