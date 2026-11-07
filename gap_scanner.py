@@ -252,7 +252,46 @@ GAP15C_OPEN_TOL = 0.01           # سماحية فرق الافتتاح عن إ�
 # ---- (1هـ) قائمة المراقبة الخاصة: IFVG على 15 دقيقة + ساعة + 4 ساعات، الجاب أكثر من 15 سنت ----
 #   الجاب 15 سنت أو أقل يتجاهله. الأسهم هذي تنشال من الفحص العادي عشان ما يجيك تنبيهين
 ENABLE_WATCH = True              # True = شغال | False = مطفي
+# ⭐ قائمتك الموحدة (163 سهم + مؤشرين) - ONE_LIST = True يخلي كل الأقسام تشتغل عليها بس
+ONE_LIST = True                  # True = كل الأقسام على القائمة هذي | False = كل قسم يرجع لأسهمه القديمة
 WATCH_SYMBOLS = [
+    "NVDA", "CRM", "AVGO", "META", "TSLA", "SPCX", "AMD", "LITE", "FICO", "AAPL",
+    "RKLB", "UNH", "MU", "LLY", "ADBE", "QCOM", "SHOP", "GOOGL", "MSFT", "MSTR",
+    "AMZN", "DDOG", "ACN", "GEV", "LRCX", "PLTR", "OKTA", "ORCL", "INTC", "AAOI",
+    "CRDO", "SNDK", "STX", "CRCL", "WDC", "SKHY", "NBIS", "CRWV", "CRWD", "MRVL",
+    "ARM", "AMAT", "PANW", "SNOW", "NOW", "DELL", "FSLR", "ENPH", "VRT", "RIVN",
+    "KLAC", "MCHP", "FTNT", "ADSK", "MDB", "CSCO", "CLS", "BE", "MOD", "TEM",
+    "CELH", "CHWY", "CROX", "GRMN", "CTSH", "BBIO", "DOCS", "ADMA", "CTAS", "MSM",
+    "SMH", "ABBV", "HAS", "KO", "LULU", "APH", "SNPS", "IBM", "ORLY", "HD",
+    # إعلانات أرباح أسبوع 2 نوفمبر 2026 (الموجودة فوق ما تكررت)
+    "AEHR", "APP", "DIBS", "TXG", "SMCI", "MRNA", "AMC", "NVTS", "KTOS", "CHKP",
+    "COHR", "UBER", "NET", "VSH", "BMRN", "FSLY", "ANET", "CAVA", "EL", "CIFR",
+    "PFE", "OKLO", "ETN", "ABNB", "NVO", "TEAM", "BKNG", "RIOT", "IREN", "U",
+    "MP", "GFS", "FN", "MPC", "BXSL", "ALAB", "RUN", "BROS", "FISV",
+    # باقي أسهم صورة الأرباح (أعمدة الأيام الخمسة)
+    "NSSC", "ETR", "MAR", "PEG", "TSEM", "KRYS", "LIFE", "ON", "ROKU", "O",
+    "CALX", "DT", "DOCN", "ET", "APO", "BNTX", "HL", "AMGN", "OUST", "CAR",
+    "MCD", "CVS", "CAI", "CAH", "IOVA", "EOSE", "CORZ", "CI", "TAP", "UUUU",
+    "CHTR", "WULF", "ELAN", "HUM", "DTI", "BLMN", "PAA", "UAA",
+    # أُضيفت 6 نوفمبر 2026
+    "TSM", "BABA",
+    # أُضيفت 7 نوفمبر 2026
+    "AKAM", "BA",
+    # صناديق
+    "QQQ", "SPY",
+    # مؤشرات (من ياهو): سباكس S&P 500 + ناسداك 100
+    "^GSPC", "^NDX",
+]
+# المؤشرات ما لها صفقات ولا بيانات في ألباكا، فتنشال من أقسام ألباكا (الخوارزميات، الزخم، الجلسة الليلية)
+INDEX_SYMBOLS = {"^GSPC", "^NDX"}
+INDEX_NAMES = {"^GSPC": "سباكس S&P 500", "^NDX": "ناسداك 100"}
+
+
+def stocks_only(syms):
+    """القائمة بدون المؤشرات - للأقسام اللي تعتمد على ألباكا."""
+    return [x for x in syms if x not in INDEX_SYMBOLS]
+# القائمة القديمة الكاملة (216 سهم) - محفوظة بس ما تنستخدم. لو تبيها: WATCH_SYMBOLS = WATCH_SYMBOLS_OLD
+WATCH_SYMBOLS_OLD = [
     "NVDA", "CRM", "AVGO", "META", "TSLA", "SPCX", "AMD", "LITE", "FICO", "AAPL",
     "RKLB", "UNH", "MU", "LLY", "ADBE", "QCOM", "SHOP", "GOOGL", "MSFT", "MSTR",
     "AMZN", "DDOG", "ACN", "GEV", "LRCX", "PLTR", "OKTA", "ORCL", "INTC", "AAOI",
@@ -601,6 +640,8 @@ SR_SYMBOLS = [
     "CSX", "PCAR", "ODFL", "FAST", "CPRT", "ROP", "ADP", "PAYX", "TRI",
     "CEG", "AEP", "XEL", "EXC", "FANG", "BKR", "FER",
 ]
+if ONE_LIST:
+    SR_SYMBOLS = list(WATCH_SYMBOLS)
 SR_TOLERANCE = 0.005             # يعتبره لمس لو السعر وصل لنص بالمية من المستوى
 SR_EVERY_MIN = 5                 # كل كم دقيقة يفحص
 SR_SENT_FILE = "sr_sent.txt"     # عشان ما يعيد نفس التنبيه لو البوت أعاد التشغيل
@@ -852,6 +893,8 @@ def _load_sectors():
 def sector_of(sym):
     """قطاع السهم بالعربي، أو "" لو ما عرفناه."""
     sym = (sym or "").upper()
+    if sym in INDEX_SYMBOLS:
+        return "مؤشر 📈"
     if sym in SECTOR_ETFS:
         return "صندوق مؤشرات 📊"
     with _SECTOR_LOCK:
@@ -905,6 +948,8 @@ def send_telegram(text, kind=None, sym=None):
         except Exception as e:
             log(f"القطاع: {sym}: {e}")
     text = "للمتابعة\n" + text
+    for code, name in INDEX_NAMES.items():         # $^GSPC ← سباكس S&P 500 (^GSPC)
+        text = text.replace(f"${code}", f"{name} ({code})")
     if ADD_EDUCATION and kind in EDUCATION:
         text += "\n\n" + EDUCATION[kind]
     if ADD_DISCLAIMER:
@@ -1001,6 +1046,8 @@ def _to_number(x):
 
 def get_nasdaq_midcap_plus():
     """كل أسهم ناسداك اللي قيمتها السوقية فوق الحد، من سكرينر ناسداك الرسمي."""
+    if ONE_LIST:
+        return list(WATCH_SYMBOLS)
     url = ("https://api.nasdaq.com/api/screener/stocks"
            "?tableonly=true&limit=10000&exchange=nasdaq&download=true")
     try:
@@ -1023,7 +1070,7 @@ def get_nasdaq_midcap_plus():
 
 GAP_EXCHANGES = ("nasdaq", "nyse")   # بورصات أسهم الجاب: احذف "nyse" لو تبي ناسداك بس
 # صناديق تنضاف لفحص الجاب على فريم الساعة والأربع ساعات بس (صعودي وهبوطي، الجاب 1$ وفوق)
-GAP_ETFS = ["SPY", "QQQ"]
+GAP_ETFS = [] if ONE_LIST else ["SPY", "QQQ"]   # القائمة الموحدة: بدون صناديق زايدة
 GAP4H_NASDAQ_ONLY = True   # فريم 4 ساعات: أسهم ناسداك بس (الساعة واليومي وسحب السيولة ما تغيروا)
 GAP_NASDAQ_SET = set()     # تتعبى لحالها من سكرينر ناسداك
 
@@ -1031,6 +1078,8 @@ GAP_NASDAQ_SET = set()     # تتعبى لحالها من سكرينر ناسد�
 def get_gap_universe():
     """أسهم الجاب (4 ساعات، ساعة، يومي): كل البورصات في GAP_EXCHANGES
     اللي قيمتها السوقية MIN_MARKET_CAP وفوق، من سكرينر ناسداك الرسمي."""
+    if ONE_LIST:
+        return list(WATCH_SYMBOLS)
     out = set()
     for ex in GAP_EXCHANGES:
         url = ("https://api.nasdaq.com/api/screener/stocks"
@@ -1474,6 +1523,7 @@ def fetch_alpaca_night(symbols, now):
 
 
 def load_boats(tickers, now):
+    tickers = stocks_only(tickers)          # المؤشرات ما لها جلسة ليلية
     if NIGHT_SOURCE == "alpaca":
         need = [t for t in tickers if _alpaca_night_stale((_boats_cache.get(t) or (None,))[0], now)]
         got = 0
@@ -1625,6 +1675,8 @@ _MKT4H_START, _MKT4H_SPLIT, _MKT4H_END = 9 * 60 + 30, 13 * 60 + 30, 16 * 60
 
 def mkt4h_universe():
     """أسهم ناسداك: قيمة سوقية 2 مليار وفوق، وسعر 30$ وفوق."""
+    if ONE_LIST:
+        return list(WATCH_SYMBOLS)
     url = ("https://api.nasdaq.com/api/screener/stocks"
            "?tableonly=true&limit=10000&exchange=nasdaq&download=true")
     for _ in range(3):
@@ -2110,6 +2162,9 @@ def _universe_stats(include_nyse):
 
 def build_universe(label, min_price, max_price, min_vol, include_nyse):
     """الأسهم اللي آخر سعر لها داخل النطاق وعليها تداول."""
+    if ONE_LIST:
+        log(f"{label}: {len(WATCH_SYMBOLS)} سهم (القائمة الموحدة)")
+        return list(WATCH_SYMBOLS)
     stats = _universe_stats(include_nyse)
     keep = [t for t, (last, avg_vol) in stats.items()
             if min_price <= last <= max_price and avg_vol >= min_vol]
@@ -2443,8 +2498,12 @@ def bz_universe():
                 price, cap = _bz_num(row.get("lastsale")), _bz_num(row.get("marketCap"))
                 price_ok = (price >= BZ_MIN_PRICE if BZ_MIN_PRICE else price > 0) and \
                            (price <= BZ_MAX_PRICE if BZ_MAX_PRICE else True)
-                if (sym.isalpha() and len(sym) <= 5 and price_ok
-                        and 0 < cap <= BZ_MAX_MARKET_CAP):
+                if ONE_LIST:
+                    ok = sym in WATCH_SYMBOLS
+                else:
+                    ok = (sym.isalpha() and len(sym) <= 5 and price_ok
+                          and 0 < cap <= BZ_MAX_MARKET_CAP)
+                if ok:
                     out[sym] = {"price": price, "cap": cap}
                     BZ_EXCHANGE[sym] = ex
         except Exception as e:
@@ -2808,6 +2867,8 @@ def _mom_get(path, params=None):
 
 
 def _mom_candidates():
+    if ONE_LIST:
+        return stocks_only(WATCH_SYMBOLS)
     syms = set()
     try:
         for g in _mom_get("/v1beta1/screener/stocks/movers", {"top": 50}).get("gainers", []):
@@ -3480,7 +3541,7 @@ def pdr_pick_option(t, r):
     put = r["side"] == "high"
     today = pd.Timestamp.now(tz=NY).date()
     d1, d2 = today + timedelta(days=PDR_OPT_MIN_DTE), today + timedelta(days=PDR_OPT_MAX_DTE)
-    for fn in (_pdr_option_alpaca, _pdr_option_yahoo):
+    for fn in ((_pdr_option_yahoo,) if t in INDEX_SYMBOLS else (_pdr_option_alpaca, _pdr_option_yahoo)):
         try:
             c = fn(t, put, r["close"], d1, d2)
             if c:
@@ -4199,6 +4260,8 @@ def _price_universe(min_px, max_px, max_cap, max_n):
 def get_microcaps():
     """قسم (6): 1$-15$ وسوت تجزئة عكسية آخر 3 شهور. يرجع {الرمز: (القيمة السوقية، ملاحظة)}."""
     global RSPLIT_ALGO_SYMS
+    if ONE_LIST:
+        return {sym: (None, "") for sym in stocks_only(WATCH_SYMBOLS)}
     try:
         base = _price_universe(ALGO_MIN_PRICE, ALGO_MAX_PRICE, ALGO_MAX_MARKET_CAP, 100_000)
         if not ALGO_RSPLIT_DAYS:
@@ -4220,6 +4283,8 @@ def get_microcaps():
 
 def get_pennies():
     """قسم (6ج): 1$-5$ وقيمتها 40 مليون وتحت. يرجع {الرمز: (القيمة السوقية، ملاحظة)}."""
+    if ONE_LIST:
+        return {}          # نفس منطق (6) بالضبط، فلو اشتغل على نفس القائمة بيكرر التنبيهات
     try:
         return {sym: (cap, "") for sym, cap in _price_universe(
             ALGO_PENNY_MIN_PRICE, ALGO_PENNY_MAX_PRICE, ALGO_PENNY_MAX_MARKET_CAP,
@@ -4231,6 +4296,8 @@ def get_pennies():
 
 def get_bigcaps():
     """أسهم ناسداك اللي قيمتها السوقية مليار وفوق، الأنشط تداولاً أول. يرجع {الرمز: القيمة السوقية}."""
+    if ONE_LIST:
+        return {sym: None for sym in stocks_only(WATCH_SYMBOLS)}
     try:
         picks = [(vol, sym, cap) for sym, cap, vol, px in _nasdaq_rows()
                  if cap >= ALGO_BIG_MIN_MARKET_CAP and vol > 0]
@@ -4479,7 +4546,8 @@ def algo_big_loop():
                 continue
             today = pd.Timestamp.now(tz=NY).date()
             if caps_day != today or not caps:
-                caps = ({s_: None for s_ in ALGO_BIG_SYMBOLS} if ALGO_BIG_SYMBOLS
+                caps = (get_bigcaps() if ONE_LIST
+                        else {s_: None for s_ in ALGO_BIG_SYMBOLS} if ALGO_BIG_SYMBOLS
                         else get_bigcaps())
                 caps_day = today
                 log(f"خوارزميات الكبيرة: يراقب {len(caps)} سهم (قائمة المراقبة) - شراء كامل/بيع كامل - تنبيه عند "
@@ -4780,7 +4848,11 @@ def news_loop():
                     cat = classify_news(it.get("headline"))
                     if not cat:
                         continue
-                    if NEWS_MAX_MARKET_CAP:
+                    if ONE_LIST:
+                        syms = [x for x in syms if x in WATCH_SYMBOLS]
+                        if not syms:
+                            continue
+                    elif NEWS_MAX_MARKET_CAP:
                         caps = news_caps()
                         if not caps:
                             continue            # ما قدر يجيب القيم السوقية، ما يرسل بدون فلتر
@@ -4792,7 +4864,7 @@ def news_loop():
                     hits.append((it, cat, syms))
                 prices = fetch_prices(sorted({s for _, _, ss in hits for s in ss})) if hits else {}
                 for it, cat, syms in hits:
-                    if NEWS_MIN_PRICE or NEWS_MAX_PRICE:
+                    if not ONE_LIST and (NEWS_MIN_PRICE or NEWS_MAX_PRICE):
                         ok = [s for s in syms if s in prices
                               and prices[s] >= NEWS_MIN_PRICE
                               and (not NEWS_MAX_PRICE or prices[s] <= NEWS_MAX_PRICE)]
@@ -5100,6 +5172,8 @@ def earn_scan(today=None):
             cands[sym] = {"sym": sym, "name": str(row.get("name") or sym).strip(), "day": d,
                           "when": EARN_TIME_AR.get(row.get("time"), "الوقت غير محدد"),
                           "cap": _num_or_none(row.get("marketCap"))}
+    if ONE_LIST:
+        cands = {s: x for s, x in cands.items() if s in WATCH_SYMBOLS}
     log(f"الأرباح: {len(cands)} سهم بالتقويم ({days[0]} - {days[-1]})")
     # فلتر القيمة السوقية مبدئي من التقويم (اللي ما لها قيمة نتأكد منها من ياهو بعدين)
     pool = [s for s, x in cands.items() if x["cap"] is None or x["cap"] >= EARN_MIN_CAP]
