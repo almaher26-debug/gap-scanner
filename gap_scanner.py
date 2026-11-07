@@ -764,7 +764,7 @@ def discover_groups():
             title = chat.get("title", "")
             log(f"✅ انضاف قروب/قناة جديد: {title}  الرقم: {cid}")
             log(f"   عشان يثبت دايم، حط هالرقم في TELEGRAM_CHAT_ID على Railway")
-            _send_one(cid, f"✅ البوت متصل هنا وبيرسل التنبيهات\nرقم المحادثة: {cid}")
+            _send_one(cid, "✅ البوت متصل هنا وبيرسل التنبيهات")
 
 
 def _send_one(chat_id, text):
