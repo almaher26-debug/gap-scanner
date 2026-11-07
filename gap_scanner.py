@@ -376,7 +376,7 @@ MIN_PRICE = 50
 MAX_PRICE = 500
 
 # ---- (2) الأخبار - 24 ساعة ----
-ENABLE_FLOW = True               # ماسح السيولة للبني ستوك
+ENABLE_FLOW = False               # ماسح السيولة للبني ستوك
 FLOW_MIN_PRICE = 1               # أقل سعر
 FLOW_MAX_PRICE = 5               # أعلى سعر
 FLOW_MIN_AVG_VOLUME = 100_000    # يشيل الأسهم الميتة
@@ -436,7 +436,7 @@ BZ_DROP_MIN_BASE = 1_000         # يتجاهل الأسهم اللي أعلى �
 BZ_DROP_CHAT = os.environ.get("TELEGRAM_CHAT_ID_SHORT", "").strip()
 
 # ---- (4د) سكنر الزخم: ارتفاع قوي + فوليوم نسبي + قريب من قمة اليوم (Alpaca، كل دقيقة) ----
-ENABLE_MOMENTUM = True           # True = شغال | False = مطفي
+ENABLE_MOMENTUM = False           # True = شغال | False = مطفي
 MOM_MIN_PRICE = 1                # أقل سعر
 MOM_MAX_PRICE = 15               # أعلى سعر (كان 10)
 MOM_MIN_CHANGE = 10              # أقل ارتفاع % عن إغلاق أمس
@@ -525,7 +525,7 @@ PDR1H_OPT_MAX_SPREAD = 0.20      # فرق البيد والأسك ما يتعد�
 # شروط العقد فوق تنطبق بعد على عقد سحب مقاومة أمس (15 دقيقة - بوت)
 
 # ---- (4ب) تجزئة عكسية + شورت صفر (أسهم البني ستوك) ----
-ENABLE_RSPLIT_SHORT = True             # قوائم التجزئة العكسية شغالة
+ENABLE_RSPLIT_SHORT = False             # قوائم التجزئة العكسية شغالة
 ENABLE_RSPLIT_SHORT_ZERO = False       # تنبيه الشورت صفر بعد التجزئة: False = مطفي | True = يرجع
 RSPLIT_MAX_PRICE = 5                 # الشورت صفر: يفحصه لأسهم البني ستوك (5$ أو أقل) من اللي سوت تجزئة
 RSPLIT_NEW_DAYS = 4                  # "جديد" = تجزئة صارت خلال آخر كذا يوم (يغطي الويكند) وما انرسلت قبل
@@ -556,7 +556,7 @@ ALGO_DELAY_MIN = int(os.environ.get("ALGO_DELAY_MIN", "0"))
 # الأسهم: تلقائياً أسهم ناسداك اللي سعرها من 1$ إلى 15$ وسوت تجزئة عكسية خلال آخر 3 شهور
 # ولو تبي قائمة ثابتة حطها في Railway بمتغير ALGO_SYMBOLS (بينها فاصلة)
 ALGO_SYMBOLS = [s.strip().upper() for s in os.environ.get("ALGO_SYMBOLS", "").split(",") if s.strip()]
-ALGO_SMALL = os.environ.get("ALGO_SMALL", "1") != "0"   # 0 = يطفي هالقسم
+ALGO_SMALL = False   # 0 = يطفي هالقسم
 ALGO_MIN_PRICE = 1                    # أقل سعر سهم
 ALGO_MAX_PRICE = 15                   # أعلى سعر سهم
 ALGO_MAX_MARKET_CAP = 0               # 0 = بدون شرط قيمة سوقية
@@ -576,7 +576,7 @@ ALGO_REALERT_MIN = 15                 # ما يعيد نفس مستوى التن
 # ---- (6ج) خوارزميات البني ستوك: من 1$ إلى 5$ وقيمتها السوقية 40 مليون وتحت ----
 # نفس منطق القسم (6) بالضبط: صفقات 10 أسهم وأقل بنفس الحجم، تنبيه 300 وقوي 600 خلال 5 دقايق
 # السهم اللي داخل قائمة التجزئة العكسية (6) ما يتكرر هنا
-ALGO_PENNY = os.environ.get("ALGO_PENNY", "1") != "0"   # 0 = يطفي هالقسم
+ALGO_PENNY = False   # 0 = يطفي هالقسم
 ALGO_PENNY_ONCE_HOURS = 24            # تنبيه واحد بس لكل سهم، وبعدها يسكت عنه كذا ساعة (0 = بدون حد)
 ALGO_PENNY_MIN_PRICE = 1
 ALGO_PENNY_MAX_PRICE = 5
@@ -613,7 +613,7 @@ ALGO_ICE_REALERT_MIN = 5                  # ما يعيد التنبيه لنف�
 
 # ---- (7) الأخبار الإيجابية - من ألباكا (نفس المفاتيح) ----
 # اندماج، استحواذ، موافقة FDA، عقود وشراكات، نتائج قوية، رفع توقعات، ترقية، إعادة شراء ...
-NEWS = os.environ.get("NEWS", "1") != "0"   # 0 = يطفي هالقسم
+NEWS = False   # 0 = يطفي هالقسم
 NEWS_POLL_SEC = 60                    # كل كم ثانية يسحب الأخبار الجديدة (24 ساعة، كل الأيام)
 NEWS_MAX_AGE_MIN = 30                 # يتجاهل الخبر اللي عمره أكثر من كذا دقيقة (عشان ما يرسل قديم أول ما يشتغل)
 NEWS_MAX_SYMBOLS = 3                  # يتجاهل الخبر اللي فيه أكثر من كذا سهم (ملخصات السوق العامة)
