@@ -82,6 +82,13 @@
     - شموع 4 ساعات نفس تريدنج فيو (الجلسة الممتدة)، تنبيه واحد لكل سهم بالأسبوع
     - ENABLE_PWL_4H = False يطفيه
 
+(1ك-3) سحب سيولة دعم ومقاومة الشهر السابق - فريم 4 ساعات - قائمة المراقبة (163 سهم + المؤشرين)
+    - الدعم = قاع الشهر السابق: شمعة 4 ساعات (من هالشهر) ذيلها نزل تحته وقفلت فوقه ← كول
+    - المقاومة = قمة الشهر السابق: شمعة 4 ساعات ذيلها طلع فوقها وقفلت تحتها ← بوت
+    - تنبيه واحد لكل سهم بالشهر (PM4H_ONCE_PER_MONTH)، ومعه صورة شارت 4 ساعات موضح فيها السحب
+    - يفحص كل 5 دقايق وقت السوق مع (1ك)
+    - ENABLE_PML_4H / ENABLE_PMH_4H = False يطفي الدعم / المقاومة | python gap_scanner.py --pm4htest يجربه بدون نت
+
 (1و) سحب سيولة دعمين - الفريم الأسبوعي
     - الأسهم: ناسداك + نيويورك اللي قيمتها السوقية 10 مليار دولار وفوق
     - الدعم = قاع أسبوعي سابق (أنزل من شمعتين قبله وشمعتين بعده) خلال آخر سنة، ولسا صامد
@@ -477,6 +484,15 @@ ENABLE_PWH_1H = True             # True = شغال | False = مطفي (نفس ت
 #   شمعة 4 ساعات (من هالأسبوع) ذيلها نزل تحت قاع الأسبوع السابق وقفلت فوقه (لونها ما يهم)
 #   مستقل عن فريم الساعة: تنبيه واحد لكل سهم بالأسبوع على فريم 4 ساعات
 ENABLE_PWL_4H = True             # True = شغال | False = مطفي
+# ---- (1ك-3) سحب سيولة دعم ومقاومة الشهر السابق - فريم 4 ساعات - قائمة المراقبة ----
+#   الدعم = قاع الشهر السابق: شمعة 4 ساعات (من هالشهر) ذيلها نزل تحته وقفلت فوقه ← كول
+#   المقاومة = قمة الشهر السابق: شمعة 4 ساعات ذيلها طلع فوقها وقفلت تحتها ← بوت
+#   مستويات الشهر من الشموع اليومية (نفس طريقة الأسبوع السابق في (1ك))، ويفحص مع (1ك) كل 5 دقايق
+ENABLE_PML_4H = True             # الدعم: True = شغال | False = مطفي
+ENABLE_PMH_4H = True             # المقاومة: True = شغال | False = مطفي
+PM4H_ONCE_PER_MONTH = True       # True = تنبيه واحد لكل سهم بالشهر (أول سحب: دعم أو مقاومة) | False = واحد لكل جهة
+SWEEP_CHART = True               # صورة شارت 4 ساعات مع تنبيه السحب (يحتاج matplotlib) | False = نص بس
+SWEEP_CHART_BARS = 40            # كم شمعة 4 ساعات تطلع بالصورة
 
 # ---- (1ن) سحب سيولة اليوم السابق + إعادة اختبار - فريم 15 دقيقة - لحظي على قائمة المراقبة ----
 #   المقاومة: شمعة ذيلها طلع فوق قمة أمس وقفلت تحتها (سحب) ← السعر ابتعد تحت المستوى ←
@@ -942,7 +958,24 @@ def sec_tag(sym, sep=" | "):
     return f"{sep}{sec}" if sec else ""
 
 
-def send_telegram(text, kind=None, sym=None):
+def _send_photo_one(chat_id, png, caption=None):
+    """يرسل صورة (PNG بايتات) مع نص تحتها لو فيه. يرجع True لو انرسلت."""
+    try:
+        data = {"chat_id": chat_id}
+        if caption:
+            data["caption"] = caption
+        r = requests.post(f"{TG_API}/sendPhoto", data=data,
+                          files={"photo": ("chart.png", png, "image/png")}, timeout=40).json()
+        if not r.get("ok"):
+            log(f"فشل إرسال الصورة لـ {chat_id}: {r.get('description')}")
+            return False
+        return True
+    except Exception as e:
+        log(f"فشل إرسال الصورة لـ {chat_id}:", e)
+        return False
+
+
+def send_telegram(text, kind=None, sym=None, photo=None):
     if sym and SHOW_SECTOR:
         try:
             text = _with_sector(text, sym)
@@ -958,7 +991,12 @@ def send_telegram(text, kind=None, sym=None):
     log(text)
     if "ضع_" in TELEGRAM_TOKEN:
         return  # ما حطيت التوكن، يطبع بالشاشة بس
+    fits = len(text.encode("utf-16-le")) // 2 <= 1024      # حد تيليجرام للنص تحت الصورة
     for chat_id in list(CHATS):
+        if photo and fits and _send_photo_one(chat_id, photo, text):
+            continue                                        # الصورة والتنبيه برسالة وحدة
+        if photo:
+            _send_photo_one(chat_id, photo)                 # النص طويل: الصورة لحالها وبعدها النص
         _send_one(chat_id, text)
 
 
@@ -3204,25 +3242,31 @@ def check_pwh_1h(c1h, resistance, week_start):
             "first_touch": bool(before.empty or before["High"].max() <= resistance)}
 
 
-def _pwl_message(t, side, lvl, lvl_day, r, frame="فريم ساعة"):
+def _pwl_message(t, side, lvl, lvl_day, r, frame="فريم ساعة", period="الأسبوع", trade=False):
+    """period = "الأسبوع" أو "الشهر". trade=True يضيف الاتجاه المتوقع (كول/بوت) والوقف."""
     t1 = pd.Timestamp(r["start"]).tz_convert(LOCAL_TZ)
     color = "خضراء 🟢" if r["close"] > r["open"] else "حمراء 🔴"
+    this_p = "هال" + period[2:]                   # هالأسبوع / هالشهر
     if side == "low":
-        head = f"💧 سحب سيولة دعم الأسبوع السابق — {frame}"
-        lvl_line = f"الدعم (قاع الأسبوع السابق): {lvl:.2f}  (يوم {lvl_day})"
+        head = f"💧 سحب سيولة دعم {period} السابق — {frame}"
+        lvl_line = f"الدعم (قاع {period} السابق): {lvl:.2f}  (يوم {lvl_day})"
         wick = f"أقل سعر بالشمعة: {r['low']:.2f}  (-{r['depth']:.2f}% تحت الدعم)"
         close = f"الإغلاق: {r['close']:.2f} فوق الدعم | الشمعة {color}"
         word, where = "الدعم", "تحت"
     else:
-        head = f"🔻 سحب سيولة مقاومة الأسبوع السابق — {frame}"
-        lvl_line = f"المقاومة (قمة الأسبوع السابق): {lvl:.2f}  (يوم {lvl_day})"
+        head = f"🔻 سحب سيولة مقاومة {period} السابق — {frame}"
+        lvl_line = f"المقاومة (قمة {period} السابق): {lvl:.2f}  (يوم {lvl_day})"
         wick = f"أعلى سعر بالشمعة: {r['high']:.2f}  (+{r['depth']:.2f}% فوق المقاومة)"
         close = f"الإغلاق: {r['close']:.2f} تحت المقاومة | الشمعة {color}"
         word, where = "المقاومة", "فوق"
-    note = (f"أول لمس {'للدعم' if side == 'low' else 'للمقاومة'} هالأسبوع" if r["first_touch"] else
+    note = (f"أول لمس {'للدعم' if side == 'low' else 'للمقاومة'} {this_p}" if r["first_touch"] else
             f"قبلها {r['closes_beyond']} شمعة قفلت {where} {word}" if r["closes_beyond"] else
             f"لمس {word} قبل وما قفل {where}{'ه' if side == 'low' else 'ها'}")
-    return (f"{head}\nالسهم: ${t}\n{lvl_line}\n{wick}\n{close}\n{note}\n"
+    trade_lines = ""
+    if trade:
+        trade_lines = (f"📈 الاتجاه المتوقع: كول (صعود)\n🛑 الوقف: الدعم {lvl:.2f}\n" if side == "low" else
+                       f"📉 الاتجاه المتوقع: بوت (هبوط)\n🛑 الوقف: المقاومة {lvl:.2f}\n")
+    return (f"{head}\nالسهم: ${t}\n{lvl_line}\n{wick}\n{close}\n{note}\n{trade_lines}"
             f"وقت الشمعة: {t1:%Y-%m-%d %H:%M} (توقيتك)")
 
 
@@ -3231,6 +3275,8 @@ def scan_pwl_1h(symbols, sent):
     now = pd.Timestamp.now(tz=NY)
     wk0 = _week_start(now)
     lv = _pwl_supports(symbols, now.date())
+    mo0 = _month_start(now)
+    lvm = _pm_levels(symbols, now.date()) if (ENABLE_PML_4H or ENABLE_PMH_4H) else {}
     hits = 0
     checks = []
     if ENABLE_PWL_1H:
@@ -3240,10 +3286,16 @@ def scan_pwl_1h(symbols, sent):
     for t, df in download_batches(symbols, 100, period="10d", interval=f"{GAP_BASE_MIN}m",
                                   prepost=GAP_EXTENDED):
         try:
-            if t not in lv:
+            if t not in lv and t not in lvm:
                 continue
             df = to_ny(df)[OHLC]
             if df.empty:
+                continue
+            # (1ك-3) فريم 4 ساعات - سحب دعم/مقاومة الشهر السابق
+            if t in lvm:
+                c4m = only_closed(to_frame(df, 240), df.index.max(), now)
+                hits += _pm4h_check(t, c4m, lvm[t], mo0, now, sent)
+            if t not in lv:
                 continue
             # (1ك-2) فريم 4 ساعات - الدعم بس، تنبيه واحد لكل سهم بالأسبوع
             if ENABLE_PWL_4H:
@@ -3278,6 +3330,173 @@ def scan_pwl_1h(symbols, sent):
     free_memory()
     if hits:
         log(f"[{datetime.now():%H:%M}] سحب دعم/مقاومة الأسبوع السابق (ساعة/4 ساعات): {hits} تنبيه")
+
+
+# ================== (1ك-3) سحب سيولة دعم ومقاومة الشهر السابق - فريم 4 ساعات ==================
+_pm_cache = {"day": None, "lvl": {}}
+
+
+def _month_start(ts):
+    """بداية الشهر (يوم 1، 00:00 بتوقيت نيويورك)."""
+    ts = pd.Timestamp(ts)
+    return ts.normalize() - pd.Timedelta(days=ts.day - 1)
+
+
+def prev_month_levels(daily, this_mo):
+    """قاع وقمة الشهر السابق من الشموع اليومية. this_mo = تاريخ أول يوم بهالشهر.
+    يرجع {"low": (القاع، يومه), "high": (القمة، يومها)} أو None."""
+    prev_mo = (pd.Timestamp(this_mo) - pd.Timedelta(days=1)).replace(day=1).date()
+    pm = _prev_week_rows(daily, prev_mo, this_mo)       # نفس الفلتر: من تاريخ لين تاريخ
+    if pm.empty:
+        return None
+    lows, highs = pm["Low"].astype(float), pm["High"].astype(float)
+    return {"low": (float(lows.min()), pd.Timestamp(lows.idxmin()).date()),
+            "high": (float(highs.max()), pd.Timestamp(highs.idxmax()).date())}
+
+
+def _pm_levels(symbols, today):
+    """مستويات الشهر السابق لكل سهم (تتحدث مرة باليوم)."""
+    if _pm_cache["day"] == today and _pm_cache["lvl"]:
+        return _pm_cache["lvl"]
+    this_mo = _month_start(pd.Timestamp(today)).date()
+    lvl = {}
+    for t, df in download_batches(symbols, 100, period="3mo", interval="1d", prepost=False):
+        try:
+            x = prev_month_levels(df.dropna(subset=OHLC), this_mo)
+            if x:
+                lvl[t] = x
+        except Exception:
+            continue
+    _pm_cache.update(day=today, lvl=lvl)
+    log(f"سحب الشهر السابق (4 ساعات): مستويات {len(lvl)} سهم")
+    return lvl
+
+
+def _pm4h_check(t, c4h, lv, mo0, now, sent):
+    """يفحص سحب دعم/مقاومة الشهر السابق على آخر شمعة 4 ساعات مقفلة. يرجع عدد التنبيهات."""
+    checks = []
+    if ENABLE_PML_4H:
+        checks.append(("low", "pml4h", check_pwl_1h))
+    if ENABLE_PMH_4H:
+        checks.append(("high", "pmh4h", check_pwh_1h))
+    one = f"{t}-pm4h-{mo0:%Y%m}"
+    for side, tag, fn in checks:
+        lvl, lvl_day = lv[side]
+        r = fn(c4h, lvl, mo0)
+        if not r or (now - pd.Timestamp(r["end"])).total_seconds() / 60 > PWL_MAX_ALERT_DELAY_MIN:
+            continue
+        key = one if PM4H_ONCE_PER_MONTH else f"{t}-{tag}-{mo0:%Y%m}"
+        if key in sent:
+            continue
+        sent.add(key)
+        _append_line(GAP_SENT_FILE, key)
+        send_telegram(_pwl_message(t, side, lvl, lvl_day, r, frame="فريم 4 ساعات", period="الشهر", trade=True),
+                      kind="sweep", sym=t, photo=_sweep_chart_safe(t, c4h, side, lvl, r, mo0, "month"))
+        return 1
+    return 0
+
+
+def sweep_chart_png(t, c4h, side, lvl, r, p0, period="week"):
+    """صورة شارت 4 ساعات: الشموع + خط دعم/مقاومة الفترة السابقة + شمعة السحب محددة.
+    period = "week" أو "month". يرجع PNG أو None (الكتابة على الصورة إنجليزي: matplotlib يقطّع العربي)."""
+    if not SWEEP_CHART:
+        return None
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Rectangle
+    except Exception as e:
+        log(f"الشارت: matplotlib مو موجود ({e}) — التنبيه يروح نص بس")
+        return None
+    c = c4h[c4h.index <= r["start"]].tail(SWEEP_CHART_BARS)
+    if c.empty:
+        return None
+    P = "Month" if period == "month" else "Week"
+    bg, fg, grid = "#131722", "#d1d4dc", "#2a2e39"
+    up, dn = "#26a69a", "#ef5350"
+    lvl_col = "#2962ff" if side == "low" else "#ff9800"
+    fig, ax = plt.subplots(figsize=(10, 5.6), dpi=130)
+    fig.patch.set_facecolor(bg)
+    ax.set_facecolor(bg)
+    n = len(c)
+    prev = [i for i, ts in enumerate(c.index) if ts < p0]
+    if prev:
+        ax.axvspan(prev[0] - 0.5, prev[-1] + 0.5, color="#ffffff", alpha=0.04, zorder=0)
+        ax.text((prev[0] + prev[-1]) / 2, 0.985, f"Previous {P.lower()}", transform=ax.get_xaxis_transform(),
+                ha="center", va="top", color="#787b86", fontsize=9)
+    ax.axvspan(n - 1.5, n - 0.5, color="#ffeb3b", alpha=0.13, zorder=0)
+    for i, (o, h, l, cl) in enumerate(c[["Open", "High", "Low", "Close"]].astype(float).values):
+        col = up if cl >= o else dn
+        ax.vlines(i, l, h, color=col, linewidth=1.1, zorder=2)
+        ax.add_patch(Rectangle((i - 0.32, min(o, cl)), 0.64, max(abs(cl - o), (h - l) * 0.02 or 1e-6),
+                               facecolor=col, edgecolor=col, zorder=3))
+    name = f"Prev {P} Low (Support)" if side == "low" else f"Prev {P} High (Resistance)"
+    ax.axhline(lvl, color=lvl_col, linestyle="--", linewidth=1.3, zorder=1)
+    ax.text(0.01, lvl, f" {name}  {lvl:.2f}", transform=ax.get_yaxis_transform(), color=lvl_col,
+            fontsize=9, va="bottom" if side == "low" else "top", fontweight="bold")
+    lo, hi = c["Low"].astype(float).min(), c["High"].astype(float).max()
+    span = max(max(hi, lvl) - min(lo, lvl), lvl * 0.002)
+    tip = r["low"] if side == "low" else r["high"]
+    txt_y = tip - span * 0.16 if side == "low" else tip + span * 0.16
+    ax.annotate(f"Liquidity sweep\n{tip:.2f}", xy=(n - 1, tip), xytext=(n - 4.5, txt_y),
+                color="#ffeb3b", fontsize=10, fontweight="bold", ha="center",
+                va="top" if side == "low" else "bottom",
+                arrowprops=dict(arrowstyle="->", color="#ffeb3b", lw=1.6), zorder=5)
+    ax.set_ylim(min(lo, lvl) - span * 0.32, max(hi, lvl) + span * 0.32)
+    ax.set_xlim(-1, n + 0.5)
+    step = max(n // 7, 1)
+    ticks = list(range(n))[::-1][::step][::-1]
+    ax.set_xticks(ticks)
+    ax.set_xticklabels([pd.Timestamp(c.index[i]).tz_convert(LOCAL_TZ).strftime("%m-%d\n%H:%M") for i in ticks],
+                       color=fg, fontsize=8)
+    ax.tick_params(colors=fg, labelsize=8)
+    ax.yaxis.tick_right()
+    ax.grid(color=grid, linewidth=0.6)
+    for s in ax.spines.values():
+        s.set_color(grid)
+    ax.set_title(f"{t}  ·  4H  ·  {P}ly liquidity sweep  →  {'CALL' if side == 'low' else 'PUT'}",
+                 color=fg, fontsize=12, loc="left", pad=10)
+    fig.text(0.99, 0.01, "Educational · paper trading · not a buy recommendation", color="#787b86",
+             fontsize=7, ha="right")
+    buf = io.BytesIO()
+    fig.tight_layout()
+    fig.savefig(buf, format="png", facecolor=bg)
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def _sweep_chart_safe(*a):
+    try:
+        return sweep_chart_png(*a)
+    except Exception as e:
+        log(f"الشارت: {a[0]}: {e}")
+        return None
+
+
+def pm4h_self_test():
+    """python gap_scanner.py --pm4htest — يجرب سحب الشهر السابق (4 ساعات) بدون نت."""
+    ny = ZoneInfo(NY)
+    days = pd.date_range("2026-10-01", "2026-11-09", freq="B")
+    daily = pd.DataFrame({"Open": 150.0, "High": 152.0, "Low": 148.0, "Close": 150.0}, index=days)
+    daily.loc[pd.Timestamp("2026-10-14"), "Low"] = 141.5          # قاع أكتوبر
+    daily.loc[pd.Timestamp("2026-10-27"), "High"] = 158.4         # قمة أكتوبر
+    daily.loc[pd.Timestamp("2026-11-04"), ["Low", "High"]] = [130, 170]   # نوفمبر = ما يدخل
+    mo0 = _month_start(pd.Timestamp("2026-11-10", tz=ny))
+    lv = prev_month_levels(daily, mo0.date())
+    assert lv["low"] == (141.5, datetime(2026, 10, 14).date()), lv
+    assert lv["high"] == (158.4, datetime(2026, 10, 27).date()), lv
+    print(f"✅ الشهر السابق: قاع {lv['low'][0]} ({lv['low'][1]}) | قمة {lv['high'][0]} ({lv['high'][1]})")
+    idx = pd.to_datetime(["2026-11-09 12:00", "2026-11-09 16:00", "2026-11-10 08:00"]).tz_localize(ny)
+    c4 = pd.DataFrame({"Open": [145, 144, 143], "High": [146, 145, 144.5],
+                       "Low": [143, 142.5, 140.8], "Close": [144, 143, 143.6]}, index=idx)
+    c4["end"] = c4.index + pd.Timedelta(hours=4)
+    r = check_pwl_1h(c4, lv["low"][0], mo0)
+    assert r and r["first_touch"], r
+    assert check_pwl_1h(c4, lv["low"][0], pd.Timestamp("2026-12-01", tz=ny)) is None
+    print("✅ سحب دعم الشهر: ذيل 140.8 تحت 141.5 والإغلاق 143.6 فوقه")
+    print()
+    print(_pwl_message("TEST", "low", *lv["low"], r, frame="فريم 4 ساعات", period="الشهر", trade=True))
 
 
 def pwl_self_test():
@@ -5280,6 +5499,9 @@ def main():
     if "--pwltest" in sys.argv:
         pwl_self_test()
         return
+    if "--pm4htest" in sys.argv:
+        pm4h_self_test()
+        return
     if "--pd15test" in sys.argv:
         pd15_self_test()
         return
@@ -5507,7 +5729,8 @@ def main():
                 pass
 
         # (1ك) سحب سيولة دعم ومقاومة الأسبوع السابق - فريم ساعة - كل 5 دقايق وقت السوق
-        if (ENABLE_PWL_1H or ENABLE_PWH_1H or ENABLE_PWL_4H) and (once or us_market_open()) and time.time() - pwl_last >= PWL_EVERY_MIN * 60:
+        if (ENABLE_PWL_1H or ENABLE_PWH_1H or ENABLE_PWL_4H or ENABLE_PML_4H or ENABLE_PMH_4H) \
+                and (once or us_market_open()) and time.time() - pwl_last >= PWL_EVERY_MIN * 60:
             scan_pwl_1h(list(WATCH_SYMBOLS), gap_sent)
             pwl_last = time.time()
 
