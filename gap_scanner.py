@@ -491,6 +491,13 @@ ENABLE_PWL_4H = True             # True = شغال | False = مطفي
 ENABLE_PML_4H = True             # الدعم: True = شغال | False = مطفي
 ENABLE_PMH_4H = True             # المقاومة: True = شغال | False = مطفي
 PM4H_ONCE_PER_MONTH = True       # True = تنبيه واحد لكل سهم بالشهر (أول سحب: دعم أو مقاومة) | False = واحد لكل جهة
+PM4H_OPTION = True               # عقد مع التنبيه (كول للدعم / بوت للمقاومة) | False = بدون عقد
+PM4H_OPT_MIN_DTE = 20            # عقد الشهر طويل: أكثر من 20 يوم (يختار أقرب انتهاء بعدها)
+PM4H_OPT_MAX_DTE = 60            # أبعد انتهاء يدوّر فيه
+PM4H_OPT_MIN_VOLUME = 500        # حجم التداول في العقد فوق 500
+PM4H_OPT_MIN_OI = 1000           # العقود المفتوحة (الكمية غير إغلاق المركز) فوق 1000
+PM4H_OPT_MIN_DELTA = 0.12        # الدلتا فوق 0.1200 (للبوت: القيمة المطلقة)
+EDU_NOTE = "⚠️ محتوى تعليمي — تداول وهمي، ليست توصية للشراء."
 SWEEP_CHART = True               # صورة شارت 4 ساعات مع تنبيه السحب (يحتاج matplotlib) | False = نص بس
 SWEEP_CHART_BARS = 40            # كم شمعة 4 ساعات تطلع بالصورة
 
@@ -499,7 +506,7 @@ SWEEP_CHART_BARS = 40            # كم شمعة 4 ساعات تطلع بالص�
 #   رجع يختبر المستوى وقفل تحته (إعادة اختبار) = تنبيه، ووقف الخسارة فوق أعلى سعر بشمعة الاختبار.
 #   الدعم بالعكس (قاع أمس، والوقف تحت أقل سعر بشمعة الاختبار).
 #   المستوى = قمة/قاع الجلسة الرسمية لليوم السابق. السحب والاختبار وقت السوق الرسمي (PDR_REGULAR_ONLY).
-ENABLE_PDR_15M = True            # True = شغال | False = مطفي
+ENABLE_PDR_15M = False           # True = شغال | False = مطفي (ملغي 10 نوفمبر 2026 — صار على فريم ساعة (1ن-2))
 PDR_ENABLE_CALL = True           # كول (إعادة اختبار دعم قاع أمس): True = شغال | False = ملغي
 PDR_ENABLE_PUT = True            # بوت (إعادة اختبار مقاومة قمة أمس): True = شغال | False = ملغي
 PDR_EVERY_MIN = 5                # كل كم دقيقة يفحص وقت السوق
@@ -519,12 +526,15 @@ PDR_OPT_MAX_DTE = 45             # أبعد انتهاء يدوّر فيه (لو
 PDR_OPT_RATE = 0.04              # الفائدة لحساب الدلتا لو المصدر ما أعطاها
 PDR_OPT_STOP = True              # يحسب وقف خسارة العقد = سعر العقد المتوقع لو السهم وصل وقف السهم
 
-# ---- (1ن-2) سحب سيولة دعم اليوم السابق + إعادة اختبار - فريم ساعة - كول ----
-#   نفس (1ن) بس على شموع ساعة (الجلسة الرسمية، تبدأ 9:30 مثل تريدنج فيو)، وجهة الدعم بس:
-#   شمعة ساعة ذيلها نزل تحت قاع أمس وقفلت فوقه (سحب) ← السعر ابتعد فوق المستوى ←
-#   رجع يختبر الدعم وقفل فوقه = تنبيه كول، والوقف تحت أقل سعر بشمعة الاختبار.
-#   الأهداف: قمة أمس ثم قمة الأسبوع السابق. ويختار عقد كول ويحسب وقف خسارة العقد.
-ENABLE_PDR_1H_CALL = False       # True = شغال | False = مطفي (ملغي 5 نوفمبر 2026)
+# ---- (1ن-2) سحب سيولة دعم ومقاومة اليوم السابق + إعادة اختبار - فريم ساعة (بدل 15 دقيقة) ----
+#   نفس (1ن) بس على شموع ساعة (الجلسة الرسمية، تبدأ 9:30 مثل تريدنج فيو)، والجهتين:
+#   الدعم: شمعة ساعة ذيلها نزل تحت قاع أمس وقفلت فوقه (سحب) ← السعر ابتعد فوقه ←
+#          رجع يختبر الدعم وقفل فوقه = كول، والوقف تحت أقل سعر بشمعة الاختبار
+#   المقاومة: شمعة ساعة ذيلها طلع فوق قمة أمس وقفلت تحتها (سحب) ← السعر ابتعد تحتها ←
+#          رجع يختبر المقاومة وقفل تحتها = بوت، والوقف فوق أعلى سعر بشمعة الاختبار
+#   الأهداف: كول = قمة أمس ثم قمة الأسبوع السابق | بوت = قاع أمس ثم قاع الأسبوع السابق. ومعه العقد
+#   الجهات تشتغل وتنطفي من PDR_ENABLE_CALL و PDR_ENABLE_PUT فوق
+ENABLE_PDR_1H = True             # True = شغال | False = مطفي
 PDR1H_EVERY_MIN = 5              # كل كم دقيقة يفحص وقت السوق
 PDR1H_MAX_ALERT_DELAY_MIN = 30   # ما ينبه على شمعة قفلت من أكثر من كذا دقيقة
 # شروط العقد — موحدة لكل الأقسام اللي تختار عقد (سحب أمس ساعة/15 دقيقة، و4 ساعات الجلسة العادية):
@@ -986,7 +996,7 @@ def send_telegram(text, kind=None, sym=None, photo=None):
         text = text.replace(f"${code}", f"{name} ({code})")
     if ADD_EDUCATION and kind in EDUCATION:
         text += "\n\n" + EDUCATION[kind]
-    if ADD_DISCLAIMER:
+    if ADD_DISCLAIMER and EDU_NOTE not in text:     # التنبيه اللي فيه سطر "تداول وهمي" ما يتكرر معه السطر العام
         text += "\n\n" + DISCLAIMER
     log(text)
     if "ضع_" in TELEGRAM_TOKEN:
@@ -3264,8 +3274,11 @@ def _pwl_message(t, side, lvl, lvl_day, r, frame="فريم ساعة", period="ا
             f"لمس {word} قبل وما قفل {where}{'ه' if side == 'low' else 'ها'}")
     trade_lines = ""
     if trade:
-        trade_lines = (f"📈 الاتجاه المتوقع: كول (صعود)\n🛑 الوقف: الدعم {lvl:.2f}\n" if side == "low" else
-                       f"📉 الاتجاه المتوقع: بوت (هبوط)\n🛑 الوقف: المقاومة {lvl:.2f}\n")
+        fr = frame.replace("فريم ", "")
+        trade_lines = (f"📈 الاتجاه المتوقع: كول (صعود)\n"
+                       f"🛑 الوقف: كسر الدعم {lvl:.2f} بإغلاق جسم شمعة {fr} تحته\n" if side == "low" else
+                       f"📉 الاتجاه المتوقع: بوت (هبوط)\n"
+                       f"🛑 الوقف: اختراق القمة {lvl:.2f} بإغلاق جسم شمعة {fr} فوقها\n")
     return (f"{head}\nالسهم: ${t}\n{lvl_line}\n{wick}\n{close}\n{note}\n{trade_lines}"
             f"وقت الشمعة: {t1:%Y-%m-%d %H:%M} (توقيتك)")
 
@@ -3390,10 +3403,57 @@ def _pm4h_check(t, c4h, lv, mo0, now, sent):
             continue
         sent.add(key)
         _append_line(GAP_SENT_FILE, key)
-        send_telegram(_pwl_message(t, side, lvl, lvl_day, r, frame="فريم 4 ساعات", period="الشهر", trade=True),
-                      kind="sweep", sym=t, photo=_sweep_chart_safe(t, c4h, side, lvl, r, mo0, "month"))
+        opt = None
+        if PM4H_OPTION and t not in INDEX_SYMBOLS:
+            try:
+                opt = pm4h_pick_option(t, r["close"], side == "high")
+            except Exception as e:
+                log(f"سحب الشهر السابق: {t}: العقد: {e}")
+        msg = (_pwl_message(t, side, lvl, lvl_day, r, frame="فريم 4 ساعات", period="الشهر", trade=True)
+               + "\n\n" + (pm4h_option_text(t, side, opt) + "\n\n" if PM4H_OPTION and t not in INDEX_SYMBOLS else "")
+               + EDU_NOTE)
+        send_telegram(msg, kind="sweep", sym=t, photo=_sweep_chart_safe(t, c4h, side, lvl, r, mo0, "month"))
         return 1
     return 0
+
+
+def pm4h_pick_option(t, spot, put):
+    """كول (سحب دعم) أو بوت (سحب مقاومة): أكثر من 10 أيام، حجم فوق 500، عقود مفتوحة فوق 1000،
+    دلتا فوق 0.12. أقرب انتهاء فيه عقد بالشروط، وفيه الأرخص (أقل دلتا فوق الحد).
+    يرجع (العقد، الحجم، العقود المفتوحة) أو None."""
+    today = pd.Timestamp.now(tz=NY).date()
+    d1 = today + timedelta(days=PM4H_OPT_MIN_DTE + 1)
+    d2 = today + timedelta(days=PM4H_OPT_MAX_DTE)
+    ok = []
+    for x in _pdr1h_option_rows(t, put, spot, d1, d2):
+        exp, k, delta, bid, ask, sym, iv, gamma, vol, src = x
+        if delta is None or abs(delta) <= PM4H_OPT_MIN_DELTA or not ask:
+            continue
+        if (vol or 0) <= PM4H_OPT_MIN_VOLUME or (exp - today).days <= PM4H_OPT_MIN_DTE:
+            continue
+        ok.append(x)
+    for exp in sorted({x[0] for x in ok}):
+        for x in sorted((x for x in ok if x[0] == exp), key=lambda x: abs(x[2])):
+            oi = _opt_open_interest(t, x) or 0
+            if oi > PM4H_OPT_MIN_OI:
+                return x, x[8], oi
+    return None
+
+
+def pm4h_option_text(t, side, opt):
+    kind = "بوت" if side == "high" else "كول"
+    cond = (f"(شروط العقد: أكثر من {PM4H_OPT_MIN_DTE} أيام، حجم فوق {PM4H_OPT_MIN_VOLUME}، "
+            f"عقود مفتوحة فوق {PM4H_OPT_MIN_OI:,}، دلتا فوق {PM4H_OPT_MIN_DELTA:.4f})")
+    if not opt:
+        return f"📄 العقد: ما لقيت {kind} بالشروط\n{cond}"
+    c, vol, oi = opt
+    exp, k, delta, bid, ask, sym, iv = c[:7]
+    days = (exp - pd.Timestamp.now(tz=NY).date()).days
+    mid = (bid + ask) / 2 if bid else ask
+    return (f"📄 العقد: {t} {kind} {k:g} — انتهاء {exp:%Y-%m-%d} ({days} يوم)\n"
+            f"السعر الحين: {mid:.2f}$ (العقد كامل {mid * 100:,.0f}$) | بيد {bid or 0:.2f} / أسك {ask:.2f}\n"
+            f"الدلتا: {delta:.4f}" + (f" | IV: {iv * 100:.0f}%" if iv else "") + "\n"
+            f"حجم التداول: {int(vol):,} | العقود المفتوحة: {int(oi):,}\n{cond}")
 
 
 def sweep_chart_png(t, c4h, side, lvl, r, p0, period="week"):
@@ -3996,7 +4056,7 @@ def pdr_attach_option(t, r):
 
 
 def scan_pd_retest_1h(symbols, sent):
-    """(1ن-2) سحب سيولة دعم اليوم السابق + إعادة اختبار على فريم ساعة → تنبيه كول."""
+    """(1ن-2) سحب سيولة دعم/مقاومة اليوم السابق + إعادة اختبار على فريم ساعة → كول / بوت."""
     now = pd.Timestamp.now(tz=NY)
     hits = 0
     week_lv = {}
@@ -4016,25 +4076,26 @@ def scan_pd_retest_1h(symbols, sent):
             if not lv:
                 continue
             c = only_closed(to_frame(df, 60, session=(9 * 60 + 30, 16 * 60)), df.index.max(), now)
-            r = check_pd_retest(c, "low", levels=lv)
-            if not r or (now - pd.Timestamp(r["end"])).total_seconds() / 60 > PDR1H_MAX_ALERT_DELAY_MIN:
-                continue
-            key = f"{t}-pdr1h-low-{pd.Timestamp(r['start']):%Y%m%d}"   # مرة باليوم لكل سهم
-            if key in sent:
-                continue
-            sent.add(key)
-            _append_line(GAP_SENT_FILE, key)
-            hits += 1
-            r["frame"] = "فريم ساعة"
-            r["targets"] = pdr_targets(r, week_lv.get(t))
-            if PDR_OPTION:
-                pdr_attach_option(t, r)
-            send_telegram(_pdr_message(t, r), kind="sweep", sym=t)
+            for side in (("high",) if PDR_ENABLE_PUT else ()) + (("low",) if PDR_ENABLE_CALL else ()):
+                r = check_pd_retest(c, side, levels=lv)
+                if not r or (now - pd.Timestamp(r["end"])).total_seconds() / 60 > PDR1H_MAX_ALERT_DELAY_MIN:
+                    continue
+                key = f"{t}-pdr1h-{side}-{pd.Timestamp(r['start']):%Y%m%d}"   # مرة باليوم لكل جهة
+                if key in sent:
+                    continue
+                sent.add(key)
+                _append_line(GAP_SENT_FILE, key)
+                hits += 1
+                r["frame"] = "فريم ساعة"
+                r["targets"] = pdr_targets(r, week_lv.get(t))
+                if PDR_OPTION:
+                    pdr_attach_option(t, r)
+                send_telegram(_pdr_message(t, r), kind="sweep", sym=t)
         except Exception as e:
-            log(f"سحب دعم أمس (ساعة): {t}: خطأ - {e}")
+            log(f"سحب دعم/مقاومة أمس (ساعة): {t}: خطأ - {e}")
     free_memory()
     if hits:
-        log(f"[{datetime.now():%H:%M}] سحب دعم اليوم السابق + اختبار (ساعة): {hits} تنبيه")
+        log(f"[{datetime.now():%H:%M}] سحب دعم/مقاومة اليوم السابق + اختبار (ساعة): {hits} تنبيه")
 
 
 def pdr_self_test():
@@ -5738,7 +5799,7 @@ def main():
         if ENABLE_PDR_15M and (once or us_market_open()) and time.time() - pdr_last >= PDR_EVERY_MIN * 60:
             scan_pd_retest(list(WATCH_SYMBOLS), gap_sent)
             pdr_last = time.time()
-        if ENABLE_PDR_1H_CALL and (once or us_market_open()) and time.time() - pdr1h_last >= PDR1H_EVERY_MIN * 60:
+        if ENABLE_PDR_1H and (once or us_market_open()) and time.time() - pdr1h_last >= PDR1H_EVERY_MIN * 60:
             scan_pd_retest_1h(list(WATCH_SYMBOLS), gap_sent)
             pdr1h_last = time.time()
 
