@@ -89,6 +89,14 @@
     - يفحص كل 5 دقايق وقت السوق مع (1ك)
     - ENABLE_PML_4H / ENABLE_PMH_4H = False يطفي الدعم / المقاومة | python gap_scanner.py --pm4htest يجربه بدون نت
 
+(1ك-4) سحب سيولة دعم ومقاومة اليوم السابق بذيل شمعة - فريم 4 ساعات - قائمة المراقبة
+    - الدعم = قاع أمس (الجلسة الرسمية): ذيل شمعة 4 ساعات نزل تحته، وجسمها كامل فوقه ← كول
+    - المقاومة = قمة أمس: ذيل الشمعة طلع فوقها، وجسمها كامل تحتها ← بوت
+    - شموع الجلسة الليلية (8 بالليل - 4 الفجر) والبري (4-8) والأفتر (4-8 العصر) بس — الماركت ما يدخل
+      الليلي يحتاج مفاتيح ألباكا أو Tiingo (بدونها البري والأفتر بس)
+    - الذيل ما يتعدى المستوى أكثر من 2%، وتنبيه واحد لكل سهم ولكل جهة باليوم، ومعه صورة شارت
+    - ENABLE_PDL_4H / ENABLE_PDH_4H = False يطفي الدعم / المقاومة | python gap_scanner.py --pd4htest يجربه بدون نت
+
 (1و) سحب سيولة دعمين - الفريم الأسبوعي
     - الأسهم: ناسداك + نيويورك اللي قيمتها السوقية 10 مليار دولار وفوق
     - الدعم = قاع أسبوعي سابق (أنزل من شمعتين قبله وشمعتين بعده) خلال آخر سنة، ولسا صامد
@@ -497,6 +505,19 @@ PM4H_OPT_MAX_DTE = 60            # أبعد انتهاء يدوّر فيه
 PM4H_OPT_MIN_VOLUME = 500        # حجم التداول في العقد فوق 500
 PM4H_OPT_MIN_OI = 1000           # العقود المفتوحة (الكمية غير إغلاق المركز) فوق 1000
 PM4H_OPT_MIN_DELTA = 0.12        # الدلتا فوق 0.1200 (للبوت: القيمة المطلقة)
+# ---- (1ك-4) سحب سيولة دعم ومقاومة اليوم السابق بذيل شمعة - فريم 4 ساعات - قائمة المراقبة ----
+#   الدعم = قاع اليوم السابق (الجلسة الرسمية 9:30 - 4 نيويورك):
+#     شمعة 4 ساعات (من اليوم) ذيلها نزل تحت قاع أمس، وجسمها كامل (الافتتاح والإغلاق) فوقه ← كول
+#   المقاومة = قمة اليوم السابق: ذيل الشمعة طلع فوقها، وجسمها كامل تحتها ← بوت
+#   شموع الجلسة الليلية والبري والأفتر بس (الشموع اللي فيها الماركت ما تدخل)
+#   يفحص كل 5 دقايق أول نص ساعة بعد إغلاق الشمعة، وتنبيه واحد لكل سهم ولكل جهة باليوم
+ENABLE_PDL_4H = True             # الدعم (قاع أمس): True = شغال | False = مطفي
+ENABLE_PDH_4H = True             # المقاومة (قمة أمس): True = شغال | False = مطفي
+PD4H_SYMBOLS = []                # فاضية = نفس قائمة المراقبة (WATCH_SYMBOLS)
+PD4H_WICK_ONLY = True            # True = السحب بالذيل بس (الافتتاح والإغلاق ورا المستوى) | False = الإغلاق بس
+PD4H_MAX_BEYOND_PCT = 0.02       # الذيل ما يتعدى المستوى أكثر من 2% (أكثر = كسر مو سحب) | 0 = بدون حد
+PD4H_EVERY_MIN = 5               # كل كم دقيقة يفحص (أول نص ساعة بعد إغلاق الشمعة)
+PD4H_MAX_ALERT_DELAY_MIN = 30    # ما ينبه على شمعة قفلت من أكثر من كذا دقيقة
 EDU_NOTE = "⚠️ محتوى تعليمي — تداول وهمي، ليست توصية للشراء."
 SWEEP_CHART = True               # صورة شارت 4 ساعات مع تنبيه السحب (يحتاج matplotlib) | False = نص بس
 SWEEP_CHART_BARS = 40            # كم شمعة 4 ساعات تطلع بالصورة
@@ -3472,7 +3493,7 @@ def sweep_chart_png(t, c4h, side, lvl, r, p0, period="week"):
     c = c4h[c4h.index <= r["start"]].tail(SWEEP_CHART_BARS)
     if c.empty:
         return None
-    P = "Month" if period == "month" else "Week"
+    P = {"month": "Month", "day": "Day"}.get(period, "Week")
     bg, fg, grid = "#131722", "#d1d4dc", "#2a2e39"
     up, dn = "#26a69a", "#ef5350"
     lvl_col = "#2962ff" if side == "low" else "#ff9800"
@@ -3515,7 +3536,7 @@ def sweep_chart_png(t, c4h, side, lvl, r, p0, period="week"):
     ax.grid(color=grid, linewidth=0.6)
     for s in ax.spines.values():
         s.set_color(grid)
-    ax.set_title(f"{t}  ·  4H  ·  {P}ly liquidity sweep  →  {'CALL' if side == 'low' else 'PUT'}",
+    ax.set_title(f"{t}  ·  4H  ·  {'Daily' if P == 'Day' else P + 'ly'} liquidity sweep  →  {'CALL' if side == 'low' else 'PUT'}",
                  color=fg, fontsize=12, loc="left", pad=10)
     fig.text(0.99, 0.01, "Educational · paper trading · not a buy recommendation", color="#787b86",
              fontsize=7, ha="right")
@@ -3608,6 +3629,169 @@ def pwl_self_test():
     print("✅ مقاومة: قفل فوقها / ما طلع فوقها / أسبوع قديم = ما فيه تنبيه")
     print()
     print(_pwl_message("TEST", "high", hi, hday, r))
+
+
+# ================== (1ك-4) سحب سيولة اليوم السابق بذيل شمعة - فريم 4 ساعات (الليلي والبري والأفتر) ==================
+# شموع 4 ساعات نفس تريدنج فيو (24 ساعة): 8-12 بالليل، 12-4 الفجر (الليلي)، 4-8 الصبح (البري)،
+#   4-8 العصر (الأفتر) = بتوقيت الرياض (الشتوي): 4-8، 8-12، 12-4 العصر، 12-4 الفجر
+#   شموع 8-12 و12-4 فيها الماركت، فما تدخل. بدون مفاتيح ألباكا/Tiingo يشتغل البري والأفتر بس
+PD4H_STARTS = (20, 0, 4, 16)      # ساعة بداية الشموع المسموحة (نيويورك)
+
+
+def pd4h_trade_day(ts):
+    """يوم التداول اللي تتبع له الشمعة: اللي تبدأ 8 بالليل وبعد تتبع اليوم اللي بعده."""
+    ts = pd.Timestamp(ts)
+    return (ts + pd.Timedelta(days=1)).date() if ts.hour >= 20 else ts.date()
+
+
+def pd4h_prev_levels(df, trade_day):
+    """قمة وقاع الجلسة الرسمية (9:30 - 4) لآخر يوم تداول قبل trade_day، من شموع 15 دقيقة.
+    يرجع (التاريخ، القمة، القاع) أو None."""
+    m = df.index.hour * 60 + df.index.minute
+    reg = df[(m >= 9 * 60 + 30) & (m < 16 * 60)]
+    reg = reg[reg.index.date < trade_day]
+    if reg.empty:
+        return None
+    d = reg.index[-1].date()
+    p = reg[reg.index.date == d]
+    if len(p) < 10:                         # بيانات اليوم ناقصة
+        return None
+    return d, float(p["High"].max()), float(p["Low"].min())
+
+
+def check_pd4h(c4h, side, lvl, day0):
+    """آخر شمعة 4 ساعات مقفلة: ذيلها تعدى مستوى أمس، وجسمها كامل رجع ورا المستوى.
+    side = "low" (قاع أمس، الذيل تحت والجسم فوق) أو "high" (قمة أمس بالعكس). day0 = بداية يوم التداول."""
+    c = c4h[c4h.index >= day0]
+    if c.empty:
+        return None
+    last = c.iloc[-1]
+    o, h, l, cl = (float(last[k]) for k in OHLC)
+    body_lo, body_hi = (min(o, cl), max(o, cl)) if PD4H_WICK_ONLY else (cl, cl)
+    before = c.iloc[:-1]
+    if side == "low":
+        if not (l < lvl < body_lo):
+            return None
+        depth = (lvl - l) / lvl * 100
+        closes_beyond = int((before["Close"] < lvl).sum()) if len(before) else 0
+        first = bool(before.empty or before["Low"].min() >= lvl)
+    else:
+        if not (body_hi < lvl < h):
+            return None
+        depth = (h - lvl) / lvl * 100
+        closes_beyond = int((before["Close"] > lvl).sum()) if len(before) else 0
+        first = bool(before.empty or before["High"].max() <= lvl)
+    if PD4H_MAX_BEYOND_PCT and depth > PD4H_MAX_BEYOND_PCT * 100:
+        return None                          # كسر قوي مو سحب
+    return {"open": o, "high": h, "low": l, "close": cl, "depth": depth, "start": c.index[-1],
+            "end": last["end"], "closes_beyond": closes_beyond, "first_touch": first}
+
+
+def pd4h_due(now):
+    """أول نص ساعة بعد إغلاق شمعة ليلي/بري/أفتر (12 بالليل، 4 الفجر، 8 الصبح، 8 بالليل نيويورك)."""
+    closes = {(s + 4) % 24 for s in PD4H_STARTS}
+    return now.hour in closes and now.minute < 35
+
+
+def scan_pd4h(symbols, sent):
+    now = pd.Timestamp.now(tz=NY)
+    ov = night_4h()
+    starts = PD4H_STARTS if ov else tuple(s for s in PD4H_STARTS if 4 <= s < 20)
+    boats = load_boats(symbols, now) if ov else {}
+    checks = [s for s, on in (("low", ENABLE_PDL_4H), ("high", ENABLE_PDH_4H)) if on]
+    hits = 0
+    for t, df in download_batches(symbols, 100, period="7d", interval=f"{GAP_BASE_MIN}m", prepost=True):
+        try:
+            df = to_ny(df)[OHLC]
+            night = boats.get(t)
+            if night is not None and not night.empty:
+                df = pd.concat([df, night])
+                df = df[~df.index.duplicated(keep="first")].sort_index()
+            if df.empty:
+                continue
+            c4h = only_closed(to_frame(df, 240, ov), df.index.max(), now)
+            if c4h.empty or c4h.index[-1].hour not in starts:
+                continue                     # آخر شمعة مقفلة من الماركت (مو ليلي/بري/أفتر)
+            if (now - pd.Timestamp(c4h["end"].iloc[-1])).total_seconds() / 60 > PD4H_MAX_ALERT_DELAY_MIN:
+                continue
+            tday = pd4h_trade_day(c4h.index[-1])
+            lv = pd4h_prev_levels(df, tday)
+            if not lv:
+                continue
+            pday, phigh, plow = lv
+            day0 = pd.Timestamp(tday, tz=NY) - pd.Timedelta(hours=4)   # 8 بالليل اللي قبله
+            for side in checks:
+                lvl = plow if side == "low" else phigh
+                r = check_pd4h(c4h, side, lvl, day0)
+                if not r:
+                    continue
+                key = f"{t}-pd4h-{side}-{tday:%Y%m%d}"
+                if key in sent:
+                    continue
+                sent.add(key)
+                _append_line(GAP_SENT_FILE, key)
+                hits += 1
+                sess = {4: "البري ماركت", 16: "الأفتر ماركت"}.get(r["start"].hour, "الجلسة الليلية")
+                msg = (_pwl_message(t, side, lvl, pday, r, frame=f"فريم 4 ساعات ({sess})",
+                                    period="اليوم", trade=True) + "\n\n" + EDU_NOTE)
+                send_telegram(msg, kind="sweep", sym=t,
+                              photo=_sweep_chart_safe(t, c4h, side, lvl, r, day0, "day"))
+        except Exception as e:
+            log(f"سحب اليوم السابق (4 ساعات): {t}: خطأ - {e}")
+    free_memory()
+    if hits:
+        log(f"[{datetime.now():%H:%M}] سحب اليوم السابق بذيل (4 ساعات ليلي/بري/أفتر): {hits} تنبيه")
+
+
+def pd4h_self_test():
+    """python gap_scanner.py --pd4htest — يجرب سحب اليوم السابق بذيل (4 ساعات) بدون نت."""
+    ny = ZoneInfo(NY)
+    # أمس (الثلاثاء 10 نوفمبر) جلسة رسمية: قمة 105، قاع 100
+    idx = pd.date_range("2026-11-10 09:30", "2026-11-10 15:45", freq="15min", tz=ny)
+    df = pd.DataFrame({"Open": 102.0, "High": 103.0, "Low": 101.0, "Close": 102.0}, index=idx)
+    df.iloc[3, df.columns.get_loc("High")] = 105.0
+    df.iloc[20, df.columns.get_loc("Low")] = 100.0
+    pre = pd.DataFrame({"Open": 99.0, "High": 99.5, "Low": 98.0, "Close": 99.0},
+                       index=pd.date_range("2026-11-10 06:00", periods=4, freq="15min", tz=ny))
+    df = pd.concat([pre, df])                # البري ما يدخل بمستوى أمس
+    assert pd4h_trade_day(pd.Timestamp("2026-11-10 20:00", tz=ny)) == datetime(2026, 11, 11).date()
+    lv = pd4h_prev_levels(df, datetime(2026, 11, 11).date())
+    assert lv == (datetime(2026, 11, 10).date(), 105.0, 100.0), lv
+    print(f"✅ أمس {lv[0]}: قمة {lv[1]} | قاع {lv[2]} (البري ما دخل)")
+    day0 = pd.Timestamp("2026-11-10 20:00", tz=ny)
+    ci = pd.to_datetime(["2026-11-10 20:00", "2026-11-11 00:00", "2026-11-11 04:00"]).tz_localize(ny)
+
+    def frame(o, h, l, c):
+        f = pd.DataFrame({"Open": o, "High": h, "Low": l, "Close": c}, index=ci)
+        f["end"] = f.index + pd.Timedelta(hours=4)
+        return f
+
+    ok = frame([101, 101.5, 100.8], [102, 102, 101.6], [100.5, 100.6, 99.4], [101.5, 100.8, 101.3])
+    r = check_pd4h(ok, "low", 100.0, day0)
+    assert r and r["first_touch"], r
+    print(f"✅ دعم: الذيل نزل {r['low']} والجسم ({r['open']} - {r['close']}) فوق 100")
+    body = ok.copy(); body.iloc[-1, body.columns.get_loc("Open")] = 99.8
+    assert check_pd4h(body, "low", 100.0, day0) is None
+    print("✅ دعم: الشمعة فتحت تحت المستوى (الجسم كسر) = ما فيه تنبيه")
+    deep = ok.copy(); deep.iloc[-1, deep.columns.get_loc("Low")] = 97.0
+    assert check_pd4h(deep, "low", 100.0, day0) is None
+    print("✅ دعم: الذيل نزل أكثر من 2% = كسر، ما فيه تنبيه")
+    up = frame([104, 104.2, 104.5], [104.6, 104.8, 105.6], [103.8, 103.9, 104.1], [104.2, 104.5, 104.3])
+    r2 = check_pd4h(up, "high", 105.0, day0)
+    assert r2 and r2["first_touch"], r2
+    assert check_pd4h(up, "low", 100.0, day0) is None
+    print(f"✅ مقاومة: الذيل طلع {r2['high']} والجسم تحت 105")
+    for h, m, want in ((0, 10, True), (4, 34, True), (8, 5, True), (20, 5, True), (12, 5, False), (16, 5, False), (8, 40, False)):
+        assert pd4h_due(pd.Timestamp(f"2026-11-11 {h:02d}:{m:02d}", tz=ny)) == want, (h, m)
+    print("✅ التوقيت: يفحص بعد إغلاق 12 بالليل و4 الفجر و8 الصبح و8 بالليل بس")
+    print()
+    print(_pwl_message("TEST", "low", 100.0, lv[0], r, frame="فريم 4 ساعات (البري ماركت)",
+                       period="اليوم", trade=True))
+    png = _sweep_chart_safe("TEST", ok, "low", 100.0, r, day0, "day")
+    if png:
+        with open("pd4h_test.png", "wb") as f:
+            f.write(png)
+        print("🖼️ pd4h_test.png")
 
 
 # ================== (1ن) سحب سيولة اليوم السابق + إعادة اختبار (15 دقيقة) ==================
@@ -5563,6 +5747,9 @@ def main():
     if "--pm4htest" in sys.argv:
         pm4h_self_test()
         return
+    if "--pd4htest" in sys.argv:
+        pd4h_self_test()
+        return
     if "--pd15test" in sys.argv:
         pd15_self_test()
         return
@@ -5617,6 +5804,7 @@ def main():
     except FileNotFoundError:
         pdl_day = None
     pwl_last = 0.0
+    pd4h_last = 0.0
     pdr_last = 0.0
     pdr1h_last = 0.0
     gap_tickers, gap_day, gap_last = [], None, None
@@ -5794,6 +5982,14 @@ def main():
                 and (once or us_market_open()) and time.time() - pwl_last >= PWL_EVERY_MIN * 60:
             scan_pwl_1h(list(WATCH_SYMBOLS), gap_sent)
             pwl_last = time.time()
+
+        # (1ك-4) سحب سيولة اليوم السابق بذيل - فريم 4 ساعات - الليلي والبري والأفتر بس
+        now_ny = pd.Timestamp.now(tz=NY)
+        if (ENABLE_PDL_4H or ENABLE_PDH_4H) and (once or (
+                pd4h_due(now_ny) and us_market_open(now_ny, overnight=night_4h())
+                and time.time() - pd4h_last >= PD4H_EVERY_MIN * 60)):
+            scan_pd4h(PD4H_SYMBOLS or list(WATCH_SYMBOLS), gap_sent)
+            pd4h_last = time.time()
 
         # (1ن) سحب سيولة اليوم السابق + إعادة اختبار - فريم 15 دقيقة - كل 5 دقايق وقت السوق
         if ENABLE_PDR_15M and (once or us_market_open()) and time.time() - pdr_last >= PDR_EVERY_MIN * 60:
