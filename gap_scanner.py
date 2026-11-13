@@ -134,6 +134,11 @@
     - لكل سهم: القطاع، الموعد (قبل الافتتاح/بعد الإغلاق)، آخر إعلان (الربحية مقابل التوقع)، مكرر الأرباح
     - ENABLE_EARN = False يطفيه | --earntest بروفة بدون نت | --earnnow يرسلها الحين
 
+(11) تنبيه التجزئة (Stock Split) - رسالة وحدة بس لكل سهم (SPLIT_NOTES)
+    - SNDK: تجزئة 8 مقابل 1، أول تداول بالسعر الجديد 20 نوفمبر 2026
+    - التواريخ، كم سهم يصير عندك، السعر قبل وبعد، عقود الأوبشن، الخبر، وآخر إعلان أرباح والجاي
+    - ENABLE_SPLIT_NOTE = False يطفيه | --splittest بروفة بدون نت | --splitnow يرسلها الحين
+
 التشغيل:
   pip install yfinance pandas requests lxml
   python gap_scanner.py          # يشتغل باستمرار
@@ -5721,8 +5726,156 @@ def earn_self_test():
         sector_of = real
 
 
+# ================== (11) تنبيه التجزئة (Stock Split) - يرسل مرة وحدة بس لكل سهم ==================
+#   رسالة وحدة فيها: تفاصيل التجزئة والتواريخ، كم سهم يصير عندك، السعر قبل وبعد،
+#   وش يصير بعقود الأوبشن، الخبر، وآخر إعلان أرباح والإعلان الجاي.
+#   يتذكر إنه أرسل (ملف في /data) فما يعيدها لو البوت أعاد التشغيل أو انرفع من جديد.
+#   ENABLE_SPLIT_NOTE = False يطفيه | --splittest بروفة بدون إرسال | --splitnow يرسلها الحين
+ENABLE_SPLIT_NOTE = True
+SPLIT_SENT_FILE = os.path.join(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "."), "split_sent.txt")
+SPLIT_NOTES = [
+    {
+        "sym": "SNDK", "name": "Sandisk", "ratio": 8,
+        "announced": "2026-10-29",       # الإعلان مع نتائج الربع الأول
+        "record": "2026-11-09",          # تاريخ الاستحقاق: اللي يملك السهم بنهاية هاليوم ياخذ التجزئة
+        "distribution": "2026-11-19",    # توزيع الأسهم الجديدة بعد إغلاق السوق
+        "effective": "2026-11-20",       # أول يوم تداول بالسعر الجديد (افتتاح السوق)
+        "reason": "تسهيل شراء السهم على المستثمرين والموظفين (حسب بيان الشركة)",
+        "shares_before": 150_000_000,    # تقريباً (الشركة قدّرت 151 مليون سهم مخفف للربع الثاني)
+        "news": [
+            "الشركة أعلنت التجزئة يوم 29 أكتوبر مع نتائج الربع الأول من سنتها المالية 2027",
+            "التجزئة تتم بتعديل عقد تأسيس الشركة، والقيمة السوقية ونسبة ملكيتك ما تتغير",
+            "التجزئة ما تغير شي في أرباح الشركة ولا قيمتها، بس تقسم السهم لقطع أصغر",
+        ],
+        "earn_last": {
+            "title": "الربع الأول 2027 (أُعلن 29 أكتوبر 2026، بعد الإغلاق)",
+            "lines": [
+                "الإيرادات: 11.03 مليار$ (+23% عن الربع اللي قبله، +378% عن السنة اللي فاتت)",
+                "ربحية السهم المعدلة: 49.51$ مقابل توقع حوالي 46.4$ ✅ تفوّق",
+                "ربحية السهم (GAAP): 52.60$ | الهامش الإجمالي: 85%",
+                "الداتا سنتر: 4.8 مليار$ (+61% عن الربع اللي قبله)",
+                "إعادة شراء: 5 مليار$ (حوالي 3.2 مليون سهم)",
+            ],
+        },
+        "guide": {"rev": "12.2 - 12.6 مليار$", "eps": (55.0, 57.0)},   # الربحية المتوقعة قبل التجزئة
+        # ربحية السهم المعدلة آخر 4 أرباع (قبل التجزئة): 49.51 + 39.25 + 23.41 + 6.20 — لحساب المكرر
+        "ttm_eps": 118.37,
+        "earn_next": "الربع الثاني 2027: متوقع حوالي 28 يناير 2027 بعد الإغلاق (الموعد مو مؤكد من الشركة)",
+    },
+]
+
+
+def _split_price(sym):
+    """آخر سعر إغلاق من ياهو (بعد يوم التجزئة ياهو يعدّل السعر لحاله)."""
+    try:
+        import yfinance as yf
+        with _YF_LOCK:
+            h = yf.Ticker(sym).history(period="5d", auto_adjust=False)
+        return float(h["Close"].dropna().iloc[-1])
+    except Exception as e:
+        log(f"التجزئة: {sym}: ما قدرت أجيب السعر - {e}")
+        return None
+
+
+def split_message(n, price=None, today=None, pe=None, fpe=None):
+    """رسالة التجزئة. price = آخر سعر (لو قبل يوم التجزئة يعتبر سعر قبل، وبعده يعتبر سعر بعد).
+    pe / fpe = مكرر الأرباح الحالي والمتوقع من ياهو (لو متوفر)."""
+    r = n["ratio"]
+    today = today or pd.Timestamp.now(tz=NY).date()
+    eff = pd.Timestamp(n["effective"]).date()
+    d = lambda s: f"{pd.Timestamp(s):%Y-%m-%d} ({EARN_DAYS_AR[pd.Timestamp(s).weekday()]})"
+    days_left = (eff - today).days
+    when = (f"باقي {days_left} يوم" if days_left > 0 else "اليوم 🔔" if days_left == 0 else "تمت ✅")
+    L = [f"✂️ تجزئة سهم {r} مقابل 1 — {n['name']}",
+         f"السهم: ${n['sym']}",
+         f"الحالة: {when}",
+         "",
+         "📅 التواريخ:",
+         f"• الإعلان: {d(n['announced'])}",
+         f"• تاريخ الاستحقاق: {d(n['record'])} (اللي يملك السهم بنهاية هاليوم ياخذ التجزئة)",
+         f"• توزيع الأسهم الجديدة: {d(n['distribution'])} بعد الإغلاق",
+         f"• أول تداول بالسعر الجديد: {d(n['effective'])} من الافتتاح",
+         f"• السبب: {n['reason']}",
+         "",
+         "🔢 كم سهم يصير عندك:",
+         f"كل سهم = {r} أسهم (يجيك {r - 1} أسهم زيادة على كل سهم)"]
+    for k in (1, 5, 10, 25):
+        L.append(f"• {k} {'سهم' if k == 1 else 'أسهم'} ← {k * r} سهم")
+    L.append(f"عدد أسهم الشركة: حوالي {n['shares_before'] / 1e6:.0f} مليون ← حوالي "
+             f"{n['shares_before'] * r / 1e9:.1f} مليار سهم")
+    L += ["", "💲 السعر قبل وبعد (السعر ÷ " + str(r) + "):"]
+    if price:
+        before, after = (price, price / r) if today < eff else (price * r, price)
+        L.append(f"• آخر سعر: {before:,.2f}$ ← بعد التجزئة ≈ {after:,.2f}$")
+    for p in (800, 1000, 1200):
+        L.append(f"• لو {p:,}$ ← {p / r:,.2f}$")
+    L.append(f"قيمة استثمارك نفسها: مثال 10 أسهم × 1,000$ = 10,000$ ← {10 * r} سهم × {1000 / r:g}$ = 10,000$")
+    L += ["", split_options_text(n)]
+    L += ["", "📰 الخبر:"] + [f"• {x}" for x in n["news"]]
+    el = n.get("earn_last")
+    if el:
+        L += ["", f"🧾 آخر إعلان أرباح — {el['title']}:"] + [f"• {x}" for x in el["lines"]]
+    g = n.get("guide")
+    if g:
+        lo, hi = g["eps"]
+        L += ["", "🔮 توقعات الشركة للربع الجاي:",
+              f"• الإيرادات: {g['rev']}",
+              f"• ربحية السهم: {lo:g}$ - {hi:g}$ قبل التجزئة = {lo / r:.2f}$ - {hi / r:.2f}$ بعد التجزئة"]
+    # مكرر الأرباح: من ياهو + حسبتنا من أرباح آخر 4 أرباع والتوقعات (ما يتغير مع التجزئة)
+    pe_lines = []
+    if pe or fpe:
+        pe_lines.append("• ياهو: " + (f"المكرر الحالي {pe:.1f}" if pe else "المكرر الحالي غير متوفر")
+                        + (f" | المتوقع {fpe:.1f}" if fpe else ""))
+    if price:
+        pre_px = price if today < eff else price * r          # نحسب كله على أساس ما قبل التجزئة
+        if n.get("ttm_eps"):
+            pe_lines.append(f"• على أرباح آخر 4 أرباع المعدلة ({n['ttm_eps']:g}$ قبل التجزئة = "
+                            f"{n['ttm_eps'] / r:.2f}$ بعدها): {pre_px / n['ttm_eps']:.1f} مرة")
+        if g:
+            mid = sum(g["eps"]) / 2
+            pe_lines.append(f"• على توقع الربع الجاي × 4 ({mid * 4:g}$ بالسنة): {pre_px / (mid * 4):.1f} مرة")
+    if pe_lines:
+        L += ["", "📊 مكرر الأرباح (ما يتغير بالتجزئة):"] + pe_lines
+    if n.get("earn_next"):
+        L += ["", f"📢 الإعلان الجاي: {n['earn_next']}"]
+    L += ["", "⚠️ التواريخ والأرقام من بيان الشركة والأخبار، تأكد منها قبل أي صفقة"]
+    return "\n".join(L)
+
+
+def split_notes_send_once(force=False):
+    """يرسل رسالة كل تجزئة مرة وحدة بس (force=True يرسلها حتى لو انرسلت قبل)."""
+    sent = _load_set(SPLIT_SENT_FILE)
+    for n in SPLIT_NOTES:
+        key = f"{n['sym']}-split-{n['effective']}"
+        if key in sent and not force:
+            continue
+        try:
+            pe, fpe, _ = _earn_info(n["sym"])
+            send_telegram(split_message(n, _split_price(n["sym"]), pe=pe, fpe=fpe), sym=n["sym"])
+            if key not in sent:
+                sent.add(key)
+                _append_line(SPLIT_SENT_FILE, key)
+            log(f"التجزئة: انرسلت رسالة {n['sym']}")
+        except Exception as e:
+            log(f"التجزئة: {n['sym']}: خطأ - {e}")
+
+
+def split_self_test():
+    """بروفة بدون نت: سعر تجريبي 1000$."""
+    for n in SPLIT_NOTES:
+        msg = split_message(n, 1000.0, pd.Timestamp("2026-11-13").date(), pe=19.0, fpe=4.4)
+        print(msg)
+        print(f"\n(طول الرسالة: {len(msg)} حرف - حد تيليجرام 4096)")
+
 
 def main():
+    if "--splittest" in sys.argv:
+        split_self_test()
+        return
+    if "--splitnow" in sys.argv:
+        _load_chats()
+        split_notes_send_once(force=True)
+        return
     if "--test" in sys.argv:
         self_test()
         return
@@ -5774,6 +5927,8 @@ def main():
         send_telegram("🧪 رسالة اختبار - البوت اشتغل\n"
                       f"القائمة الموحدة: {len(stocks_only(WATCH_SYMBOLS))} سهم + {len(INDEX_SYMBOLS)} مؤشر\n"
                       f"الوقت: {pd.Timestamp.now(tz=LOCAL_TZ):%Y-%m-%d %H:%M} (توقيتك)")
+    if ENABLE_SPLIT_NOTE and not once:   # (11) رسالة التجزئة - مرة وحدة بس
+        split_notes_send_once()
     if not once:
         start_algo_thread()
         start_news_thread()
