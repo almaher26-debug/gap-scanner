@@ -100,12 +100,20 @@
     - يفحص مرة باليوم بعد الإغلاق (4:20 العصر نيويورك) | ENABLE_SC = False يطفيه
     - أول ما يشتغل (مرة وحدة): أحدث 5 أسهم سوت ذروة بيع خلال آخر أسبوعين، كل سهم برسالة (SC_START_LIST)
 
+(14) دلتا الحجم CVD - قائمة المراقبة (WATCH_SYMBOLS) - من ألباكا (نفس صفقات (6ب)، ما يزيد طلبات)
+    - كل صفقة تتصنف شراء أو بيع عدواني من اتجاه السعر (أعلى من اللي قبلها = شراء، أقل = بيع)
+    - 🟢 تباعد إيجابي: السعر نازل 0.5% وفوق خلال آخر 30 دقيقة والشراء العدواني يغلب (الدلتا +20% من الحجم وفوق)
+    - 🔴 تباعد سلبي: السعر طالع 0.5% وفوق والبيع العدواني يغلب (الدلتا -20% وتحت)
+    - قيمة الصفقات بالنافذة 2 مليون$ وفوق، تنبيه واحد لكل سهم ولكل جهة كل ساعة، مع صورة السعر والـ CVD لليوم
+    - وقت السوق الرسمي بس | ENABLE_CVD = False يطفيه
+
 التشغيل:
   pip install yfinance pandas requests lxml matplotlib
   python short_bot.py               # يشتغل باستمرار
   python short_bot.py --once        # فحص مرة وحدة بس
   python short_bot.py --algotest    # يجرب كشف خوارزميات التقطيع (بدون نت)
   python short_bot.py --newstest    # يجرب تصنيف الأخبار (بدون نت)
+  python short_bot.py --cvdtest     # يجرب دلتا الحجم CVD (بدون نت) ويحفظ صورة
   python short_bot.py --pwltest     # يجرب سحب الأسبوع السابق (بدون نت)
   python short_bot.py --pw4hnow [--send]   # سحب الأسبوع السابق 4 ساعات على بيانات حقيقية
   python short_bot.py --frimontest  # يجرب سحب الجمعة/الاثنين (بدون نت)
@@ -394,6 +402,17 @@ ALGO_ICE_MIN_SIZE = 1                     # أقل حجم للصفقة: سهم �
 ALGO_ICE_MAX_SIZE = 10                    # أعلى حجم للصفقة: 10 أسهم
 ALGO_ICE_MAX_GAP_SEC = 2                  # "وقت قصير": أكثر من كذا ثانية بين صفقتين = تنقطع السلسلة
 ALGO_ICE_REALERT_MIN = 5                  # ما يعيد التنبيه لنفس السهم ونفس الحجم والسعر قبل كذا دقيقة
+
+# ---- (14) دلتا الحجم CVD: الشراء العدواني ضد البيع العدواني، وتنبيه لما تمشي عكس السعر ----
+# يستخدم نفس صفقات (6ب) لقائمة المراقبة (ما يزيد طلبات على ألباكا)، وقت السوق الرسمي بس
+ENABLE_CVD = True                # True = شغال | False = مطفي
+CVD_WINDOW_MIN = 30              # النافذة: آخر كذا دقيقة
+CVD_MIN_PRICE_MOVE = 0.5         # حركة السعر خلال النافذة كذا % وفوق
+CVD_MIN_DELTA_PCT = 20           # الدلتا (شراء - بيع) = كذا % من حجم النافذة وفوق
+CVD_MIN_WINDOW_VALUE = 2_000_000 # قيمة الصفقات بالنافذة كذا $ وفوق (يشيل الأسهم الهادية)
+CVD_MIN_FILL = 0.6               # لازم فيه صفقات بـ 60% من دقايق النافذة على الأقل
+CVD_REALERT_MIN = 60             # تنبيه واحد لكل سهم ولكل جهة كل كذا دقيقة
+CVD_CHART = True                 # صورة السعر والـ CVD لليوم مع التنبيه (يحتاج matplotlib)
 
 # ---- (7) الأخبار الإيجابية - من ألباكا (نفس المفاتيح) ----
 # اندماج، استحواذ، موافقة FDA، عقود وشراكات، نتائج قوية، رفع توقعات، ترقية، إعادة شراء ...
@@ -3764,11 +3783,162 @@ def _big_message(sym, a, cap=None):
             f"من {t1:%H:%M:%S} إلى {t2:%H:%M:%S} (توقيتك)")
 
 
+# ================== (14) دلتا الحجم CVD ==================
+class CVDTracker:
+    """يجمع الشراء والبيع العدواني لكل سهم بالدقيقة (من اتجاه السعر: أعلى من اللي قبلها = شراء،
+    أقل = بيع، نفس السعر = نفس جهة اللي قبلها)، ويدور على تباعد بين السعر والدلتا."""
+    def __init__(self):
+        self.b = {}           # الرمز -> {بداية الدقيقة: [شراء، بيع، آخر سعر، القيمة$]}
+        self.last_px, self.last_side = {}, {}
+        self.seen = {}        # الرمز -> (deque, set) أرقام آخر الصفقات عشان ما تنحسب مرتين
+        self.alerted = {}     # (الرمز، الجهة) -> وقت آخر تنبيه
+
+    def add(self, sym, tr):
+        tid = tr.get("i")
+        if tid is not None:
+            q, ids = self.seen.setdefault(sym, (deque(), set()))
+            k = (tid, tr.get("x"))
+            if k in ids:
+                return
+            ids.add(k)
+            q.append(k)
+            if len(q) > 20000:
+                ids.discard(q.popleft())
+        size, px = float(tr.get("s") or 0), float(tr.get("p") or 0)
+        if size <= 0 or px <= 0:
+            return
+        prev, side = self.last_px.get(sym), self.last_side.get(sym, 0)
+        if prev is not None and px != prev:
+            side = 1 if px > prev else -1
+        self.last_px[sym], self.last_side[sym] = px, side
+        m = int(_ts_sec(tr["t"]) // 60) * 60
+        bk = self.b.setdefault(sym, {}).setdefault(m, [0.0, 0.0, px, 0.0])
+        if side > 0:
+            bk[0] += size
+        elif side < 0:
+            bk[1] += size
+        bk[2] = px
+        bk[3] += size * px
+
+    def check(self, sym, now_sec):
+        """يرجع تفاصيل التباعد لو تحقق على آخر CVD_WINDOW_MIN دقيقة، وإلا None."""
+        bks = self.b.get(sym)
+        if not bks:
+            return None
+        start = now_sec - CVD_WINDOW_MIN * 60
+        keys = sorted(k for k in bks if start <= k <= now_sec)
+        if len(keys) < CVD_WINDOW_MIN * CVD_MIN_FILL:
+            return None
+        older = [k for k in bks if k < keys[0]]
+        p0 = bks[max(older)][2] if older else bks[keys[0]][2]
+        p1 = bks[keys[-1]][2]
+        buy = sum(bks[k][0] for k in keys)
+        sell = sum(bks[k][1] for k in keys)
+        value = sum(bks[k][3] for k in keys)
+        vol = buy + sell
+        if p0 <= 0 or vol <= 0 or value < CVD_MIN_WINDOW_VALUE:
+            return None
+        move = (p1 / p0 - 1) * 100
+        dpct = (buy - sell) / vol * 100
+        if move <= -CVD_MIN_PRICE_MOVE and dpct >= CVD_MIN_DELTA_PCT:
+            side = "bull"
+        elif move >= CVD_MIN_PRICE_MOVE and dpct <= -CVD_MIN_DELTA_PCT:
+            side = "bear"
+        else:
+            return None
+        last = self.alerted.get((sym, side))
+        if last is not None and now_sec - last < CVD_REALERT_MIN * 60:
+            return None
+        self.alerted[(sym, side)] = now_sec
+        day = sum(v[0] - v[1] for v in bks.values())
+        return {"side": side, "p0": p0, "p1": p1, "move": move, "buy": buy, "sell": sell,
+                "delta": buy - sell, "dpct": dpct, "value": value, "day_cvd": day,
+                "from": keys[0], "to": now_sec}
+
+
+def _cvd_message(sym, r, cap=None):
+    if r["side"] == "bull":
+        head = "🟢📊 تباعد دلتا الحجم CVD — السعر نازل والشراء العدواني يغلب"
+    else:
+        head = "🔴📊 تباعد دلتا الحجم CVD — السعر طالع والبيع العدواني يغلب"
+    t1 = pd.Timestamp(r["from"], unit="s", tz="UTC").tz_convert(LOCAL_TZ)
+    t2 = pd.Timestamp(r["to"], unit="s", tz="UTC").tz_convert(LOCAL_TZ)
+    return (f"{head}\n"
+            f"السهم: ${sym}\n"
+            + (f"القيمة السوقية: {_cap_txt(cap)}\n" if cap else "")
+            + f"السعر: {r['p0']:.2f} ← {r['p1']:.2f} ({r['move']:+.2f}%) خلال {CVD_WINDOW_MIN} دقيقة\n"
+            f"🟢 شراء عدواني: {r['buy']:,.0f} سهم\n"
+            f"🔴 بيع عدواني: {r['sell']:,.0f} سهم\n"
+            f"الدلتا: {r['delta']:+,.0f} سهم ({r['dpct']:+.0f}% من الحجم)\n"
+            f"قيمة الصفقات: ≈ {r['value']:,.0f}$\n"
+            f"CVD اليوم من الافتتاح: {r['day_cvd']:+,.0f} سهم\n"
+            f"المصدر: {ALGO_FEED.upper()} عبر Alpaca (الجهة تقديرية من اتجاه السعر)\n"
+            f"من {t1:%H:%M} إلى {t2:%H:%M} (توقيتك)")
+
+
+def cvd_chart(sym, tracker, r):
+    """صورة (PNG بايتات): سعر اليوم فوق والـ CVD تحت، والنافذة مظللة."""
+    if not CVD_CHART:
+        return None
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception as e:
+        log(f"CVD: الصورة تحتاج matplotlib: {e}")
+        return None
+    bks = tracker.b.get(sym) or {}
+    keys = sorted(bks)
+    if len(keys) < 2:
+        return None
+    ts = [pd.Timestamp(k, unit="s", tz="UTC").tz_convert(NY).tz_localize(None) for k in keys]
+    px = [bks[k][2] for k in keys]
+    cvd, run = [], 0.0
+    for k in keys:
+        run += bks[k][0] - bks[k][1]
+        cvd.append(run)
+    fig, (ax, ac) = plt.subplots(2, 1, figsize=(10, 6), sharex=True,
+                                 gridspec_kw={"height_ratios": [3, 2], "hspace": 0.05})
+    fig.patch.set_facecolor("#111")
+    for a in (ax, ac):
+        a.set_facecolor("#111")
+        a.tick_params(colors="#bbb", labelsize=8)
+        for s_ in a.spines.values():
+            s_.set_color("#333")
+        a.grid(color="#222", lw=0.6)
+    col = "#26a69a" if r["side"] == "bull" else "#ef5350"
+    ax.plot(ts, px, color="#ddd", lw=1.2)
+    ac.plot(ts, cvd, color=col, lw=1.2)
+    ac.axhline(0, color="#555", lw=0.8)
+    w0 = pd.Timestamp(r["from"], unit="s", tz="UTC").tz_convert(NY).tz_localize(None)
+    w1 = pd.Timestamp(r["to"], unit="s", tz="UTC").tz_convert(NY).tz_localize(None)
+    for a in (ax, ac):
+        a.axvspan(w0, w1, color=col, alpha=0.15)
+    ax.set_title(f"{sym}  price vs CVD (NY time)  |  last {CVD_WINDOW_MIN}m: price {r['move']:+.2f}%  "
+                 f"delta {r['dpct']:+.0f}%", color="#ddd", fontsize=10)
+    ac.set_ylabel("CVD", color="#bbb", fontsize=8)
+    ac.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%H:%M"))
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=110, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def _cvd_send(sym, tracker, r, cap=None):
+    png = None
+    try:
+        png = cvd_chart(sym, tracker, r)
+    except Exception as e:
+        log(f"CVD: {sym}: الصورة: {e}")
+    send_telegram(_cvd_message(sym, r, cap), kind="cvd", sym=sym, photo=png)
+
+
 def algo_big_loop():
-    det = StreakDetector()
+    det = StreakDetector() if ALGO_BIG else None
     ice = (StreakDetector(ALGO_ICE_MIN_STREAK, ALGO_ICE_MIN_SIZE, ALGO_ICE_MAX_SIZE,
                           ALGO_ICE_MAX_GAP_SEC, ALGO_ICE_REALERT_MIN, same_price=True)
-           if ALGO_ICE else None)
+           if ALGO_BIG and ALGO_ICE else None)
+    cvd = CVDTracker() if ENABLE_CVD else None
     last_end, was_on = None, None
     caps, caps_day = {}, None
     while True:
@@ -3790,6 +3960,10 @@ def algo_big_loop():
                 caps = (get_bigcaps() if ONE_LIST or not ALGO_BIG_SYMBOLS
                         else {s_: None for s_ in ALGO_BIG_SYMBOLS})
                 caps_day = today
+                if cvd is not None:
+                    cvd = CVDTracker()                     # يوم جديد = CVD من الصفر
+                    log(f"CVD: يراقب {len(caps)} سهم - تباعد {CVD_MIN_PRICE_MOVE:g}% سعر مع دلتا "
+                        f"{CVD_MIN_DELTA_PCT:g}% خلال {CVD_WINDOW_MIN} دقيقة")
                 log(f"خوارزميات الكبيرة: يراقب {len(caps)} سهم (قائمة المراقبة) - شراء كامل/بيع كامل - تنبيه عند "
                     f"{ALGO_BIG_MIN_STREAK} صفقة متتالية بنفس الحجم ({ALGO_BIG_MAX_SIZE:g} أسهم وأقل)"
                     + (f" | الآيس بيرغ: {ALGO_ICE_MIN_STREAK} صفقة متتالية بنفس الحجم والسعر" if ALGO_ICE else ""))
@@ -3808,7 +3982,9 @@ def algo_big_loop():
                 last_end = end
                 for sym, trades in got.items():
                     for tr in sorted(trades, key=lambda x: x.get("t", "")):
-                        res = det.add(sym, tr)
+                        if cvd is not None:
+                            cvd.add(sym, tr)
+                        res = det.add(sym, tr) if det is not None else None
                         if res and not res["update"]:      # تنبيه واحد لكل سلسلة
                             directional = res["buys"] + res["sells"]
                             need = ALGO_BIG_ONE_SIDE_PCT / 100
@@ -3824,6 +4000,12 @@ def algo_big_loop():
                             res = ice.add(sym, tr)
                             if res:
                                 send_telegram(_ice_message(sym, res, caps.get(sym)), kind="ice", sym=sym)
+                if cvd is not None:
+                    now_sec = end.timestamp()
+                    for sym in syms:
+                        r = cvd.check(sym, now_sec)
+                        if r:
+                            _cvd_send(sym, cvd, r, caps.get(sym))
                 del got
         except Exception as e:
             log("خوارزميات الكبيرة: خطأ -", e)
@@ -3930,7 +4112,7 @@ def start_algo_thread():
         threading.Thread(target=algo_loop, daemon=True, name="algo_penny",
                          args=("خوارزميات البني ستوك", sec, get_pennies, None,
                                lambda: RSPLIT_ALGO_SYMS, ALGO_PENNY_ONCE_HOURS)).start()
-    if ALGO_BIG:
+    if ALGO_BIG or ENABLE_CVD:   # (6ب) + (6د) + (14) CVD يشتركون بنفس الصفقات
         threading.Thread(target=algo_big_loop, daemon=True, name="algo_big").start()
 
 
@@ -4240,7 +4422,48 @@ def news_self_test():
                         classify_news(cases[0][0]), ["ACME"], {"ACME": 4.12}, {"ACME": 62_500_000}))
 
 
+def cvd_self_test():
+    """python short_bot.py --cvdtest — يجرب CVD على صفقات وهمية بدون نت."""
+    t0 = pd.Timestamp("2026-11-16T15:00:00Z").timestamp()
+    iso = lambda x: datetime.fromtimestamp(x, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    tr = CVDTracker()
+    i = 0
+    # 35 دقيقة: السعر ينزل من 200 لين 198.4، وكل دقيقة 4 صفقات صعود صغيرة (شراء) وصفقة نزول (بيع)
+    for m in range(35):
+        base = 200 - m * 0.05
+        for k, (dp, sz) in enumerate([(0.0, 300), (0.02, 300), (0.04, 300), (0.06, 300), (-0.11, 200)]):
+            i += 1
+            tr.add("TEST", {"i": i, "x": "Q", "s": sz, "p": round(base + dp, 2), "t": iso(t0 + m * 60 + k * 10)})
+    now = t0 + 35 * 60
+    r = tr.check("TEST", now)
+    assert r and r["side"] == "bull" and r["move"] < -0.5 and r["dpct"] > 20, r
+    print(f"✅ تباعد إيجابي: السعر {r['move']:+.2f}% والدلتا {r['dpct']:+.0f}%")
+    assert tr.check("TEST", now + 60) is None
+    print("✅ ما يعيد التنبيه قبل ساعة")
+    tr.add("TEST", {"i": 1, "x": "Q", "s": 99999, "p": 300, "t": iso(now)})
+    assert int(now // 60) * 60 not in tr.b["TEST"]
+    print("✅ الصفقة المكررة ما تنحسب")
+    # مبلغ صغير = ما ينبه
+    small = CVDTracker()
+    for m in range(35):
+        for k, dp in enumerate((0.0, 0.02, 0.04, 0.06, -0.11)):
+            i += 1
+            small.add("TINY", {"i": i, "s": 1, "p": round(20 - m * 0.05 + dp, 2), "t": iso(t0 + m * 60 + k * 10)})
+    assert small.check("TINY", now) is None
+    print("✅ قيمة صغيرة = ما فيه تنبيه")
+    print("CVD TEST OK\n")
+    print(_cvd_message("TEST", r, 2_500_000_000))
+    png = cvd_chart("TEST", tr, r)
+    if png:
+        with open("cvd_test.png", "wb") as f:
+            f.write(png)
+        print("\n🖼️ الصورة: cvd_test.png")
+
+
 def main():
+    if "--cvdtest" in sys.argv:
+        cvd_self_test()
+        return
     if "--algotest" in sys.argv:
         algo_self_test()
         return
@@ -4299,6 +4522,7 @@ def main():
                           (ENABLE_ALGO and ALGO_PENNY, "خوارزميات البني ستوك"),
                           (ENABLE_ALGO and ALGO_BIG, "خوارزميات الأسهم الكبيرة"),
                           (ENABLE_ALGO and ALGO_BIG and ALGO_ICE, "الآيس بيرغ"),
+                          (ENABLE_ALGO and ENABLE_CVD, "دلتا الحجم CVD"),
                           (ENABLE_FLOW, "ماسح السيولة"), (ENABLE_FRIMON, "سحب الجمعة/الاثنين (كول)"),
                           (ENABLE_RSPLIT_SHORT, "التجزئة العكسية")) if on)
                       + (" + ذروة البيع بعد التجزئة العكسية" if ENABLE_SC else "")
