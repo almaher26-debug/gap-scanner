@@ -202,7 +202,7 @@ GAP_SCAN_AFTER_CLOSE_MIN = (1, 5, 12)   # يفحص بعد الإغلاق بكذ�
 GAP_SENT_FILE = os.path.join(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "."), "gap_sent.txt")   # في /data عشان ما يعيد نفس التنبيه بعد إعادة التشغيل أو الرفع
 
 # ---- (2) ماسح السيولة - البني ستوك ----
-ENABLE_FLOW = True  # ماسح السيولة للبني ستوك
+ENABLE_FLOW = False  # ماسح السيولة للبني ستوك (مطفي)
 FLOW_MIN_PRICE = 1               # أقل سعر
 FLOW_MAX_PRICE = 5               # أعلى سعر
 FLOW_MIN_AVG_VOLUME = 100_000    # يشيل الأسهم الميتة
@@ -230,7 +230,7 @@ BZ_EVERY_MIN = 2                 # كل كم دقيقة يفحص (كانت 15) �
 BZ_WARN_AFTER_MIN = 60           # ينبهك لو ملف IBKR ما تحمّل من كذا دقيقة
 BZ_UNIVERSE_EVERY_MIN = 60       # كل كم دقيقة يحدث قائمة البني ستوك (السعر والقيمة السوقية)
 # ---- (4ج-2) نزول الشورت المتاح (نفس الطابور والحد اليومي 64 مع الشورت صفر) ----
-BZ_DROP_ALERTS = True            # True = شغال | False = مطفي
+BZ_DROP_ALERTS = False           # True = شغال | False = مطفي
 BZ_DROP_PCT = 90                 # ينبه لما المتاح ينزل أكثر من كذا % عن أعلى رقم بالفترة
 BZ_DROP_DAYS = 30                # الفترة: آخر شهر
 BZ_DROP_MIN_HIGH = 10_000        # أعلى رقم بالفترة لازم يكون كذا سهم وفوق (يشيل الأسهم اللي متاحها أصلاً قليل)
@@ -247,7 +247,7 @@ BZ_WEEKLY_HOUR = 0               # يرسلها من هالساعة وطالع (
 BZ_WEEKLY_MAX_RISE = 30          # يستبعد السهم لو ارتفع أكثر من كذا % خلال الأسبوع (0 = بدون فلتر)
 
 # ---- (4د) سكنر الزخم: ارتفاع قوي + فوليوم نسبي + قريب من قمة اليوم (Alpaca، كل دقيقة) ----
-ENABLE_MOMENTUM = True  # True = شغال | False = مطفي
+ENABLE_MOMENTUM = False  # True = شغال | False = مطفي
 MOM_MIN_PRICE = 1                # أقل سعر
 MOM_MAX_PRICE = 15               # أعلى سعر (كان 10)
 MOM_MIN_CHANGE = 10              # أقل ارتفاع % عن إغلاق أمس
@@ -315,7 +315,7 @@ SWEEP_CHART_BARS = 30            # كم شمعة 4 ساعات تطلع بالص�
 PDR_OPT_RATE = 0.04              # الفائدة لحساب الدلتا لو المصدر ما أعطاها
 
 # ---- (4ب) التجزئة العكسية ----
-ENABLE_RSPLIT_SHORT = True  # قوائم التجزئة العكسية شغالة
+ENABLE_RSPLIT_SHORT = False  # قوائم التجزئة العكسية (مطفي)
 RSPLIT_NEW_DAYS = 4                  # "جديد" = تجزئة صارت خلال آخر كذا يوم (يغطي الويكند) وما انرسلت قبل
 RSPLIT_CHECK_AFTER_NY = 10           # الفحص اليومي بعد الساعة 10 الصبح نيويورك (عشان سعر الافتتاح يكون موجود)
 RSPLIT_NEW_FILE = "rsplit_new.txt"       # التجزئات الجديدة اللي انرسلت
@@ -359,7 +359,7 @@ ALGO_REALERT_MIN = 15                 # ما يعيد نفس مستوى التن
 # ---- (6ج) خوارزميات البني ستوك: من 1$ إلى 5$ وقيمتها السوقية 40 مليون وتحت ----
 # نفس منطق القسم (6) بالضبط: صفقات 10 أسهم وأقل بنفس الحجم، تنبيه 300 وقوي 600 خلال 5 دقايق
 # السهم اللي داخل قائمة التجزئة العكسية (6) ما يتكرر هنا
-ALGO_PENNY = os.environ.get("ALGO_PENNY", "1") != "0"   # 0 = يطفي هالقسم
+ALGO_PENNY = False   # مطفي (True = يرجع)
 ALGO_PENNY_ONCE_HOURS = 24            # تنبيه واحد بس لكل سهم، وبعدها يسكت عنه كذا ساعة (0 = بدون حد)
 ALGO_PENNY_MIN_PRICE = 1
 ALGO_PENNY_MAX_PRICE = 5
@@ -397,7 +397,7 @@ ALGO_ICE_REALERT_MIN = 5                  # ما يعيد التنبيه لنف�
 
 # ---- (7) الأخبار الإيجابية - من ألباكا (نفس المفاتيح) ----
 # اندماج، استحواذ، موافقة FDA، عقود وشراكات، نتائج قوية، رفع توقعات، ترقية، إعادة شراء ...
-NEWS = os.environ.get("NEWS", "1") != "0"  # 0 = يطفي هالقسم
+NEWS = False  # مطفي (True = يرجع)
 NEWS_POLL_SEC = 60                    # كل كم ثانية يسحب الأخبار الجديدة (24 ساعة، كل الأيام)
 NEWS_MAX_AGE_MIN = 30                 # يتجاهل الخبر اللي عمره أكثر من كذا دقيقة (عشان ما يرسل قديم أول ما يشتغل)
 NEWS_MAX_SYMBOLS = 3                  # يتجاهل الخبر اللي فيه أكثر من كذا سهم (ملخصات السوق العامة)
@@ -4291,10 +4291,16 @@ def main():
             fr = [n for on, n in ((ENABLE_IFVG_1H, "ساعة"), (ENABLE_IFVG_4H, "4 ساعات")) if on]
             pw4h_txt += f" + الإنفيرجن IFVG فريم {' و'.join(fr)} ({len(WATCH_SYMBOLS)} رمز)"
         send_telegram("🧪 رسالة اختبار - بوت الشورت اشتغل\n"
-                      "الأقسام: الشورت صفر اللحظي + الأخبار + الزخم + خوارزميات التقطيع + خوارزميات البني ستوك"
-                      + (" + خوارزميات الأسهم الكبيرة" if ALGO_BIG else "")
-                      + (" + الآيس بيرغ" if ALGO_BIG and ALGO_ICE else "") + " + ماسح السيولة"
-                      + (" + سحب الجمعة/الاثنين (كول)" if ENABLE_FRIMON else "") + " + التجزئة العكسية"
+                      "الأقسام: " + " + ".join(n for on, n in (
+                          (ENABLE_BORROW_ZERO and (BZ_ZERO_ALERTS or BZ_DROP_ALERTS), "الشورت صفر"),
+                          (ENABLE_BORROW_ZERO and BZ_WEEKLY_ZERO, "قائمة الشورت صفر الأسبوعية"),
+                          (NEWS, "الأخبار"), (ENABLE_MOMENTUM, "الزخم"),
+                          (ENABLE_ALGO and ALGO_SMALL, "خوارزميات التقطيع"),
+                          (ENABLE_ALGO and ALGO_PENNY, "خوارزميات البني ستوك"),
+                          (ENABLE_ALGO and ALGO_BIG, "خوارزميات الأسهم الكبيرة"),
+                          (ENABLE_ALGO and ALGO_BIG and ALGO_ICE, "الآيس بيرغ"),
+                          (ENABLE_FLOW, "ماسح السيولة"), (ENABLE_FRIMON, "سحب الجمعة/الاثنين (كول)"),
+                          (ENABLE_RSPLIT_SHORT, "التجزئة العكسية")) if on)
                       + (" + ذروة البيع بعد التجزئة العكسية" if ENABLE_SC else "")
                       + f"{pw4h_txt}\n"
                       f"الوقت: {pd.Timestamp.now(tz=LOCAL_TZ):%Y-%m-%d %H:%M} (توقيتك)")
