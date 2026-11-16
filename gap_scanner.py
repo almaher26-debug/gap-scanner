@@ -80,6 +80,12 @@
     - تنبيه واحد لكل سهم بالأسبوع لكل جهة، يفحص كل 5 دقايق
     - ENABLE_PWL_4H / ENABLE_PWH_4H = False يطفي الدعم / المقاومة | PW4H_WICK_ONLY = False يرجع شرط الإغلاق بس
 
+(1ي) سحب سيولة دعم ومقاومة اليوم السابق - فريم ساعة - قائمة المراقبة (WATCH_SYMBOLS)
+    - الدعم: شمعة ساعة ذيلها بس نزل تحت قاع اليوم السابق، وافتتاحها وإغلاقها فوقه → كول
+    - المقاومة: ذيلها بس طلع فوق قمة اليوم السابق، وافتتاحها وإغلاقها تحتها → بوت
+    - قمة وقاع اليوم السابق من 4 الفجر لين 8 بالليل نيويورك (بدون الليلي)، تنبيه واحد لكل سهم باليوم لكل جهة
+    - ENABLE_PDL_1H / ENABLE_PDH_1H = False يطفي الدعم / المقاومة
+
 (11) سحب قمة الجمعة يوم الاثنين ثم سحب دعم الأسبوع السابق (فريم 4 ساعات) → كول
     - الاثنين: السعر يسحب قمة الجمعة ويرجع يختبرها وما يخترقها
     - بعدها ينزل لقاع الأسبوع السابق ويسحب السيولة (ذيل تحت الدعم وإغلاق فوقه)
@@ -279,6 +285,15 @@ ENABLE_PWL_4H = True  # الدعم: True = شغال | False = مطفي
 ENABLE_PWH_4H = True  # المقاومة: True = شغال | False = مطفي
 PW4H_WICK_ONLY = True  # True = الذيل بس يكسر المستوى، الافتتاح والإغلاق كلهم بجهته | False = الإغلاق بس
 
+# ---- (1ي) سحب سيولة دعم ومقاومة اليوم السابق - فريم ساعة - قائمة المراقبة ----
+#   الدعم: شمعة ساعة (من اليوم) ذيلها بس نزل تحت قاع اليوم السابق، وافتتاحها وإغلاقها فوقه → كول
+#   المقاومة: شمعة ساعة ذيلها بس طلع فوق قمة اليوم السابق، وافتتاحها وإغلاقها تحتها → بوت
+#   قمة وقاع اليوم السابق من بري + ماركت + أفتر (4 الفجر - 8 بالليل نيويورك) بدون الليلي
+#   شموع الساعة من 4 الفجر لين 8 بالليل | تنبيه واحد لكل سهم باليوم لكل جهة | يفحص مع (1ك-2) كل 5 دقايق
+ENABLE_PDL_1H = True   # الدعم: True = شغال | False = مطفي
+ENABLE_PDH_1H = True   # المقاومة: True = شغال | False = مطفي
+PD1H_WICK_ONLY = True  # True = الذيل بس يكسر المستوى (الافتتاح والإغلاق بجهته) | False = الإغلاق بس
+
 # ---- (1) الإنفيرجن IFVG - فريم ساعة و4 ساعات - قائمة المراقبة (WATCH_SYMBOLS) ----
 #   نفس نموذج gap_scanner: ثلاث شموع بين ذيل الأولى والثالثة جاب، الثانية تغطي الجاب كامل،
 #   والرابعة تقفل وراه (لون الشموع ما يهم)
@@ -422,7 +437,7 @@ ALGO_ICE_REALERT_MIN = 5                  # ما يعيد التنبيه لنف�
 
 # ---- (14) دلتا الحجم CVD: الشراء العدواني ضد البيع العدواني، وتنبيه لما تمشي عكس السعر ----
 # يستخدم نفس صفقات (6ب) لقائمة المراقبة (ما يزيد طلبات على ألباكا)، وقت السوق الرسمي بس
-ENABLE_CVD = True                # True = شغال | False = مطفي
+ENABLE_CVD = False               # True = شغال | False = مطفي
 CVD_WINDOW_MIN = 30              # النافذة: آخر كذا دقيقة
 CVD_MIN_PRICE_MOVE = 0.5         # حركة السعر خلال النافذة كذا % وفوق
 CVD_MIN_DELTA_PCT = 20           # الدلتا (شراء - بيع) = كذا % من حجم النافذة وفوق
@@ -1729,6 +1744,22 @@ def prev_week_ext_levels(df, week_start):
             "high": (float(highs.max()), pd.Timestamp(highs.idxmax()).date())}
 
 
+def prev_day_ext_levels(df, today):
+    """قاع وقمة اليوم السابق (آخر يوم تداول قبل today) من شموع 15 دقيقة على الجلسة الممتدة
+    (4 الفجر - 8 بالليل نيويورك) بدون الليلي. يرجع {"low": (القاع، اليوم), "high": (القمة، اليوم)} أو None."""
+    ext = df.between_time("04:00", "19:59")
+    if ext.empty:
+        return None
+    dates = pd.Series(ext.index.date, index=ext.index)
+    before = dates[(dates < today) & (ext.index.weekday < 5)]   # بدون السبت والأحد
+    if before.empty:
+        return None
+    pd_day = before.iloc[-1]                      # الاثنين = الجمعة، وبعد العطلة = آخر يوم فيه تداول
+    pdd = ext[(dates == pd_day).values]
+    lows, highs = pdd["Low"].astype(float), pdd["High"].astype(float)
+    return {"low": (float(lows.min()), pd_day), "high": (float(highs.max()), pd_day)}
+
+
 def check_pwl_1h(c1h, support, week_start, wick_only=False):
     """الدعم: آخر شمعة ساعة (من هالأسبوع) ذيلها نزل تحت قاع الأسبوع السابق وقفلت فوقه.
     wick_only=True: الافتتاح بعد لازم فوق الدعم (الذيل بس اللي نزل تحته)."""
@@ -1769,22 +1800,23 @@ def check_pwh_1h(c1h, resistance, week_start, wick_only=False):
             "first_touch": bool(before.empty or before["High"].max() <= resistance)}
 
 
-def _pwl_message(t, side, lvl, lvl_day, r, frame="فريم ساعة", trade=False):
+def _pwl_message(t, side, lvl, lvl_day, r, frame="فريم ساعة", trade=False,
+                 period="الأسبوع السابق", scope="هالأسبوع"):
     t1 = pd.Timestamp(r["start"]).tz_convert(LOCAL_TZ)
     color = "خضراء 🟢" if r["close"] > r["open"] else "حمراء 🔴"
     if side == "low":
-        head = f"💧 سحب سيولة دعم الأسبوع السابق — {frame}"
-        lvl_line = f"الدعم (قاع الأسبوع السابق): {lvl:.2f}  (يوم {lvl_day})"
+        head = f"💧 سحب سيولة دعم {period} — {frame}"
+        lvl_line = f"الدعم (قاع {period}): {lvl:.2f}  (يوم {lvl_day})"
         wick = f"أقل سعر بالشمعة: {r['low']:.2f}  (-{r['depth']:.2f}% تحت الدعم)"
         close = f"الإغلاق: {r['close']:.2f} فوق الدعم | الشمعة {color}"
         word, where = "الدعم", "تحت"
     else:
-        head = f"🔻 سحب سيولة مقاومة الأسبوع السابق — {frame}"
-        lvl_line = f"المقاومة (قمة الأسبوع السابق): {lvl:.2f}  (يوم {lvl_day})"
+        head = f"🔻 سحب سيولة مقاومة {period} — {frame}"
+        lvl_line = f"المقاومة (قمة {period}): {lvl:.2f}  (يوم {lvl_day})"
         wick = f"أعلى سعر بالشمعة: {r['high']:.2f}  (+{r['depth']:.2f}% فوق المقاومة)"
         close = f"الإغلاق: {r['close']:.2f} تحت المقاومة | الشمعة {color}"
         word, where = "المقاومة", "فوق"
-    note = (f"أول لمس {'للدعم' if side == 'low' else 'للمقاومة'} هالأسبوع" if r["first_touch"] else
+    note = (f"أول لمس {'للدعم' if side == 'low' else 'للمقاومة'} {scope}" if r["first_touch"] else
             f"قبلها {r['closes_beyond']} شمعة قفلت {where} {word}" if r["closes_beyond"] else
             f"لمس {word} قبل وما قفل {where}{'ه' if side == 'low' else 'ها'}")
     trade_lines = ""
@@ -1809,14 +1841,39 @@ def scan_pwl_4h(symbols, sent):
         checks4h.append(("low", "pwl4h", check_pwl_1h, ENABLE_PWL_4H))
     if ENABLE_PWH_4H or ENABLE_WKOPT:
         checks4h.append(("high", "pwh4h", check_pwh_1h, ENABLE_PWH_4H))
-    if not checks4h:
+    # (1ي) اليوم السابق - فريم ساعة
+    checks1h = [x for x in (("low", "pdl1h", check_pwl_1h, ENABLE_PDL_1H),
+                            ("high", "pdh1h", check_pwh_1h, ENABLE_PDH_1H)) if x[3]]
+    if not checks4h and not checks1h:
         return
+    today = now.date()
+    day0 = now.normalize()                          # بداية اليوم (نيويورك)
     hits = 0
     for t, df in download_batches(symbols, 100, period="15d", interval=f"{GAP_BASE_MIN}m",
                                   prepost=True):   # 15 يوم عشان الأسبوع السابق كامل + بري وأفتر
         try:
             df = to_ny(df)[OHLC]
             if df.empty:
+                continue
+            # ---- (1ي) سحب دعم/مقاومة اليوم السابق - فريم ساعة ----
+            lvd = prev_day_ext_levels(df, today) if checks1h else None
+            if lvd:
+                c1h = only_closed(to_frame(df, 60, overnight=False), df.index.max(), now)
+                for side, tag, fn, _ in checks1h:
+                    lvl, lvl_day = lvd[side]
+                    r = fn(c1h, lvl, day0, wick_only=PD1H_WICK_ONLY)
+                    if not r or (now - pd.Timestamp(r["end"])).total_seconds() / 60 > PWL_MAX_ALERT_DELAY_MIN:
+                        continue
+                    key = f"{t}-{tag}-{today:%Y%m%d}"     # تنبيه واحد لكل سهم باليوم لكل جهة
+                    if key in sent:
+                        continue
+                    sent.add(key)
+                    _append_line(GAP_SENT_FILE, key)
+                    hits += 1
+                    send_telegram(with_gamma(_pwl_message(t, side, lvl, lvl_day, r, frame="فريم ساعة",
+                                                          trade=True, period="اليوم السابق", scope="اليوم"),
+                                             t, r["close"]), kind="sweep", sym=t)
+            if not checks4h:
                 continue
             # مستويات الأسبوع السابق من البري + الماركت + الأفتر (بدون الليلي)
             lv4 = prev_week_ext_levels(df, wk0)
@@ -1861,7 +1918,7 @@ def scan_pwl_4h(symbols, sent):
             log(f"سحب دعم/مقاومة الأسبوع السابق: {t}: خطأ - {e}")
     free_memory()
     if hits:
-        log(f"[{datetime.now():%H:%M}] سحب دعم/مقاومة الأسبوع السابق (4 ساعات): {hits} تنبيه")
+        log(f"[{datetime.now():%H:%M}] سحب دعم/مقاومة اليوم السابق (ساعة) + الأسبوع السابق (4 ساعات): {hits} تنبيه")
 
 
 # ================== (1) الإنفيرجن IFVG - فريم ساعة و4 ساعات ==================
@@ -2244,6 +2301,34 @@ def pwl_self_test():
     assert ev["low"] == (97.0, datetime(2026, 10, 6).date()), ev
     assert ev["high"] == (104.0, datetime(2026, 10, 7).date()), ev
     print(f"✅ الأسبوع السابق (بري + أفتر بدون الليلي): قاع {ev['low'][0]} | قمة {ev['high'][0]}")
+
+    # ---- (1ي) اليوم السابق - فريم ساعة: الاثنين يقرا الجمعة، والليلي ما يدخل ----
+    m15d = pd.date_range("2026-11-13 00:00", "2026-11-16 23:45", freq="15min", tz=ny)
+    d = pd.DataFrame({"Open": 100.0, "High": 100.5, "Low": 99.5, "Close": 100.0}, index=m15d)
+    d.loc[pd.Timestamp("2026-11-13 06:00", tz=ny), "Low"] = 98.0      # بري الجمعة = يدخل
+    d.loc[pd.Timestamp("2026-11-13 17:00", tz=ny), "High"] = 102.0    # أفتر الجمعة = يدخل
+    d.loc[pd.Timestamp("2026-11-13 21:00", tz=ny), "Low"] = 90.0      # ليلي = ما يدخل
+    pdl = prev_day_ext_levels(d, datetime(2026, 11, 16).date())
+    assert pdl["low"] == (98.0, datetime(2026, 11, 13).date()) and pdl["high"][0] == 102.0, pdl
+    print(f"✅ اليوم السابق (الاثنين ← الجمعة، بدون الليلي): قاع {pdl['low'][0]} | قمة {pdl['high'][0]}")
+    # شمعة ساعة 10:00 الاثنين: افتتاح 98.6، ذيل 97.6، إغلاق 98.8 = سحب دعم بالذيل بس
+    mon = d[d.index.date == datetime(2026, 11, 16).date()].copy()
+    mon[OHLC] = 99.0
+    for ts, o, h, l, c in (("10:00", 98.6, 98.7, 98.5, 98.6), ("10:15", 98.6, 98.7, 97.6, 98.2),
+                           ("10:30", 98.2, 98.5, 98.1, 98.4), ("10:45", 98.4, 98.9, 98.3, 98.8)):
+        mon.loc[pd.Timestamp(f"2026-11-16 {ts}", tz=ny), OHLC] = [o, h, l, c]
+    c1 = to_frame(mon[mon.index < pd.Timestamp("2026-11-16 11:00", tz=ny)], 60, overnight=False)
+    day0 = pd.Timestamp("2026-11-16", tz=ny)
+    r1 = check_pwl_1h(c1, 98.0, day0, wick_only=True)
+    assert r1 and r1["low"] == 97.6 and r1["close"] == 98.8, r1
+    body = c1.copy(); body.iloc[-1, body.columns.get_loc("Open")] = 97.9
+    assert check_pwl_1h(body, 98.0, day0, wick_only=True) is None
+    shut = c1.copy(); shut.iloc[-1, shut.columns.get_loc("Close")] = 97.9
+    assert check_pwl_1h(shut, 98.0, day0, wick_only=True) is None
+    print("✅ اليوم السابق ساعة: ذيل بس = تنبيه | افتتح أو قفل تحت الدعم = ما فيه تنبيه")
+    print()
+    print(_pwl_message("TEST", "low", 98.0, pdl["low"][1], r1, frame="فريم ساعة", trade=True,
+                       period="اليوم السابق", scope="اليوم"))
     print()
     print(_pwl_message("TEST", "high", hi, hday, r))
 
@@ -4820,6 +4905,9 @@ def main():
         pw4h = [n for on, n in ((ENABLE_PWL_4H, "دعم"), (ENABLE_PWH_4H, "مقاومة")) if on]
         pw4h_txt = (f" + سحب {' و'.join(pw4h)} الأسبوع السابق 4 ساعات (كول/بوت، {len(WATCH_SYMBOLS)} رمز)"
                     if pw4h else "")
+        pd1h = [n for on, n in ((ENABLE_PDL_1H, "دعم"), (ENABLE_PDH_1H, "مقاومة")) if on]
+        if pd1h:
+            pw4h_txt += f" + سحب {' و'.join(pd1h)} اليوم السابق فريم ساعة (ذيل بس)"
         if ENABLE_WKOPT:
             pw4h_txt += (f" + سحب السيولة الأسبوعي 4 ساعات مع عقد (الأسهم {WKOPT_MIN_PRICE}$-{WKOPT_MAX_PRICE}$، "
                          "تنبيه واحد لكل سهم بالأسبوع)")
@@ -4874,7 +4962,9 @@ def main():
         discover_groups()
 
         # (1ك-2) سحب سيولة دعم ومقاومة الأسبوع السابق - فريم 4 ساعات - كل 5 دقايق وقت السوق
-        if (ENABLE_PWL_4H or ENABLE_PWH_4H or ENABLE_WKOPT) and (once or us_market_open()) \
+        # + (1ي) سحب دعم ومقاومة اليوم السابق - فريم ساعة (نفس الفحص ونفس البيانات)
+        if (ENABLE_PWL_4H or ENABLE_PWH_4H or ENABLE_WKOPT or ENABLE_PDL_1H or ENABLE_PDH_1H) \
+                and (once or us_market_open()) \
                 and time.time() - pwl_last >= PWL_EVERY_MIN * 60:
             scan_pwl_4h(list(WATCH_SYMBOLS), gap_sent)
             pwl_last = time.time()
