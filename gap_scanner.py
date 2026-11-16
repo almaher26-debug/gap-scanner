@@ -295,6 +295,22 @@ IFVG_MIN_PRICE = 0               # أقل سعر سهم (0 = بدون شرط)
 IFVG_REQUIRE_MIDDLE_COVER = True # الشمعة الثانية لازم تغطي الجاب كامل
 IFVG_MAX_ALERT_DELAY_MIN = 30    # ما ينبه على شمعة قفلت من أكثر من كذا دقيقة
 IFVG_SHOW_CANDLES = True         # يكتب الشموع الأربع (وقت، أعلى، أقل) في التنبيه
+# ---- (1-24) الإنفيرجن على 24 ساعة (كان ملف ifvg_24h_scanner.py، الحين هنا) ----
+#   شموع ساعة و4 ساعات من 24 ساعة كاملة، اليوم يبدأ 8 بالليل نيويورك (تريدنج فيو مع "خلال الليل")
+#   النهار (4 الفجر - 8 بالليل) من ألباكا SIP، والليل (8 بالليل - 4 الفجر) من ألباكا BOATS
+ENABLE_IFVG24 = True             # True = شغال | False = مطفي
+ENABLE_IFVG24_1H = True          # فريم ساعة (24 ساعة)
+ENABLE_IFVG24_4H = True          # فريم 4 ساعات (24 ساعة)
+IFVG24_GAMMA = True              # يضيف تمركز القاما للتنبيه | False = بدون
+IFVG24_1H_MIN_SIZE = 0.20        # أقل حجم للجاب - فريم ساعة (دولار)
+IFVG24_4H_MIN_SIZE = 0.20        # أقل حجم للجاب - فريم 4 ساعات (دولار)
+IFVG24_STRICT_4H = os.environ.get("GAP4H_STRICT", "0") != "0"   # شروط إضافية للـ 4 ساعات (متراصة + لون الرابعة)
+IFVG24_DAY_FEED = os.environ.get("DAY_FEED", "sip").lower()
+IFVG24_NIGHT_FEED = os.environ.get("NIGHT_FEED", "boats").lower()
+IFVG24_LOOKBACK_DAYS = 5         # كم يوم يرجع بالبيانات (يغطي الويكند)
+IFVG24_SCAN_AFTER_MIN = (17, 20, 25)   # يفحص بعد بداية كل ساعة بكذا دقيقة (SIP متأخر 15 دقيقة)
+IFVG24_MAX_ALERT_DELAY_MIN = 45  # ما ينبه على شمعة قفلت من أكثر من كذا دقيقة
+IFVG24_SENT_FILE = os.path.join(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "."), "ifvg24_sent.txt")
 
 # ---- (12) سحب السيولة الأسبوعي (دعم ← كول | مقاومة ← بوت) + العقد - الأسهم من 100$ إلى 350$ ----
 #   نفس شمعة السحب في (1ك-2)، بس الأسهم اللي سعرها داخل النطاق يجيها تنبيه واحد بالأسبوع (أول سحب، دعم أو مقاومة)
@@ -312,6 +328,7 @@ WKOPT_REQUIRE_CONTRACT = True    # True = ما ينبه إلا لو لقى عق�
 #   من سلسلة عقود ياهو (العقود المفتوحة + IV): قاما كل سترايك × العقود المفتوحة × 100 × السعر² × 1%
 #   الكول موجب والبوت سالب. يطلع: جدار الكول، جدار البوت، أعلى السترايكات، صافي القاما، ونقطة الانقلاب
 SWEEP_GAMMA = True               # True = يضيف تمركز القاما للتنبيه | False = بدون
+IFVG_GAMMA = True                # يضيف تمركز القاما لتنبيهات الإنفيرجن (ساعة + 4 ساعات) | False = بدون
 GAMMA_MAX_DTE = 30               # الانتهاءات اللي تدخل بالحساب: من اليوم إلى كذا يوم
 GAMMA_MAX_EXPS = 4               # أقصى عدد انتهاءات (أقربها)
 GAMMA_RANGE_PCT = 20             # السترايكات بس اللي داخل ±كذا % من السعر
@@ -1933,7 +1950,10 @@ def scan_ifvg(symbols, sent, now=None):
                 sent.add(key)
                 _append_line(GAP_SENT_FILE, key)
                 hits += 1
-                send_telegram(_ifvg_message(t, res, label), kind="gap", sym=t)
+                msg = _ifvg_message(t, res, label)
+                if IFVG_GAMMA:
+                    msg = with_gamma(msg, t, res["price"])
+                send_telegram(msg, kind="gap", sym=t)
         except Exception as e:
             log(f"الإنفيرجن: {t}: خطأ - {e}")
     free_memory()
@@ -2335,7 +2355,7 @@ def _opt_open_interest(t, x):
     return _OI_CACHE.setdefault(sym, None)
 
 
-# ================== تمركز القاما (يستخدمه سحب السيولة) ==================
+# ================== تمركز القاما (يستخدمه سحب السيولة والإنفيرجن) ==================
 def _bs_gamma(spot, strike, years, iv):
     """قاما بلاك شولز (نفسها للكول والبوت)."""
     if not (spot and strike and years > 0 and iv and iv > 0.01):
@@ -2345,8 +2365,15 @@ def _bs_gamma(spot, strike, years, iv):
     return math.exp(-d1 * d1 / 2) / math.sqrt(2 * math.pi) / (spot * sq)
 
 
-def _gamma_rows(t, spot):
-    """[(سترايك، سنوات، IV، العقود المفتوحة، كول؟)] من ياهو لأقرب الانتهاءات، والانتهاءات المستخدمة."""
+GAMMA_CACHE_MIN = 30             # سلسلة العقود لكل سهم تتخزن كذا دقيقة (الإنفيرجن ينبه كثير، فما نعيد التحميل كل مرة)
+_GAMMA_CACHE = {}                # الرمز -> (وقت التحميل، [(سترايك، انتهاء، IV، مفتوحة، كول؟)]، الانتهاءات)
+
+
+def _gamma_chain(t):
+    """سلسلة عقود ياهو لأقرب الانتهاءات (محفوظة GAMMA_CACHE_MIN دقيقة)."""
+    hit = _GAMMA_CACHE.get(t)
+    if hit and time.time() - hit[0] < GAMMA_CACHE_MIN * 60:
+        return hit[1], hit[2]
     import yfinance as yf
     today = pd.Timestamp.now(tz=NY).date()
     last = today + timedelta(days=GAMMA_MAX_DTE)
@@ -2354,19 +2381,29 @@ def _gamma_rows(t, spot):
         tk = yf.Ticker(t)
         exps = [e for e in (tk.options or []) if today <= pd.Timestamp(e).date() <= last]
     exps = sorted(exps)[:GAMMA_MAX_EXPS]
-    lo, hi = spot * (1 - GAMMA_RANGE_PCT / 100), spot * (1 + GAMMA_RANGE_PCT / 100)
-    rows = []
+    chain = []
     for e in exps:
         with _YF_LOCK:
             ch = tk.option_chain(e)
-        yrs = _opt_years(pd.Timestamp(e).date())
+        exp = pd.Timestamp(e).date()
         for df, is_call in ((ch.calls, True), (ch.puts, False)):
             for x in df.itertuples():
-                k = float(x.strike)
                 oi = 0 if pd.isna(x.openInterest) else int(x.openInterest)
                 iv = 0 if pd.isna(x.impliedVolatility) else float(x.impliedVolatility)
-                if lo <= k <= hi and oi > 0 and iv > 0.01:
-                    rows.append((k, yrs, iv, oi, is_call))
+                if oi > 0 and iv > 0.01:
+                    chain.append((float(x.strike), exp, iv, oi, is_call))
+    if len(_GAMMA_CACHE) > 500:
+        _GAMMA_CACHE.clear()
+    _GAMMA_CACHE[t] = (time.time(), chain, exps)
+    return chain, exps
+
+
+def _gamma_rows(t, spot):
+    """[(سترايك، سنوات، IV، العقود المفتوحة، كول؟)] داخل ±GAMMA_RANGE_PCT% من السعر، والانتهاءات المستخدمة."""
+    chain, exps = _gamma_chain(t)
+    lo, hi = spot * (1 - GAMMA_RANGE_PCT / 100), spot * (1 + GAMMA_RANGE_PCT / 100)
+    yrs = {e: _opt_years(e) for e in {x[1] for x in chain}}
+    rows = [(k, yrs[e], iv, oi, c) for k, e, iv, oi, c in chain if lo <= k <= hi]
     return rows, exps
 
 
@@ -4460,6 +4497,249 @@ def cvd_self_test():
         print("\n🖼️ الصورة: cvd_test.png")
 
 
+
+# ================== (1-24) الإنفيرجن على 24 ساعة ==================
+_I24_BARS_URL = "https://data.alpaca.markets/v2/stocks/bars"
+_i24_feed_warned = set()
+
+
+def _i24_fetch_bars(symbols, start, feed):
+    """شموع 15 دقيقة من ألباكا. يرجع {الرمز: DataFrame بتوقيت نيويورك}."""
+    out = {}
+    hdr = {"APCA-API-KEY-ID": ALPACA_KEY, "APCA-API-SECRET-KEY": ALPACA_SECRET}
+    for i in range(0, len(symbols), 100):
+        params = {"symbols": ",".join(symbols[i:i + 100]), "timeframe": "15Min",
+                  "start": start.tz_convert("UTC").strftime("%Y-%m-%dT%H:%M:%SZ"),
+                  "limit": 10000, "feed": feed, "adjustment": "raw", "sort": "asc"}
+        raw = {}
+        for _ in range(200):
+            try:
+                r = requests.get(_I24_BARS_URL, headers=hdr, params=params, timeout=30)
+            except Exception as e:
+                log(f"الإنفيرجن 24: ألباكا ({feed}): فشل الاتصال - {e}")
+                break
+            if r.status_code == 429:
+                time.sleep(3)
+                continue
+            if r.status_code != 200:
+                if feed not in _i24_feed_warned:
+                    _i24_feed_warned.add(feed)
+                    log(f"الإنفيرجن 24: ألباكا ({feed}): خطأ {r.status_code} - {r.text[:200]}")
+                break
+            data = r.json()
+            for sym, bars in (data.get("bars") or {}).items():
+                raw.setdefault(sym, []).extend(bars or [])
+            token = data.get("next_page_token")
+            if not token:
+                break
+            params["page_token"] = token
+        for sym, bars in raw.items():
+            if not bars:
+                continue
+            df = pd.DataFrame(bars)
+            idx = pd.to_datetime(df["t"], utc=True).dt.tz_convert(NY)
+            df = pd.DataFrame({"Open": df["o"].astype(float), "High": df["h"].astype(float),
+                               "Low": df["l"].astype(float), "Close": df["c"].astype(float)}
+                              ).set_index(pd.DatetimeIndex(idx))
+            out[sym] = df.sort_index()
+    return out
+
+
+def _i24_merge(day, night):
+    """النهار (SIP) من 4 الفجر لين 8 بالليل، والليل (BOATS) من 8 بالليل لين 4 الفجر."""
+    parts = []
+    if day is not None and not day.empty:
+        h = day.index.hour
+        parts.append(day[(h >= 4) & (h < 20)])
+    if night is not None and not night.empty:
+        h = night.index.hour
+        parts.append(night[(h >= 20) | (h < 4)])
+    if not parts:
+        return pd.DataFrame(columns=OHLC)
+    df = pd.concat(parts).sort_index()
+    return df[~df.index.duplicated(keep="first")]
+
+
+def _i24_frame(df, minutes):
+    """شموع 15 دقيقة → شموع (ساعة/4 ساعات) على 24 ساعة، بداية اليوم 8 بالليل نيويورك."""
+    df = df.dropna(subset=OHLC)
+    if df.empty:
+        return df
+    if df.index.tz is None:
+        df = df.tz_localize("UTC")
+    df = df.tz_convert(NY)
+    m = df.index.hour * 60 + df.index.minute
+    offset = ((m - 20 * 60) % 1440) % minutes
+    start = df.index.floor("min") - pd.to_timedelta(offset, unit="m")
+    out = df.groupby(start).agg(Open=("Open", "first"), High=("High", "max"),
+                                Low=("Low", "min"), Close=("Close", "last"),
+                                n=("Close", "size"))
+    out["end"] = out.index + pd.Timedelta(minutes=minutes)
+    return out
+
+
+def _i24_closed(c, now):
+    return c if c.empty else c[(c["end"] <= now).values]
+
+
+def _i24_pattern(c, min_size, strict=False):
+    """آخر 4 شموع مقفلة: جاب بين الأولى والثالثة، الثانية تغطيه، والرابعة تقفل وراه."""
+    if len(c) < 4:
+        return None
+    c1, c2, c3, c4 = (c.iloc[i] for i in (-4, -3, -2, -1))
+    info = {"price": c4["Close"], "open": c4["Open"], "candle_time": c.index[-1], "end": c4["end"]}
+    res = None
+    if c1["Low"] > c3["High"]:
+        lo, hi = c3["High"], c1["Low"]
+        if c2["High"] >= hi and c2["Low"] <= lo and c4["Close"] > hi:
+            res = {"side": "bull", "gap_bottom": lo, "gap_top": hi, **info}
+    if res is None and c1["High"] < c3["Low"]:
+        lo, hi = c1["High"], c3["Low"]
+        if c2["High"] >= hi and c2["Low"] <= lo and c4["Close"] < lo:
+            res = {"side": "bear", "gap_bottom": lo, "gap_top": hi, **info}
+    if not res or round(res["gap_top"] - res["gap_bottom"], 4) <= min_size:
+        return None
+    res["candles"] = c.iloc[-4:]
+    if not strict:
+        return res
+    bull = res["side"] == "bull"
+    for a, b in ((c1, c2), (c2, c3)):
+        if b["Low"] > a["High"] or b["High"] < a["Low"]:
+            return None
+    if bull and not (c2["Low"] < c1["Low"] and c3["Low"] < c2["Low"]
+                     and c2["High"] < c1["High"] and c3["High"] < c2["High"]):
+        return None
+    if not bull and not (c2["High"] > c1["High"] and c3["High"] > c2["High"]
+                         and c2["Low"] > c1["Low"] and c3["Low"] > c2["Low"]):
+        return None
+    if bull != (c4["Close"] > c4["Open"]):
+        return None
+    return res
+
+
+def _i24_message(t, res, frame):
+    lo, hi, px = (round(float(res[k]), 2) for k in ("gap_bottom", "gap_top", "price"))
+    if res["side"] == "bull":
+        head, line = f"🟢 Inversion Gap - {frame}", f"الشمعة قفلت فوق أعلى الـ IFVG ({hi})"
+    else:
+        head, line = f"🔴 Inversion Gap - {frame}", f"الشمعة قفلت تحت أسفل الـ IFVG ({lo})"
+    closed_at = pd.Timestamp(res["end"]).tz_convert(LOCAL_TZ)
+    msg = (f"{head}\n"
+           f"السهم: ${t}\n"
+           f"IFVG: {lo} ← {hi}  (حجمه {hi - lo:.2f}$)\n"
+           f"{line}\n"
+           f"سعر الإغلاق: {px}\n"
+           f"وقت الإغلاق: {closed_at:%H:%M} (توقيتك)")
+    cs = res.get("candles")
+    if IFVG_SHOW_CANDLES and cs is not None:
+        rows = []
+        for k, (ts, r) in enumerate(cs.iterrows(), 1):
+            lt = pd.Timestamp(ts).tz_convert(LOCAL_TZ)
+            col = "🟢" if r["Close"] > r["Open"] else "🔴"
+            rows.append(f"{k}) {lt:%m/%d %H:%M} {col} أعلى {r['High']:.2f} | أقل {r['Low']:.2f}")
+        msg += "\nالشموع (بتوقيتك):\n" + "\n".join(rows)
+    return msg
+
+
+def _i24_load(symbols, now):
+    start = now - pd.Timedelta(days=IFVG24_LOOKBACK_DAYS)
+    day = _i24_fetch_bars(symbols, start, IFVG24_DAY_FEED)
+    night = _i24_fetch_bars(symbols, start, IFVG24_NIGHT_FEED)
+    if not night:
+        log(f"الإنفيرجن 24: ⚠️ ما جات بيانات ليل من ألباكا ({IFVG24_NIGHT_FEED}) - الشموع بتكون ناقصة")
+    return {s: _i24_merge(day.get(s), night.get(s)) for s in symbols}
+
+
+def scan_ifvg24(symbols, sent):
+    now = pd.Timestamp.now(tz=NY)
+    data = _i24_load(symbols, now)
+    frames = [(on, minutes, tag, label, size, strict) for on, minutes, tag, label, size, strict in (
+        (ENABLE_IFVG24_4H, 240, "4h24", "فريم 4 ساعات (24 ساعة)", IFVG24_4H_MIN_SIZE, IFVG24_STRICT_4H),
+        (ENABLE_IFVG24_1H, 60, "1h24", "فريم ساعة (24 ساعة)", IFVG24_1H_MIN_SIZE, False)) if on]
+    hits = {tag: 0 for _, _, tag, _, _, _ in frames}
+    for t, df in data.items():
+        try:
+            if df.empty:
+                continue
+            for _, minutes, tag, label, size, strict in frames:
+                res = _i24_pattern(_i24_closed(_i24_frame(df, minutes), now), size, strict)
+                if not res or (now - pd.Timestamp(res["end"])).total_seconds() / 60 > IFVG24_MAX_ALERT_DELAY_MIN:
+                    continue
+                key = f"{t}-{tag}-{res['side']}-{res['candle_time']}"
+                if key in sent:
+                    continue
+                sent.add(key)
+                _append_line(IFVG24_SENT_FILE, key)
+                hits[tag] += 1
+                msg = _i24_message(t, res, label)
+                if IFVG24_GAMMA:
+                    msg = with_gamma(msg, t, float(res["price"]))
+                send_telegram(msg, kind="gap", sym=t)
+        except Exception as e:
+            log(f"الإنفيرجن 24: {t}: خطأ - {e}")
+    log(f"[{datetime.now():%H:%M}] الإنفيرجن 24 ساعة: {len(data)} سهم — "
+        + " + ".join(f"{n} تنبيه ({'4 ساعات' if tag == '4h24' else 'ساعة'})" for tag, n in hits.items()))
+
+
+def _i24_weekend(now):
+    """من 8:30 بالليل الجمعة لين 7:30 بالليل الأحد نيويورك ما فيه تداول."""
+    wd, m = now.weekday(), now.hour * 60 + now.minute
+    return (wd == 4 and m >= 20 * 60 + 30) or wd == 5 or (wd == 6 and m < 19 * 60 + 30)
+
+
+def ifvg24_run_forever():
+    if not (ALPACA_KEY and ALPACA_SECRET):
+        log("الإنفيرجن 24: ❌ يحتاج ALPACAAPIKEY و ALPACASECRETKEY - القسم مطفي")
+        return
+    log(f"الإنفيرجن 24 ساعة: بدأ - النهار {IFVG24_DAY_FEED.upper()}، الليل {IFVG24_NIGHT_FEED.upper()}، "
+        f"{len(WATCH_SYMBOLS)} رمز")
+    sent = _load_set(IFVG24_SENT_FILE)
+    try:
+        scan_ifvg24(list(WATCH_SYMBOLS), sent)   # فحص أول ما يشتغل (ينبه بس لو الشمعة قفلت من أقل من 45 دقيقة)
+    except Exception as e:
+        log(f"الإنفيرجن 24: خطأ - {e}")
+    done = set()
+    while True:
+        try:
+            now = pd.Timestamp.now(tz=NY)
+            if not _i24_weekend(now):
+                base = now.floor("h")
+                for d in IFVG24_SCAN_AFTER_MIN:
+                    slot = base + pd.Timedelta(minutes=d)
+                    if slot <= now < slot + pd.Timedelta(minutes=4) and slot not in done:
+                        done.add(slot)
+                        scan_ifvg24(list(WATCH_SYMBOLS), sent)
+            done = {x for x in done if now - x < pd.Timedelta(hours=6)}
+        except Exception as e:
+            log(f"الإنفيرجن 24: خطأ - {e}")
+        time.sleep(20)
+
+
+def ifvg24_self_test():
+    """python gap_scanner.py --ifvg24test — يجرب التقسيم والنموذج على شموع وهمية بدون نت."""
+    idx = pd.date_range("2026-10-12 20:00", periods=4 * 16, freq="15min", tz=NY)
+    plan = [(110, 112, 108, 108.5), (108.5, 109, 105, 105.5), (105.5, 106, 103, 103.5),
+            (103.5, 111, 103.4, 110)]
+    rows = []
+    for o, h, lo, cl in plan:
+        for k in range(16):
+            px = o + (cl - o) * k / 15
+            rows.append({"Open": px, "High": max(px, o) + 0.01, "Low": min(px, o) - 0.01, "Close": px})
+        rows[-16]["High"], rows[-15]["Low"] = h, lo
+    full = pd.DataFrame(rows, index=idx)
+    h = full.index.hour
+    merged = _i24_merge(full[(h >= 4) & (h < 20)], full[(h >= 20) | (h < 4)])
+    c = _i24_frame(merged, 240)
+    starts = [f"{t:%H:%M}" for t in c.index]
+    assert starts == ["20:00", "00:00", "04:00", "08:00"], starts
+    assert list(c["n"]) == [16] * 4
+    res = _i24_pattern(_i24_closed(c, idx[-1] + pd.Timedelta(minutes=20)), IFVG24_4H_MIN_SIZE, True)
+    assert res and res["side"] == "bull", res
+    print(_i24_message("TEST", res, "فريم 4 ساعات (24 ساعة)"))
+    assert len(_i24_frame(merged, 60)) == 16
+    print("TEST OK")
+
+
 def main():
     if "--cvdtest" in sys.argv:
         cvd_self_test()
@@ -4485,6 +4765,9 @@ def main():
         return
     if "--ifvgtest" in sys.argv:
         ifvg_self_test()
+        return
+    if "--ifvg24test" in sys.argv:
+        ifvg24_self_test()
         return
     if "--sctest" in sys.argv:
         sc_self_test()
@@ -4513,6 +4796,9 @@ def main():
         if ENABLE_IFVG and (ENABLE_IFVG_1H or ENABLE_IFVG_4H):
             fr = [n for on, n in ((ENABLE_IFVG_1H, "ساعة"), (ENABLE_IFVG_4H, "4 ساعات")) if on]
             pw4h_txt += f" + الإنفيرجن IFVG فريم {' و'.join(fr)} ({len(WATCH_SYMBOLS)} رمز)"
+        if ENABLE_IFVG24 and (ENABLE_IFVG24_1H or ENABLE_IFVG24_4H):
+            fr = [n for on, n in ((ENABLE_IFVG24_1H, "ساعة"), (ENABLE_IFVG24_4H, "4 ساعات")) if on]
+            pw4h_txt += f" + الإنفيرجن 24 ساعة فريم {' و'.join(fr)}"
         send_telegram("🧪 رسالة اختبار - بوت الشورت اشتغل\n"
                       "الأقسام: " + " + ".join(n for on, n in (
                           (ENABLE_BORROW_ZERO and (BZ_ZERO_ALERTS or BZ_DROP_ALERTS), "الشورت صفر"),
@@ -4538,6 +4824,8 @@ def main():
             threading.Thread(target=mom_run_forever, daemon=True, name="momentum").start()
         if ENABLE_BORROW_ZERO:   # الشورت صفر اللحظي
             threading.Thread(target=bz_run_forever, daemon=True, name="borrow_zero").start()
+        if ENABLE_IFVG24 and (ENABLE_IFVG24_1H or ENABLE_IFVG24_4H):   # (1-24) الإنفيرجن على 24 ساعة
+            threading.Thread(target=ifvg24_run_forever, daemon=True, name="ifvg24").start()
 
     pwl_last = 0.0
     ifvg_last = None
