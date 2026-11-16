@@ -2381,7 +2381,7 @@ def _gamma_chain(t):
         tk = yf.Ticker(t)
         exps = [e for e in (tk.options or []) if today <= pd.Timestamp(e).date() <= last]
     exps = sorted(exps)[:GAMMA_MAX_EXPS]
-    chain = []
+    raw = []                     # (سترايك، انتهاء، IV، مفتوحة، كول؟) - IV ممكن تكون صفر
     for e in exps:
         with _YF_LOCK:
             ch = tk.option_chain(e)
@@ -2390,8 +2390,35 @@ def _gamma_chain(t):
             for x in df.itertuples():
                 oi = 0 if pd.isna(x.openInterest) else int(x.openInterest)
                 iv = 0 if pd.isna(x.impliedVolatility) else float(x.impliedVolatility)
-                if oi > 0 and iv > 0.01:
-                    chain.append((float(x.strike), exp, iv, oi, is_call))
+                if oi > 0:
+                    raw.append((float(x.strike), exp, iv, oi, is_call))
+    # ياهو قبل الافتتاح وبالويكند يرجع IV قريب من الصفر (ما فيه bid/ask)، فبدال ما تنشال العقود:
+    # نستخدم وسيط IV الصالح لنفس الانتهاء، وإلا وسيط الكل، وإلا التذبذب التاريخي للسهم (30 يوم)
+    good = [r for r in raw if r[2] > 0.01]
+    fallback = {}
+    if len(good) < len(raw):
+        for e in {r[1] for r in raw}:
+            ivs = sorted(r[2] for r in good if r[1] == e)
+            if ivs:
+                fallback[e] = ivs[len(ivs) // 2]
+        all_ivs = sorted(r[2] for r in good)
+        hv = all_ivs[len(all_ivs) // 2] if all_ivs else None
+        if hv is None:
+            try:
+                with _YF_LOCK:
+                    h = tk.history(period="3mo", interval="1d")["Close"].dropna()
+                r = (h / h.shift(1)).apply(math.log).dropna().tail(30)
+                hv = float(r.std() * math.sqrt(252)) if len(r) > 5 else None
+            except Exception:
+                hv = None
+        for e in {r[1] for r in raw}:
+            fallback.setdefault(e, hv)
+    chain = []
+    for k, e, iv, oi, c in raw:
+        if iv <= 0.01:
+            iv = fallback.get(e) or 0
+        if iv > 0.01:
+            chain.append((k, e, iv, oi, c))
     if len(_GAMMA_CACHE) > 500:
         _GAMMA_CACHE.clear()
     _GAMMA_CACHE[t] = (time.time(), chain, exps)
@@ -2476,6 +2503,7 @@ def with_gamma(msg, t, spot):
         log(f"تمركز القاما: {t}: {e}")
         return msg
     if not g:
+        log(f"تمركز القاما: {t}: ما فيه بيانات عقود من ياهو - التنبيه راح بدون قاما")
         return msg
     if "\n⚠️" in msg:
         a, b = msg.rsplit("\n⚠️", 1)
@@ -4506,6 +4534,8 @@ _i24_feed_warned = set()
 def _i24_fetch_bars(symbols, start, feed):
     """شموع 15 دقيقة من ألباكا. يرجع {الرمز: DataFrame بتوقيت نيويورك}."""
     out = {}
+    # ألباكا ما تعرف المؤشرات (^GSPC) ولو انرسل واحد ترفض الدفعة كاملة
+    symbols = [x for x in symbols if x.replace(".", "").isalpha()]
     hdr = {"APCA-API-KEY-ID": ALPACA_KEY, "APCA-API-SECRET-KEY": ALPACA_SECRET}
     for i in range(0, len(symbols), 100):
         params = {"symbols": ",".join(symbols[i:i + 100]), "timeframe": "15Min",
