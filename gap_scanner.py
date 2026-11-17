@@ -113,6 +113,11 @@
     - قيمة الصفقات بالنافذة 2 مليون$ وفوق، تنبيه واحد لكل سهم ولكل جهة كل ساعة، مع صورة السعر والـ CVD لليوم
     - وقت السوق الرسمي بس | ENABLE_CVD = False يطفيه
 
+(15) تقرير القاما اليومي - قائمة GEX_SYMBOLS (فاضية = قائمة المراقبة) - من سلسلة عقود ياهو
+    - كل يوم سوق 8:30 الصبح نيويورك (4:30 العصر الرياض بالشتاء)، رسالة مجمعة
+    - لكل سهم: جدار الكول، جدار البوت، نقطة الانقلاب، صافي القاما، أكثر سترايك عقود مفتوحة، أكثر سترايك فوليوم
+    - ENABLE_GEX_DAILY = False يطفيه | python short_bot.py --gexnow [--send] [NVDA ...] تجربة حقيقية
+
 التشغيل:
   pip install yfinance pandas requests lxml matplotlib
   python short_bot.py               # يشتغل باستمرار
@@ -348,7 +353,25 @@ GAMMA_MAX_DTE = 30               # الانتهاءات اللي تدخل بال
 GAMMA_MAX_EXPS = 4               # أقصى عدد انتهاءات (أقربها)
 GAMMA_RANGE_PCT = 20             # السترايكات بس اللي داخل ±كذا % من السعر
 GAMMA_TOP_N = 3                  # كم سترايك يكتب في "أعلى تمركز"
+GAMMA_CHAIN_ALIAS = {"^GSPC": "^SPX"}   # ياهو ما يعطي عقود على ^GSPC، فتنجاب من ^SPX (نفس السترايكات)
 SWEEP_CHART = True               # صورة شارت 4 ساعات مع تنبيه السحب (يحتاج matplotlib) | False = نص بس
+
+# ---- (15) تقرير القاما اليومي - مراكز صناع السوق + أكثر سترايك عليه سيولة ----
+#   مرة كل يوم سوق قبل الافتتاح (العقود المفتوحة تتحدث مرة باليوم من OCC، فقبل الافتتاح = أرقام إغلاق أمس)
+#   لكل سهم: جدار الكول، جدار البوت، نقطة الانقلاب، صافي القاما، أكثر سترايك عقود مفتوحة، وأكثر سترايك فوليوم بآخر جلسة
+ENABLE_GEX_DAILY = True          # True = شغال | False = مطفي
+GEX_DAILY_AT_NY = (8, 30)        # يرسل من 8:30 الصبح نيويورك = 4:30 العصر الرياض (الشتاء) / 3:30 (الصيف)
+GEX_DAILY_UNTIL_NY = (16, 0)     # لو البوت اشتغل بعد كذا وما انرسل، ينتظر لليوم الجاي
+# قائمة التقرير: فاضية = نفس قائمة المراقبة (WATCH_SYMBOLS)، أو حط رموز هنا، أو متغير GEX_SYMBOLS في Railway (بينها فاصلة)
+GEX_SYMBOLS = [s.strip().upper() for s in os.environ.get("GEX_SYMBOLS", "").split(",") if s.strip()] or [
+    "NVDA", "CRM", "AVGO", "META", "TSLA", "SPCX", "AMD", "AAPL", "RKLB", "UNH",
+    "MU", "LLY", "ADBE", "QCOM", "SHOP", "GOOGL", "MSFT", "MSTR", "AMZN", "DDOG",
+    "PLTR", "OKTA", "ORCL", "INTC", "AAOI", "CRDO", "SNDK", "STX", "CRCL", "WDC",
+    "SKHY", "NBIS", "CRWV", "CRWD", "MRVL", "ARM", "AMAT", "PANW", "SNOW", "NOW",
+    "DELL", "BE", "SMH", "ABBV", "KO", "HD", "MRNA", "TSM", "BA",
+    "QQQ", "SPY", "^GSPC", "^NDX",
+]
+GEX_DAILY_STATE = os.path.join(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "."), "gex_daily.txt")
 SWEEP_CHART_BARS = 30            # كم شمعة 4 ساعات تطلع بالصورة
 
 # ---- حساب الدلتا وسعر العقد (يستخدمه سحب الجمعة/الاثنين) ----
@@ -2463,10 +2486,10 @@ def _gamma_chain(t):
     today = pd.Timestamp.now(tz=NY).date()
     last = today + timedelta(days=GAMMA_MAX_DTE)
     with _YF_LOCK:
-        tk = yf.Ticker(t)
+        tk = yf.Ticker(GAMMA_CHAIN_ALIAS.get(t, t))
         exps = [e for e in (tk.options or []) if today <= pd.Timestamp(e).date() <= last]
     exps = sorted(exps)[:GAMMA_MAX_EXPS]
-    raw = []                     # (سترايك، انتهاء، IV، مفتوحة، كول؟) - IV ممكن تكون صفر
+    raw = []                     # (سترايك، انتهاء، IV، مفتوحة، كول؟، فوليوم) - IV ممكن تكون صفر
     for e in exps:
         with _YF_LOCK:
             ch = tk.option_chain(e)
@@ -2476,7 +2499,8 @@ def _gamma_chain(t):
                 oi = 0 if pd.isna(x.openInterest) else int(x.openInterest)
                 iv = 0 if pd.isna(x.impliedVolatility) else float(x.impliedVolatility)
                 if oi > 0:
-                    raw.append((float(x.strike), exp, iv, oi, is_call))
+                    vol = 0 if pd.isna(x.volume) else int(x.volume)
+                    raw.append((float(x.strike), exp, iv, oi, is_call, vol))
     # ياهو قبل الافتتاح وبالويكند يرجع IV قريب من الصفر (ما فيه bid/ask)، فبدال ما تنشال العقود:
     # نستخدم وسيط IV الصالح لنفس الانتهاء، وإلا وسيط الكل، وإلا التذبذب التاريخي للسهم (30 يوم)
     good = [r for r in raw if r[2] > 0.01]
@@ -2499,11 +2523,11 @@ def _gamma_chain(t):
         for e in {r[1] for r in raw}:
             fallback.setdefault(e, hv)
     chain = []
-    for k, e, iv, oi, c in raw:
+    for k, e, iv, oi, c, v in raw:
         if iv <= 0.01:
             iv = fallback.get(e) or 0
         if iv > 0.01:
-            chain.append((k, e, iv, oi, c))
+            chain.append((k, e, iv, oi, c, v))
     if len(_GAMMA_CACHE) > 500:
         _GAMMA_CACHE.clear()
     _GAMMA_CACHE[t] = (time.time(), chain, exps)
@@ -2511,18 +2535,18 @@ def _gamma_chain(t):
 
 
 def _gamma_rows(t, spot):
-    """[(سترايك، سنوات، IV، العقود المفتوحة، كول؟)] داخل ±GAMMA_RANGE_PCT% من السعر، والانتهاءات المستخدمة."""
+    """[(سترايك، سنوات، IV، العقود المفتوحة، كول؟، فوليوم)] داخل ±GAMMA_RANGE_PCT% من السعر، والانتهاءات المستخدمة."""
     chain, exps = _gamma_chain(t)
     lo, hi = spot * (1 - GAMMA_RANGE_PCT / 100), spot * (1 + GAMMA_RANGE_PCT / 100)
     yrs = {e: _opt_years(e) for e in {x[1] for x in chain}}
-    rows = [(k, yrs[e], iv, oi, c) for k, e, iv, oi, c in chain if lo <= k <= hi]
+    rows = [(k, yrs[e], iv, oi, c, v) for k, e, iv, oi, c, v in chain if lo <= k <= hi]
     return rows, exps
 
 
 def _gex_at(rows, s):
     """صافي القاما بالدولار لكل 1% حركة لو السعر = s."""
     tot = 0.0
-    for k, yrs, iv, oi, is_call in rows:
+    for k, yrs, iv, oi, is_call, *_ in rows:
         g = _bs_gamma(s, k, yrs, iv) * oi * 100 * s * s * 0.01
         tot += g if is_call else -g
     return tot
@@ -2540,44 +2564,198 @@ def _fmt_usd(v):
     return f"{sgn}{a:.0f}$"
 
 
-def gamma_block(t, spot):
-    """نص تمركز القاما للتنبيه، أو "" لو ما فيه بيانات."""
-    if not SWEEP_GAMMA or not spot:
-        return ""
-    rows, exps = _gamma_rows(t, float(spot))
-    if not rows:
-        return ""
+def gamma_levels(t, spot):
+    """مستويات القاما والسيولة لسهم، أو None لو ما فيه بيانات عقود.
+    {calls, puts: قاما كل سترايك$، call_wall, put_wall, top, net, flip, oi_top: (سترايك، كول، بوت)،
+     vol_top: (سترايك، فوليوم)، exps}"""
+    if not spot:
+        return None
     spot = float(spot)
-    calls, puts = {}, {}
-    for k, yrs, iv, oi, is_call in rows:
+    rows, exps = _gamma_rows(t, spot)
+    if not rows:
+        return None
+    calls, puts, oi_k, vol_k = {}, {}, {}, {}
+    for k, yrs, iv, oi, is_call, vol in rows:
         g = _bs_gamma(spot, k, yrs, iv) * oi * 100 * spot * spot * 0.01
         d = calls if is_call else puts
         d[k] = d.get(k, 0.0) + g
-    pct = lambda k: f"{(k / spot - 1) * 100:+.1f}%"
-    lines = [f"🧲 تمركز القاما (أقرب {len(exps)} انتهاء، لين {pd.Timestamp(exps[-1]):%m-%d}):"]
-    if calls:
-        kc = max(calls, key=calls.get)
-        lines.append(f"جدار الكول: {kc:g} ({pct(kc)}) — {_fmt_usd(calls[kc])}")
-    if puts:
-        kp = max(puts, key=puts.get)
-        lines.append(f"جدار البوت: {kp:g} ({pct(kp)}) — {_fmt_usd(-puts[kp])}")
+        o = oi_k.setdefault(k, [0, 0])
+        o[0 if is_call else 1] += oi
+        vol_k[k] = vol_k.get(k, 0) + (vol or 0)
     total = {k: calls.get(k, 0.0) + puts.get(k, 0.0) for k in set(calls) | set(puts)}
-    top = sorted(total, key=total.get, reverse=True)[:GAMMA_TOP_N]
-    if top:
-        lines.append("أعلى تمركز: " + " | ".join(f"{k:g} ({pct(k)})" for k in top))
-    net = _gex_at(rows, spot)
-    lines.append(f"صافي القاما: {_fmt_usd(net)} لكل 1% — "
-                 + ("موجب ← حركة أهدى والسعر ينشد للسترايكات الكبيرة" if net >= 0
-                    else "سالب ← الحركة أقوى وأسرع"))
     # نقطة الانقلاب: أقرب سعر للسعر الحالي يتغير عنده صافي القاما من سالب لموجب
     grid = [spot * (1 + i / 200) for i in range(-30, 31)]       # ±15% بخطوة 0.5%
     vals = [_gex_at(rows, s) for s in grid]
     flips = [(grid[i] + grid[i + 1]) / 2 for i in range(len(grid) - 1) if (vals[i] < 0) != (vals[i + 1] < 0)]
-    if flips:
-        f = min(flips, key=lambda x: abs(x - spot))
+    ko = max(oi_k, key=lambda k: sum(oi_k[k])) if oi_k else None
+    kv = max(vol_k, key=vol_k.get) if vol_k and max(vol_k.values()) > 0 else None
+    return {"calls": calls, "puts": puts, "exps": exps,
+            "call_wall": max(calls, key=calls.get) if calls else None,
+            "put_wall": max(puts, key=puts.get) if puts else None,
+            "top": sorted(total, key=total.get, reverse=True)[:GAMMA_TOP_N],
+            "net": _gex_at(rows, spot),
+            "flip": min(flips, key=lambda x: abs(x - spot)) if flips else None,
+            "oi_top": (ko, oi_k[ko][0], oi_k[ko][1]) if ko is not None else None,
+            "vol_top": (kv, vol_k[kv]) if kv is not None else None}
+
+
+def gamma_block(t, spot):
+    """نص تمركز القاما للتنبيه، أو "" لو ما فيه بيانات."""
+    if not SWEEP_GAMMA or not spot:
+        return ""
+    lv = gamma_levels(t, spot)
+    if not lv:
+        return ""
+    spot = float(spot)
+    calls, puts, exps = lv["calls"], lv["puts"], lv["exps"]
+    pct = lambda k: f"{(k / spot - 1) * 100:+.1f}%"
+    lines = [f"🧲 تمركز القاما (أقرب {len(exps)} انتهاء، لين {pd.Timestamp(exps[-1]):%m-%d}):"]
+    if lv["call_wall"] is not None:
+        kc = lv["call_wall"]
+        lines.append(f"جدار الكول: {kc:g} ({pct(kc)}) — {_fmt_usd(calls[kc])}")
+    if lv["put_wall"] is not None:
+        kp = lv["put_wall"]
+        lines.append(f"جدار البوت: {kp:g} ({pct(kp)}) — {_fmt_usd(-puts[kp])}")
+    if lv["top"]:
+        lines.append("أعلى تمركز: " + " | ".join(f"{k:g} ({pct(k)})" for k in lv["top"]))
+    net = lv["net"]
+    lines.append(f"صافي القاما: {_fmt_usd(net)} لكل 1% — "
+                 + ("موجب ← حركة أهدى والسعر ينشد للسترايكات الكبيرة" if net >= 0
+                    else "سالب ← الحركة أقوى وأسرع"))
+    if lv["flip"] is not None:
+        f = lv["flip"]
         lines.append(f"نقطة الانقلاب: {f:.2f} ({pct(f)}) — "
                      + ("السعر فوقها" if spot > f else "السعر تحتها"))
     return "\n".join(lines)
+
+
+# ================== (15) تقرير القاما اليومي ==================
+def _gex_line(t, spot, lv):
+    """سطرين لكل سهم بالتقرير اليومي."""
+    pct = lambda k: f"{(k / spot - 1) * 100:+.1f}%"
+    net = lv["net"]
+    head = f"${t} {spot:.2f} | صافي {_fmt_usd(net)} {'🟢' if net >= 0 else '🔴'}"
+    parts = []
+    if lv["call_wall"] is not None:
+        parts.append(f"كول {lv['call_wall']:g} ({pct(lv['call_wall'])})")
+    if lv["put_wall"] is not None:
+        parts.append(f"بوت {lv['put_wall']:g} ({pct(lv['put_wall'])})")
+    if lv["flip"] is not None:
+        parts.append(f"انقلاب {lv['flip']:.2f}")
+    if lv["oi_top"]:
+        k, c, p = lv["oi_top"]
+        parts.append(f"أكثر سيولة {k:g} ({_sc_k(c + p)} عقد مفتوح)")
+    if lv["vol_top"]:
+        k, v = lv["vol_top"]
+        parts.append(f"فوليوم {k:g} ({_sc_k(v)})")
+    return head + "\n" + " | ".join(parts)
+
+
+def gex_daily_lines(symbols):
+    """[(نص السهم)]، [الرموز اللي ما لها بيانات]."""
+    spots = {}
+    for t, df in download_batches(symbols, 100, period="5d", interval="1d", prepost=False):
+        try:
+            spots[t] = float(df["Close"].iloc[-1])
+        except Exception:
+            pass
+    lines, miss = [], []
+    for t in symbols:
+        lv = None
+        if spots.get(t):
+            try:
+                lv = gamma_levels(t, spots[t])
+            except Exception as e:
+                log(f"تقرير القاما: {t}: {e}")
+        if lv:
+            lines.append(_gex_line(t, spots[t], lv))
+        else:
+            miss.append(t)
+    free_memory()
+    return lines, miss
+
+
+def gex_daily_send(symbols, prefix=""):
+    t0 = time.time()
+    lines, miss = gex_daily_lines(symbols)
+    now = pd.Timestamp.now(tz=LOCAL_TZ)
+    head = (f"{prefix}🧲 تقرير القاما اليومي — {now:%Y-%m-%d}\n"
+            f"مراكز صناع السوق من العقود المفتوحة (أقرب {GAMMA_MAX_EXPS} انتهاءات، السترايكات ±{GAMMA_RANGE_PCT}% من السعر)\n"
+            "كول = جدار الكول (مقاومة) | بوت = جدار البوت (دعم)\n"
+            "انقلاب = السعر اللي يتحول عنده صافي القاما بين موجب وسالب\n"
+            "أكثر سيولة = السترايك اللي عليه أكثر عقود مفتوحة | فوليوم = أكثر سترايك تداول بآخر جلسة\n"
+            "صافي 🟢 موجب = حركة أهدى | 🔴 سالب = حركة أقوى وأسرع")
+    chunks, cur = [], head
+    for ln in lines:
+        if len(cur) + len(ln) + 2 > 3400:
+            chunks.append(cur)
+            cur = ""
+        cur += ("\n\n" if cur else "") + ln
+    if miss:
+        tail = "ما فيه بيانات عقود: " + " ".join(miss)
+        if len(cur) + len(tail) + 2 > 3400:
+            chunks.append(cur)
+            cur = ""
+        cur += ("\n\n" if cur else "") + tail
+    chunks.append(cur)
+    for i, c in enumerate(chunks, 1):
+        send_telegram(c + (f"\n\n({i}/{len(chunks)})" if len(chunks) > 1 else ""), kind="gex")
+        time.sleep(1)
+    log(f"[{datetime.now():%H:%M}] تقرير القاما: {len(lines)} سهم، {len(miss)} بدون بيانات — "
+        f"{time.time() - t0:.0f} ثانية")
+
+
+_gex_running = threading.Event()
+
+
+def gex_daily_maybe_start():
+    """مرة كل يوم سوق، من GEX_DAILY_AT_NY لين GEX_DAILY_UNTIL_NY (نيويورك) - بخيط لحاله."""
+    if not ENABLE_GEX_DAILY or _gex_running.is_set():
+        return
+    now = pd.Timestamp.now(tz=NY)
+    if now.weekday() >= 5 or not (GEX_DAILY_AT_NY <= (now.hour, now.minute) < GEX_DAILY_UNTIL_NY):
+        return
+    day = str(now.date())
+    try:
+        with open(GEX_DAILY_STATE, encoding="utf-8") as f:
+            if f.read().strip() == day:
+                return
+    except FileNotFoundError:
+        pass
+    try:
+        with open(GEX_DAILY_STATE, "w", encoding="utf-8") as f:   # يتسجل قبل الإرسال عشان ما يتكرر لو صار خطأ
+            f.write(day)
+    except Exception as e:
+        log(f"تقرير القاما: ما قدرت أحفظ اليوم: {e}")
+    _gex_running.set()
+
+    def run():
+        try:
+            gex_daily_send(GEX_SYMBOLS or list(WATCH_SYMBOLS))
+        except Exception as e:
+            log(f"تقرير القاما: خطأ - {e}")
+        finally:
+            _gex_running.clear()
+
+    threading.Thread(target=run, daemon=True, name="gex_daily").start()
+
+
+def gex_self_test():
+    """python short_bot.py --gextest — يجرب الحساب والرسالة على سلسلة وهمية بدون نت."""
+    exp = (pd.Timestamp.now(tz=NY) + pd.Timedelta(days=7)).date()
+    fake = [  # (سترايك، انتهاء، IV، مفتوحة، كول؟، فوليوم)
+        (95, exp, 0.4, 9000, False, 1200), (100, exp, 0.4, 20000, False, 3000),
+        (100, exp, 0.4, 15000, True, 8000), (105, exp, 0.4, 25000, True, 4000),
+        (110, exp, 0.4, 6000, True, 900), (90, exp, 0.4, 3000, False, 100)]
+    _GAMMA_CACHE["TEST"] = (time.time(), fake, [exp.isoformat()])
+    lv = gamma_levels("TEST", 101.0)
+    assert lv["call_wall"] == 105 and lv["put_wall"] == 100, lv
+    assert lv["oi_top"] == (100, 15000, 20000) and lv["vol_top"] == (100, 11000), lv
+    print("✅ جدار الكول 105 | جدار البوت 100 | أكثر عقود مفتوحة 100 (35K) | أكثر فوليوم 100")
+    print(_gex_line("TEST", 101.0, lv))
+    print()
+    print(gamma_block("TEST", 101.0))
+    print("GEX TEST OK")
 
 
 def with_gamma(msg, t, spot):
@@ -4881,6 +5059,18 @@ def main():
     if "--ifvgtest" in sys.argv:
         ifvg_self_test()
         return
+    if "--gextest" in sys.argv:
+        gex_self_test()
+        return
+    if "--gexnow" in sys.argv:    # تجربة حقيقية: python short_bot.py --gexnow [--send] [NVDA SPY ...]
+        _load_chats()
+        syms = [a.upper() for a in sys.argv[1:] if not a.startswith("--")] or GEX_SYMBOLS or list(WATCH_SYMBOLS)
+        if "--send" in sys.argv:
+            gex_daily_send(syms, prefix="🧪 تجربة\n")
+        else:
+            lines, miss = gex_daily_lines(syms)
+            print("\n\n".join(lines) + (f"\n\nما فيه بيانات: {' '.join(miss)}" if miss else ""))
+        return
     if "--ifvg24test" in sys.argv:
         ifvg24_self_test()
         return
@@ -4930,6 +5120,8 @@ def main():
                           (ENABLE_FLOW, "ماسح السيولة"), (ENABLE_FRIMON, "سحب الجمعة/الاثنين (كول)"),
                           (ENABLE_RSPLIT_SHORT, "التجزئة العكسية")) if on)
                       + (" + ذروة البيع بعد التجزئة العكسية" if ENABLE_SC else "")
+                      + (f" + تقرير القاما اليومي ({len(GEX_SYMBOLS or WATCH_SYMBOLS)} رمز، "
+                         f"{GEX_DAILY_AT_NY[0]}:{GEX_DAILY_AT_NY[1]:02d} نيويورك)" if ENABLE_GEX_DAILY else "")
                       + f"{pw4h_txt}\n"
                       f"الوقت: {pd.Timestamp.now(tz=LOCAL_TZ):%Y-%m-%d %H:%M} (توقيتك)")
     if not once:
@@ -4987,6 +5179,10 @@ def main():
                 flow_day = today
             scan_flow(flow_tickers, flow_sent)
             flow_last = time.time()
+
+        # (15) تقرير القاما اليومي - قبل الافتتاح، مرة باليوم (بخيط لحاله)
+        if not once:
+            gex_daily_maybe_start()
 
         # (4ب) التجزئة العكسية - الجديد كل يوم، وقائمة كل جمعة
         if ENABLE_RSPLIT_SHORT:
