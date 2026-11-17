@@ -86,6 +86,12 @@
     - قمة وقاع اليوم السابق من 4 الفجر لين 8 بالليل نيويورك (بدون الليلي)، تنبيه واحد لكل سهم باليوم لكل جهة
     - ENABLE_PDL_1H / ENABLE_PDH_1H = False يطفي الدعم / المقاومة
 
+(1ي-2) قائمة سحب قمة أمس وقاع أمس - إغلاق يومي - قائمة المراقبة (WATCH_SYMBOLS)
+    - الشمعة اليومية (9:30-4 نيويورك) ذيلها نزل تحت قاع أمس وقفلت فوقه → كول | طلع فوق قمة أمس وقفلت تحتها → بوت
+    - قائمة وحدة مجمعة كل يوم سوق 4:20 العصر نيويورك (12:20 بالليل الرياض بالشتاء)
+    - وأول ما يشتغل البوت: قائمة آخر شمعة يومية مقفلة (مرة وحدة لكل PD1D_START_ID)
+    - ENABLE_PD1D = False يطفيه | python short_bot.py --pd1dnow [--send] تجربة حقيقية
+
 (11) سحب قمة الجمعة يوم الاثنين ثم سحب دعم الأسبوع السابق (فريم 4 ساعات) → كول
     - الاثنين: السعر يسحب قمة الجمعة ويرجع يختبرها وما يخترقها
     - بعدها ينزل لقاع الأسبوع السابق ويسحب السيولة (ذيل تحت الدعم وإغلاق فوقه)
@@ -298,6 +304,22 @@ PW4H_WICK_ONLY = True  # True = الذيل بس يكسر المستوى، الا
 ENABLE_PDL_1H = True   # الدعم: True = شغال | False = مطفي
 ENABLE_PDH_1H = True   # المقاومة: True = شغال | False = مطفي
 PD1H_WICK_ONLY = True  # True = الذيل بس يكسر المستوى (الافتتاح والإغلاق بجهته) | False = الإغلاق بس
+
+# ---- (1ي-2) قائمة سحب قمة أمس وقاع أمس - إغلاق يومي - قائمة المراقبة ----
+#   الشمعة اليومية (الجلسة الرسمية 9:30-4 نيويورك، نفس تريدنج فيو):
+#   🟢 سحب قاع أمس: ذيلها نزل تحت قاع أمس وقفلت فوقه → كول (الهدف قمة أمس)
+#   🔴 سحب قمة أمس: ذيلها طلع فوق قمة أمس وقفلت تحتها → بوت (الهدف قاع أمس)
+#   قائمة وحدة مجمعة كل يوم سوق بعد الإغلاق، + قائمة أول ما يشتغل البوت (آخر شمعة يومية مقفلة)
+ENABLE_PD1D = True                # True = شغال | False = مطفي
+PD1D_LOW = True                   # سحب قاع أمس (كول)
+PD1D_HIGH = True                  # سحب قمة أمس (بوت)
+PD1D_WICK_ONLY = True             # True = الافتتاح كمان بجهة المستوى (الذيل بس اللي كسر) | False = الإغلاق بس
+PD1D_SCAN_AFTER_NY = (16, 20)     # يرسل القائمة بعد كذا نيويورك (= 12:20 بالليل الرياض بالشتاء)
+PD1D_SCAN_UNTIL_NY = (20, 0)      # لو بيانات ياهو تأخرت يعيد المحاولة كل 10 دقايق لين كذا
+PD1D_RETRY_MIN = 10
+PD1D_START_LIST = True            # قائمة أول ما يشتغل البوت (مرة وحدة لكل رقم PD1D_START_ID)
+PD1D_START_ID = "1"               # غيّر الرقم لو تبيها تنرسل مرة ثانية بعد الرفع الجاي
+PD1D_STATE = os.path.join(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "."), "pd1d_state.txt")
 
 # ---- (1) الإنفيرجن IFVG - فريم ساعة و4 ساعات - قائمة المراقبة (WATCH_SYMBOLS) ----
 #   نفس نموذج gap_scanner: ثلاث شموع بين ذيل الأولى والثالثة جاب، الثانية تغطي الجاب كامل،
@@ -1942,6 +1964,217 @@ def scan_pwl_4h(symbols, sent):
     free_memory()
     if hits:
         log(f"[{datetime.now():%H:%M}] سحب دعم/مقاومة اليوم السابق (ساعة) + الأسبوع السابق (4 ساعات): {hits} تنبيه")
+
+
+# ================== (1ي-2) قائمة سحب قمة أمس وقاع أمس - إغلاق يومي ==================
+def _pd1d_daily(df):
+    """الشموع اليومية بفهرس تواريخ (بدون تكرار)."""
+    d = df.dropna(subset=OHLC).copy()
+    d.index = pd.Index([pd.Timestamp(i).date() for i in d.index])
+    return d[~d.index.duplicated(keep="last")]
+
+
+def check_pd1d(daily, day, wick_only=None):
+    """شمعة يوم day مقابل اليوم اللي قبلها. يرجع [(الجهة، التفاصيل)] - "low" = سحب قاع أمس، "high" = سحب قمة أمس."""
+    wick_only = PD1D_WICK_ONLY if wick_only is None else wick_only
+    d = _pd1d_daily(daily)
+    d = d[[x <= day for x in d.index]]
+    if len(d) < 2 or d.index[-1] != day:
+        return []
+    cur, prev = d.iloc[-1], d.iloc[-2]
+    o, h, l, c = (float(cur[k]) for k in OHLC)
+    pdh, pdl = float(prev["High"]), float(prev["Low"])
+    vol = None
+    if "Volume" in d and len(d) > 5:
+        past = d["Volume"].iloc[-21:-1].astype(float)
+        if past.mean() > 0:
+            vol = float(cur["Volume"]) / float(past.mean())
+    base = {"open": o, "high": h, "low": l, "close": c, "pdh": pdh, "pdl": pdl,
+            "day": day, "prev_day": d.index[-2], "rvol": vol}
+    out = []
+    if l < pdl < c and (not wick_only or o > pdl):
+        out.append(("low", {**base, "level": pdl, "depth": (pdl - l) / pdl * 100}))
+    if c < pdh < h and (not wick_only or o < pdh):
+        out.append(("high", {**base, "level": pdh, "depth": (h - pdh) / pdh * 100}))
+    return out
+
+
+def _pd1d_line(t, side, r):
+    c = r["close"]
+    if side == "low":
+        tgt = (f"🎯 قمة أمس {r['pdh']:.2f} ({(r['pdh'] / c - 1) * 100:+.1f}%)" if r["pdh"] > c
+               else "قفل فوق قمة أمس كمان")
+        stop = f"🛑 {r['low']:.2f} ({(r['low'] / c - 1) * 100:+.1f}%)"
+        lvl = f"قاع أمس {r['level']:.2f} ← نزل {r['low']:.2f} (-{r['depth']:.2f}%)"
+    else:
+        tgt = (f"🎯 قاع أمس {r['pdl']:.2f} ({(r['pdl'] / c - 1) * 100:+.1f}%)" if r["pdl"] < c
+               else "قفل تحت قاع أمس كمان")
+        stop = f"🛑 {r['high']:.2f} ({(r['high'] / c - 1) * 100:+.1f}%)"
+        lvl = f"قمة أمس {r['level']:.2f} ← طلع {r['high']:.2f} (+{r['depth']:.2f}%)"
+    col = "🟢" if c > r["open"] else "🔴"
+    rv = f" | فوليوم {r['rvol']:.1f}x" if r.get("rvol") else ""
+    return f"${t}{sec_tag(t)}\nإغلاق {c:.2f} {col} | {lvl}{rv}\n{tgt} | {stop}"
+
+
+def pd1d_last_closed_day(now=None):
+    """آخر يوم شمعته اليومية مقفلة: اليوم لو بعد 4:15 العصر نيويورك، وإلا اليوم اللي قبله (أيام الأسبوع)."""
+    now = now or pd.Timestamp.now(tz=NY)
+    d = now.date()
+    if now.weekday() >= 5 or (now.hour, now.minute) < (16, 15):
+        d -= timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
+def pd1d_scan(symbols, day=None):
+    """يرجع (اليوم، [(الرمز، الجهة، التفاصيل)]، كم سهم فيه شمعة اليوم). اليوم None = آخر شمعة مقفلة عند ياهو."""
+    want = day or pd1d_last_closed_day()
+    data, ready, latest = {}, 0, None
+    for t, df in download_batches(symbols, 100, period="3mo", interval="1d", prepost=False):
+        try:
+            d = _pd1d_daily(df)
+            d = d[[x <= want for x in d.index]]
+            if d.empty:
+                continue
+            data[t] = d
+            latest = max(latest or d.index[-1], d.index[-1])
+        except Exception as e:
+            log(f"قائمة سحب أمس: {t}: {e}")
+    if day is None and latest is not None:
+        want = latest            # عطلة: ياخذ آخر يوم فيه تداول
+    hits = []
+    for t, d in data.items():
+        if d.index[-1] == want:
+            ready += 1
+        try:
+            for side, r in check_pd1d(d, want):
+                if (side == "low" and PD1D_LOW) or (side == "high" and PD1D_HIGH):
+                    hits.append((t, side, r))
+        except Exception as e:
+            log(f"قائمة سحب أمس: {t}: {e}")
+    free_memory()
+    return want, hits, ready
+
+
+def pd1d_send(day, hits, prefix=""):
+    """قائمة وحدة (تنقسم لو طويلة): الكول (سحب قاع أمس) ثم البوت (سحب قمة أمس)، الأعمق سحب أول."""
+    lows = sorted([(t, r) for t, s, r in hits if s == "low"], key=lambda x: -x[1]["depth"])
+    highs = sorted([(t, r) for t, s, r in hits if s == "high"], key=lambda x: -x[1]["depth"])
+    head = (f"{prefix}📋 قائمة سحب سيولة أمس — إغلاق يومي {day:%Y-%m-%d}\n"
+            f"الشمعة اليومية (9:30-4 نيويورك) سحبت قمة/قاع اليوم اللي قبلها وقفلت داخله"
+            + (" (الافتتاح كمان داخله، الذيل بس اللي كسر)" if PD1D_WICK_ONLY else "")
+            + f"\n🟢 سحب قاع أمس: {len(lows)} | 🔴 سحب قمة أمس: {len(highs)}")
+    blocks = []
+    if PD1D_LOW:
+        blocks.append("🟢 سحب قاع أمس → كول (الهدف قمة أمس، الوقف تحت الذيل)")
+        blocks += [f"{i}) " + _pd1d_line(t, "low", r) for i, (t, r) in enumerate(lows, 1)] or ["ما فيه"]
+    if PD1D_HIGH:
+        blocks.append("🔴 سحب قمة أمس → بوت (الهدف قاع أمس، الوقف فوق الذيل)")
+        blocks += [f"{i}) " + _pd1d_line(t, "high", r) for i, (t, r) in enumerate(highs, 1)] or ["ما فيه"]
+    chunks, cur = [], head
+    for b in blocks:
+        if len(cur) + len(b) + 2 > 3400:
+            chunks.append(cur)
+            cur = ""
+        cur += ("\n\n" if cur else "") + b
+    chunks.append(cur)
+    for i, c in enumerate(chunks, 1):
+        send_telegram(c + (f"\n\n({i}/{len(chunks)})" if len(chunks) > 1 else ""), kind="sweep")
+        time.sleep(1)
+    log(f"[{datetime.now():%H:%M}] قائمة سحب أمس ({day}): {len(lows)} قاع + {len(highs)} قمة")
+
+
+_pd1d_running = threading.Event()
+_pd1d_last_try = [0.0]
+
+
+def _pd1d_state():
+    try:
+        with open(PD1D_STATE, encoding="utf-8") as f:
+            return dict(x.split("=", 1) for x in f.read().split() if "=" in x)
+    except FileNotFoundError:
+        return {}
+
+
+def _pd1d_save(st):
+    try:
+        with open(PD1D_STATE, "w", encoding="utf-8") as f:
+            f.write("\n".join(f"{k}={v}" for k, v in st.items()) + "\n")
+    except Exception as e:
+        log(f"قائمة سحب أمس: ما قدرت أحفظ الحالة: {e}")
+
+
+def pd1d_maybe_start(symbols):
+    """أول ما يشتغل: قائمة آخر شمعة مقفلة (مرة وحدة). وبعدها كل يوم سوق بعد الإغلاق - بخيط لحاله."""
+    if not ENABLE_PD1D or _pd1d_running.is_set():
+        return
+    st = _pd1d_state()
+    now = pd.Timestamp.now(tz=NY)
+    today = str(now.date())
+    start_due = PD1D_START_LIST and st.get("start") != PD1D_START_ID
+    daily_due = (now.weekday() < 5 and PD1D_SCAN_AFTER_NY <= (now.hour, now.minute) < PD1D_SCAN_UNTIL_NY
+                 and st.get("day") != today)
+    if not (start_due or daily_due) or time.time() - _pd1d_last_try[0] < PD1D_RETRY_MIN * 60:
+        return
+    _pd1d_last_try[0] = time.time()
+    _pd1d_running.set()
+
+    def run():
+        try:
+            if daily_due:
+                day, hits, ready = pd1d_scan(symbols, now.date())
+                if ready < max(1, len(symbols) // 2):     # ياهو للحين ما حدّث شمعة اليوم
+                    log(f"قائمة سحب أمس: شمعة اليوم ناقصة ({ready} من {len(symbols)}) - أعيد بعد {PD1D_RETRY_MIN} دقايق")
+                    return
+                pd1d_send(day, hits)
+                st["day"] = today
+                st["start"] = PD1D_START_ID              # ما يحتاج قائمة البداية بعدها
+            else:
+                day, hits, _ = pd1d_scan(symbols)
+                pd1d_send(day, hits, prefix="🆕 أول قائمة (آخر شمعة يومية مقفلة)\n")
+                st["start"] = PD1D_START_ID
+            _pd1d_save(st)
+        except Exception as e:
+            log(f"قائمة سحب أمس: خطأ - {e}")
+        finally:
+            _pd1d_running.clear()
+
+    threading.Thread(target=run, daemon=True, name="pd1d").start()
+
+
+def pd1d_self_test():
+    """python short_bot.py --pd1dtest — يجرب الشرط على شموع وهمية بدون نت."""
+    idx = pd.to_datetime(["2026-11-12", "2026-11-13", "2026-11-16"])
+    def mk(o, h, l, c):
+        return pd.DataFrame({"Open": [100, 100, o], "High": [101, 102, h], "Low": [99, 98, l],
+                             "Close": [100, 100, c], "Volume": [1e6, 1e6, 2e6]}, index=idx)
+    day = datetime(2026, 11, 16).date()
+    r = check_pd1d(mk(99, 100.5, 97.5, 99.5), day)
+    assert [s for s, _ in r] == ["low"] and r[0][1]["level"] == 98, r
+    print("✅ سحب قاع أمس (98): نزل 97.5 وقفل 99.5")
+    r = check_pd1d(mk(101, 102.8, 100.5, 101.2), day)
+    assert [s for s, _ in r] == ["high"] and r[0][1]["level"] == 102, r
+    print("✅ سحب قمة أمس (102): طلع 102.8 وقفل 101.2")
+    assert check_pd1d(mk(99, 100, 97.5, 97.9), day) == []
+    print("✅ قفل تحت قاع أمس = ما ينحسب")
+    assert check_pd1d(mk(97.8, 100, 97.5, 99), day) == [] and check_pd1d(mk(97.8, 100, 97.5, 99), day, False)
+    print("✅ افتتح تحت القاع: ما ينحسب بالذيل بس، وينحسب لو PD1D_WICK_ONLY = False")
+    assert check_pd1d(mk(99, 100.5, 97.5, 99.5), datetime(2026, 11, 17).date()) == []
+    print("✅ ما فيه شمعة لليوم المطلوب = ما ينحسب")
+    assert pd1d_last_closed_day(pd.Timestamp("2026-11-17 00:31", tz=NY)) == day
+    assert pd1d_last_closed_day(pd.Timestamp("2026-11-17 16:20", tz=NY)) == datetime(2026, 11, 17).date()
+    assert pd1d_last_closed_day(pd.Timestamp("2026-11-16 09:00", tz=NY)) == datetime(2026, 11, 13).date()
+    print("✅ آخر شمعة مقفلة: قبل 4:15 = أمس (والاثنين = الجمعة)")
+    hits = [("AAA", *check_pd1d(mk(99, 100.5, 97.5, 99.5), day)[0]),
+            ("BBB", *check_pd1d(mk(101, 102.8, 100.5, 101.2), day)[0])]
+    global SHOW_SECTOR
+    saved, SHOW_SECTOR = SHOW_SECTOR, False
+    try:
+        pd1d_send(day, hits, prefix="🧪 ")
+    finally:
+        SHOW_SECTOR = saved
+    print("PD1D TEST OK")
 
 
 # ================== (1) الإنفيرجن IFVG - فريم ساعة و4 ساعات ==================
@@ -5046,6 +5279,20 @@ def main():
     if "--pwltest" in sys.argv:
         pwl_self_test()
         return
+    if "--pd1dtest" in sys.argv:
+        pd1d_self_test()
+        return
+    if "--pd1dnow" in sys.argv:   # تجربة حقيقية: python short_bot.py --pd1dnow [--send] [NVDA ...]
+        _load_chats()
+        syms = [a.upper() for a in sys.argv[1:] if not a.startswith("--")] or list(WATCH_SYMBOLS)
+        day, hits, ready = pd1d_scan(syms)
+        if "--send" in sys.argv:
+            pd1d_send(day, hits, prefix="🧪 تجربة\n")
+        else:
+            for t, s, r in hits:
+                print(_pd1d_line(t, s, r) + "\n")
+            print(f"{day}: {len(hits)} سحب من {ready} سهم")
+        return
     if "--pw4hnow" in sys.argv:   # تجربة حقيقية: python short_bot.py --pw4hnow [--send]
         _load_chats()
         pw4h_now(list(WATCH_SYMBOLS), send="--send" in sys.argv)
@@ -5098,6 +5345,8 @@ def main():
         pd1h = [n for on, n in ((ENABLE_PDL_1H, "دعم"), (ENABLE_PDH_1H, "مقاومة")) if on]
         if pd1h:
             pw4h_txt += f" + سحب {' و'.join(pd1h)} اليوم السابق فريم ساعة (ذيل بس)"
+        if ENABLE_PD1D:
+            pw4h_txt += " + قائمة سحب قمة/قاع أمس (إغلاق يومي، كل يوم بعد الإغلاق)"
         if ENABLE_WKOPT:
             pw4h_txt += (f" + سحب السيولة الأسبوعي 4 ساعات مع عقد (الأسهم {WKOPT_MIN_PRICE}$-{WKOPT_MAX_PRICE}$، "
                          "تنبيه واحد لكل سهم بالأسبوع)")
@@ -5183,6 +5432,8 @@ def main():
         # (15) تقرير القاما اليومي - قبل الافتتاح، مرة باليوم (بخيط لحاله)
         if not once:
             gex_daily_maybe_start()
+            # (1ي-2) قائمة سحب قمة/قاع أمس - أول ما يشتغل + كل يوم بعد الإغلاق (بخيط لحاله)
+            pd1d_maybe_start(list(WATCH_SYMBOLS))
 
         # (4ب) التجزئة العكسية - الجديد كل يوم، وقائمة كل جمعة
         if ENABLE_RSPLIT_SHORT:
