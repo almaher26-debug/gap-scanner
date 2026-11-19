@@ -71,6 +71,10 @@
     - وأول ما يشتغل البوت: قائمة آخر شمعة يومية مقفلة (مرة وحدة لكل PD1D_START_ID)
     - ENABLE_PD1D = False يطفيه | python short_bot.py --pd1dnow [--send] تجربة حقيقية
 
+(16) قائمة الاثنين - سحب قمة الجمعة وإغلاق يومي تحتها - الأسهم الأمريكية 2 مليار وفوق وسعرها فوق 25$
+    - كل اثنين بعد الإغلاق (4:20 العصر نيويورك): شمعة الاثنين اليومية طلع ذيلها فوق قمة الجمعة وقفلت تحتها → بوت
+    - قائمة وحدة مرتبة من الأعمق سحب | ENABLE_FRIHI = False يطفيه
+
 (11) سحب قمة الجمعة يوم الاثنين ثم سحب دعم الأسبوع السابق (فريم 4 ساعات) → كول
     - الاثنين: السعر يسحب قمة الجمعة ويرجع يختبرها وما يخترقها
     - بعدها ينزل لقاع الأسبوع السابق ويسحب السيولة (ذيل تحت الدعم وإغلاق فوقه)
@@ -98,6 +102,8 @@
   python short_bot.py --frimontest  # يجرب سحب الجمعة/الاثنين (بدون نت)
   python short_bot.py --wkopttest   # يجرب اختيار العقد للسحب الأسبوعي (بدون نت)
   python short_bot.py --ifvgtest    # يجرب الإنفيرجن (بدون نت)
+  python short_bot.py --frihitest   # يجرب قائمة الاثنين (بدون نت)
+  python short_bot.py --frihinow [--send]   # قائمة الاثنين على آخر اثنين (بيانات حقيقية)
 """
 
 import gc
@@ -254,6 +260,25 @@ PD1D_RETRY_MIN = 10
 PD1D_START_LIST = True            # قائمة أول ما يشتغل البوت (مرة وحدة لكل رقم PD1D_START_ID)
 PD1D_START_ID = "1"               # غيّر الرقم لو تبيها تنرسل مرة ثانية بعد الرفع الجاي
 PD1D_STATE = os.path.join(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "."), "pd1d_state.txt")
+
+# ---- (16) قائمة الاثنين: سحب قمة الجمعة وإغلاق يومي تحتها - 2 مليار وفوق وسعرها فوق 25$ ----
+#   كل اثنين بعد الإغلاق: الأسهم اللي شمعة الاثنين اليومية (9:30-4 نيويورك) طلع ذيلها فوق قمة الجمعة
+#   وقفلت تحتها → بوت (الهدف قاع الجمعة، الوقف فوق الذيل)
+#   الجمعة = آخر يوم تداول قبل الاثنين (لو الجمعة عطلة ياخذ الخميس)
+#   الأسهم: كل الأسهم الأمريكية (ناسداك + نيويورك + أمكس) اللي قيمتها السوقية 2 مليار وفوق وسعرها فوق 25$
+#   (لو سكرينر ناسداك ما رد، يرجع على قائمة المراقبة)
+ENABLE_FRIHI = True                # True = شغال | False = مطفي
+FRIHI_WICK_ONLY = False            # True = افتتاح الاثنين كمان تحت قمة الجمعة (الذيل بس اللي طلع) | False = الإغلاق بس
+FRIHI_SCAN_AFTER_NY = (16, 20)     # يرسل بعد كذا نيويورك (= 12:20 بالليل الرياض بالشتاء)
+FRIHI_SCAN_UNTIL_NY = (20, 0)      # لو بيانات ياهو تأخرت يعيد كل 10 دقايق لين كذا
+FRIHI_RETRY_MIN = 10
+FRIHI_MIN_MARKET_CAP = 2_000_000_000   # القيمة السوقية من 2 مليار وفوق
+FRIHI_MIN_PRICE = 25                   # السعر فوق 25$
+FRIHI_PER_MSG = 10                     # كم سهم بكل رسالة
+FRIHI_MAX_MSGS = 7                     # أقصى عدد رسايل (الأعمق سحب أول، والباقي ينشال)
+FRIHI_SEP = "\n\n━━━━━━━━━━━━\n\n"     # الفاصل بين الأسهم بالرسالة
+FRIHI_GAMMA = True                     # يضيف القاما لكل سهم (جدار الكول والبوت، الانقلاب، الصافي) | False = بدون
+FRIHI_STATE = os.path.join(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "."), "frihi_state.txt")
 
 # ---- (1) الإنفيرجن IFVG - فريم ساعة و4 ساعات - قائمة المراقبة (WATCH_SYMBOLS) ----
 #   نفس نموذج gap_scanner: ثلاث شموع بين ذيل الأولى والثالثة جاب، الثانية تغطي الجاب كامل،
@@ -1874,6 +1899,210 @@ def pd1d_self_test():
     finally:
         SHOW_SECTOR = saved
     print("PD1D TEST OK")
+
+
+# ================== (16) قائمة الاثنين: سحب قمة الجمعة وإغلاق يومي تحتها ==================
+def _daily_by_date(df):
+    """الشموع اليومية بفهرس تواريخ (بدون تكرار)."""
+    d = df.dropna(subset=OHLC).copy()
+    d.index = pd.Index([pd.Timestamp(i).date() for i in d.index])
+    return d[~d.index.duplicated(keep="last")]
+
+
+_FRIHI_CAPS = {}
+
+
+def frihi_universe():
+    """الأسهم الأمريكية (ناسداك + نيويورك + أمكس) اللي قيمتها 2 مليار وفوق وسعرها فوق 25$."""
+    caps = {}
+    for ex in ("nasdaq", "nyse", "amex"):
+        url = ("https://api.nasdaq.com/api/screener/stocks"
+               f"?tableonly=true&limit=10000&exchange={ex}&download=true")
+        try:
+            r = requests.get(url, headers={**HEADERS, "Accept": "application/json"}, timeout=30)
+            data = r.json().get("data") or {}
+            for row in data.get("rows") or (data.get("table") or {}).get("rows") or []:
+                sym = str(row.get("symbol", "")).strip().upper()
+                cap, px = _to_number(row.get("marketCap")), _to_number(row.get("lastsale"))
+                if sym.isalpha() and len(sym) <= 5 and cap >= FRIHI_MIN_MARKET_CAP and px > FRIHI_MIN_PRICE:
+                    caps[sym] = cap
+        except Exception as e:
+            log(f"قائمة الاثنين: ما قدرت أجيب أسهم {ex.upper()}: {e}")
+    if not caps:
+        log("قائمة الاثنين: السكرينر ما رد - أفحص قائمة المراقبة بداله")
+        return stocks_only(WATCH_SYMBOLS)
+    _FRIHI_CAPS.clear()
+    _FRIHI_CAPS.update(caps)
+    log(f"قائمة الاثنين: {len(caps)} سهم (قيمتها {FRIHI_MIN_MARKET_CAP / 1e9:g} مليار وفوق، سعرها فوق {FRIHI_MIN_PRICE}$)")
+    return sorted(caps)
+
+
+def frihi_check(daily, monday):
+    """شمعة الاثنين اليومية مقابل آخر يوم تداول قبله (الجمعة). يرجع التفاصيل لو سحبت قمة الجمعة وقفلت تحتها، وإلا None."""
+    d = _daily_by_date(daily)
+    d = d[[x <= monday for x in d.index]]
+    if len(d) < 2 or d.index[-1] != monday:
+        return None
+    cur, prev = d.iloc[-1], d.iloc[-2]
+    o, h, l, c = (float(cur[k]) for k in OHLC)
+    fh, fl = float(prev["High"]), float(prev["Low"])
+    if not (c < fh < h) or c <= FRIHI_MIN_PRICE:
+        return None
+    if FRIHI_WICK_ONLY and not o < fh:
+        return None
+    vol = None
+    if "Volume" in d and len(d) > 5:
+        past = d["Volume"].iloc[-21:-1].astype(float)
+        if past.mean() > 0:
+            vol = float(cur["Volume"]) / float(past.mean())
+    return {"open": o, "high": h, "low": l, "close": c, "fh": fh, "fl": fl, "fri": d.index[-2],
+            "depth": (h - fh) / fh * 100, "rvol": vol}
+
+
+def _frihi_line(i, t, r):
+    c = r["close"]
+    col = "🟢" if c > r["open"] else "🔴"
+    rv = f" | فوليوم {r['rvol']:.1f}x" if r.get("rvol") else ""
+    cap = _FRIHI_CAPS.get(t)
+    if cap:
+        rv += f" | {cap / 1e9:,.1f} مليار"
+    tgt = (f"🎯 قاع الجمعة {r['fl']:.2f} ({(r['fl'] / c - 1) * 100:+.1f}%)" if r["fl"] < c
+           else "قفل تحت قاع الجمعة كمان")
+    return (f"{i}) ${t}{sec_tag(t)}\n"
+            f"قمة الجمعة {r['fh']:.2f} ← طلع {r['high']:.2f} (+{r['depth']:.2f}%) وقفل {c:.2f} {col}{rv}\n"
+            f"{tgt} | 🛑 {r['high']:.2f} ({(r['high'] / c - 1) * 100:+.1f}%)"
+            + (f"\n{r['gamma']}" if r.get("gamma") else ""))
+
+
+def _frihi_gamma(t, spot):
+    """سطر القاما المختصر للسهم بالقائمة، أو "" لو ما فيه بيانات عقود."""
+    lv = gamma_levels(t, spot)
+    if not lv:
+        return ""
+    pct = lambda k: f"{(k / spot - 1) * 100:+.1f}%"
+    net = lv["net"]
+    parts = [f"صافي {_fmt_usd(net)} {'🟢' if net >= 0 else '🔴'}"]
+    if lv["call_wall"] is not None:
+        parts.append(f"جدار الكول {lv['call_wall']:g} ({pct(lv['call_wall'])})")
+    if lv["put_wall"] is not None:
+        parts.append(f"جدار البوت {lv['put_wall']:g} ({pct(lv['put_wall'])})")
+    if lv["flip"] is not None:
+        parts.append(f"انقلاب {lv['flip']:.2f} ({'السعر فوقه' if spot > lv['flip'] else 'السعر تحته'})")
+    return "🧲 " + " | ".join(parts)
+
+
+def frihi_scan(symbols, monday):
+    """يرجع ([(الرمز، التفاصيل)]، كم سهم فيه شمعة الاثنين)."""
+    hits, ready = [], 0
+    for t, df in download_batches(symbols, 100, period="3mo", interval="1d", prepost=False):
+        try:
+            d = _daily_by_date(df)
+            if monday in d.index:
+                ready += 1
+            r = frihi_check(d, monday)
+            if r:
+                hits.append((t, r))
+        except Exception as e:
+            log(f"قائمة الاثنين: {t}: {e}")
+    free_memory()
+    return hits, ready
+
+
+def frihi_send(monday, hits, prefix=""):
+    hits = sorted(hits, key=lambda x: -x[1]["depth"])
+    total = len(hits)
+    hits = hits[:FRIHI_PER_MSG * FRIHI_MAX_MSGS]                # أقصى 7 رسايل × 10 أسهم
+    if FRIHI_GAMMA:
+        for t, r in hits:
+            try:
+                r["gamma"] = _frihi_gamma(t, r["close"])
+            except Exception as e:
+                log(f"قائمة الاثنين: القاما: {t}: {e}")
+    fri = hits[0][1]["fri"] if hits else None
+    head = (f"{prefix}📋 قائمة الاثنين {monday:%Y-%m-%d} — سحب قمة الجمعة{f' ({fri:%m-%d})' if fri else ''}\n"
+            "الشمعة اليومية (9:30-4 نيويورك) طلع ذيلها فوق قمة الجمعة وقفلت تحتها"
+            f"\nالأسهم: قيمتها {FRIHI_MIN_MARKET_CAP / 1e9:g} مليار وفوق وسعرها فوق {FRIHI_MIN_PRICE}$"
+            + (" (الافتتاح كمان تحتها)" if FRIHI_WICK_ONLY else "")
+            + f"\n🔴 بوت (الهدف قاع الجمعة، الوقف فوق الذيل) | العدد: {len(hits)}"
+            + ("\n🧲 القاما: جدار الكول = مقاومة | جدار البوت = دعم | صافي 🟢 حركة أهدى، 🔴 أقوى وأسرع"
+               if FRIHI_GAMMA else ""))
+    if total > len(hits):
+        head += f"\n(طلع {total} سهم — هذي أعمق {len(hits)} سحب)"
+    lines = [_frihi_line(i, t, r) for i, (t, r) in enumerate(hits, 1)]
+    groups = [lines[i:i + FRIHI_PER_MSG] for i in range(0, len(lines), FRIHI_PER_MSG)] or [["ما فيه ولا سهم هالأسبوع"]]
+    for i, g in enumerate(groups, 1):
+        body = FRIHI_SEP.join(g)
+        txt = (head + FRIHI_SEP + body) if i == 1 else body
+        send_telegram(txt + (f"\n\n({i}/{len(groups)})" if len(groups) > 1 else ""), kind="sweep")
+        time.sleep(1)
+    log(f"[{datetime.now():%H:%M}] قائمة الاثنين ({monday}): {len(hits)} من {total} سهم")
+
+
+_frihi_running = threading.Event()
+_frihi_last_try = [0.0]
+
+
+def _frihi_done():
+    try:
+        with open(FRIHI_STATE, encoding="utf-8") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return ""
+
+
+def frihi_maybe_start():
+    """كل اثنين بعد الإغلاق (بخيط لحاله عشان ما يوقف باقي الأقسام). مرة وحدة لكل اثنين."""
+    if not ENABLE_FRIHI or _frihi_running.is_set():
+        return
+    now = pd.Timestamp.now(tz=NY)
+    if now.weekday() != 0 or not (FRIHI_SCAN_AFTER_NY <= (now.hour, now.minute) < FRIHI_SCAN_UNTIL_NY):
+        return
+    monday = now.date()
+    if _frihi_done() == str(monday) or time.time() - _frihi_last_try[0] < FRIHI_RETRY_MIN * 60:
+        return
+    _frihi_last_try[0] = time.time()
+    _frihi_running.set()
+
+    def run():
+        try:
+            symbols = frihi_universe()
+            hits, ready = frihi_scan(symbols, monday)
+            if ready < max(1, len(symbols) // 2):       # ياهو للحين ما حدّث شمعة الاثنين (أو عطلة)
+                log(f"قائمة الاثنين: شمعة الاثنين ناقصة ({ready} من {len(symbols)}) - أعيد بعد {FRIHI_RETRY_MIN} دقايق")
+                return
+            frihi_send(monday, hits)
+            with open(FRIHI_STATE, "w", encoding="utf-8") as f:
+                f.write(str(monday))
+        except Exception as e:
+            log(f"قائمة الاثنين: خطأ - {e}")
+        finally:
+            _frihi_running.clear()
+
+    threading.Thread(target=run, daemon=True, name="frihi").start()
+
+
+def frihi_last_monday(now=None):
+    """آخر اثنين شمعته مقفلة (للتجربة)."""
+    now = now or pd.Timestamp.now(tz=NY)
+    d = now.date()
+    if now.weekday() == 0 and (now.hour, now.minute) < (16, 15):
+        d -= timedelta(days=7)
+    return d - timedelta(days=d.weekday())
+
+
+def frihi_self_test():
+    """python short_bot.py --frihitest — يجرب (16) بدون نت."""
+    days = pd.to_datetime(["2026-11-12", "2026-11-13", "2026-11-16"])
+    mk = lambda rows: pd.DataFrame(rows, columns=OHLC, index=days)
+    mon = datetime(2026, 11, 16).date()
+    r = frihi_check(mk([(10, 11, 9, 10), (100, 105, 98, 102), (103, 106, 101, 104)]), mon)
+    assert r and r["fh"] == 105 and r["fl"] == 98 and r["close"] == 104, r
+    assert frihi_check(mk([(10, 11, 9, 10), (100, 105, 98, 102), (103, 107, 101, 105.5)]), mon) is None  # قفل فوق
+    assert frihi_check(mk([(10, 11, 9, 10), (100, 105, 98, 102), (103, 104.9, 101, 104)]), mon) is None  # ما سحب
+    assert frihi_check(mk([(10, 11, 9, 10), (100, 105, 98, 102), (103, 106, 101, 104)]),
+                       datetime(2026, 11, 13).date()) is None                                   # مو الاثنين
+    print("✅ (16) سحب قمة الجمعة 105 (طلع 106) وقفل تحتها 104 = بالقائمة | قفل فوقها أو ما سحب = لا")
+    print(_frihi_line(1, "TEST", r))
 
 
 # ================== (1) الإنفيرجن IFVG - فريم ساعة و4 ساعات ==================
@@ -4018,6 +4247,21 @@ def main():
     if "--ifvgtest" in sys.argv:
         ifvg_self_test()
         return
+    if "--frihitest" in sys.argv:
+        frihi_self_test()
+        return
+    if "--frihinow" in sys.argv:   # تجربة حقيقية: python short_bot.py --frihinow [--send] [NVDA ...]
+        _load_chats()
+        syms = [a.upper() for a in sys.argv[1:] if not a.startswith("--")] or frihi_universe()
+        mon = frihi_last_monday()
+        hits, ready = frihi_scan(syms, mon)
+        if "--send" in sys.argv:
+            frihi_send(mon, hits, prefix="🧪 تجربة\n")
+        else:
+            for i, (t, r) in enumerate(sorted(hits, key=lambda x: -x[1]["depth"]), 1):
+                print(_frihi_line(i, t, r) + "\n")
+            print(f"{mon}: {len(hits)} سهم من {ready}")
+        return
     if "--gextest" in sys.argv:
         gex_self_test()
         return
@@ -4055,6 +4299,8 @@ def main():
         if ENABLE_IFVG24 and (ENABLE_IFVG24_1H or ENABLE_IFVG24_4H):
             fr = [n for on, n in ((ENABLE_IFVG24_1H, "ساعة"), (ENABLE_IFVG24_4H, "4 ساعات")) if on]
             pw4h_txt += f" + الإنفيرجن 24 ساعة فريم {' و'.join(fr)}"
+        if ENABLE_FRIHI:
+            pw4h_txt += " + قائمة الاثنين (سحب قمة الجمعة وإغلاق تحتها، بعد الإغلاق)"
         send_telegram("🧪 رسالة اختبار - بوت الشورت اشتغل\n"
                       "الأقسام: " + " + ".join(n for on, n in (
                           (ENABLE_BORROW_ZERO and (BZ_ZERO_ALERTS or BZ_DROP_ALERTS), "الشورت صفر"),
@@ -4109,6 +4355,10 @@ def main():
             gex_daily_maybe_start()
             # (1ي-2) قائمة سحب قمة/قاع أمس - أول ما يشتغل + كل يوم بعد الإغلاق (بخيط لحاله)
             pd1d_maybe_start(list(WATCH_SYMBOLS))
+
+        # (16) قائمة الاثنين: سحب قمة الجمعة وإغلاق تحتها - كل اثنين بعد الإغلاق (بخيط لحاله)
+        if not once:
+            frihi_maybe_start()
 
         # (4ب) التجزئة العكسية - الجديد كل يوم، وقائمة كل جمعة
         if ENABLE_RSPLIT_SHORT:
