@@ -2,7 +2,7 @@
 # نفس قالب gap_scanner: يشتغل على Railway ويرسل على تيليجرام
 # التشغيل: python gamma_scanner.py   (المتغيرات: TELEGRAM_TOKEN + TELEGRAM_CHAT_ID)
 """
-سكنر تمركز الصانع (القاما) - AAPL TSLA META MSFT NVDA AMD
+سكنر تمركز الصانع (القاما) - AAPL TSLA META MSFT NVDA AMD GOOGL
 =========================================================
 
 (1) تنبيه أول ما يشتغل البوت (أول تنبيه اليوم)
@@ -10,7 +10,7 @@
     - START_ID: غيّر الرقم لو تبي يعيد الإرسال بعد الرفع الجاي حتى لو انرسل اليوم
 
 (2) التقرير اليومي - كل يوم سوق 8:30 الصبح نيويورك (4:30 العصر الرياض بالشتاء / 3:30 بالصيف)
-    - رسالة ملخص: ترتيب الأسهم الست حسب سيولة الصانع (صافي القاما)
+    - رسالة ملخص: ترتيب الأسهم حسب سيولة الصانع (صافي القاما)
     - لكل سهم: صورة شارت السترايكات (قاما الكول والبوت لكل سترايك) + تحتها:
         سيولة الصانع: صافي القاما، قاما الكول، قاما البوت، العقود المفتوحة وقيمتها، نسبة البوت/الكول
         أقوى تمركز: السترايك اللي عليه أكبر قاما (والثاني والثالث)
@@ -55,7 +55,7 @@ LOOP_SLEEP_SEC = 30
 
 # الأسهم: أو متغير GAMMA_SYMBOLS في Railway (بينها فاصلة)
 SYMBOLS = [s.strip().upper() for s in os.environ.get("GAMMA_SYMBOLS", "").split(",") if s.strip()] or [
-    "AAPL", "TSLA", "META", "MSFT", "NVDA", "AMD",
+    "AAPL", "TSLA", "META", "MSFT", "NVDA", "AMD", "GOOGL",
 ]
 
 SEND_ON_START = True             # True = يرسل التقرير أول ما يشتغل (لو ما انرسل اليوم)
@@ -224,19 +224,26 @@ def get_chain(t):
     tk = yf.Ticker(t)
     today = pd.Timestamp.now(tz=NY).date()
     last = today + timedelta(days=GAMMA_MAX_DTE)
-    exps = sorted(e for e in (tk.options or []) if today <= pd.Timestamp(e).date() <= last)[:GAMMA_MAX_EXPS]
+    opts = tk.options or []
+    exps = sorted(e for e in opts if today <= pd.Timestamp(e).date() <= last)[:GAMMA_MAX_EXPS]
+    if not exps:
+        log(f"{t}: ياهو ما رجّع انتهاءات عقود ({len(opts)} انتهاء بالكل)")
     raw = []
+    rows_all = 0
     for e in exps:
         ch = tk.option_chain(e)
         exp = pd.Timestamp(e).date()
         for df, is_call in ((ch.calls, True), (ch.puts, False)):
             for x in df.itertuples():
+                rows_all += 1
                 oi = 0 if pd.isna(x.openInterest) else int(x.openInterest)
                 if oi <= 0:
                     continue
                 iv = 0 if pd.isna(x.impliedVolatility) else float(x.impliedVolatility)
                 vol = 0 if pd.isna(x.volume) else int(x.volume)
                 raw.append((float(x.strike), exp, iv, oi, is_call, vol))
+    if exps and not raw:
+        log(f"{t}: ياهو رجّع {rows_all} عقد بس العقود المفتوحة كلها صفر")
     # قبل الافتتاح ياهو يرجع IV قريب من الصفر: نعوضها بوسيط IV لنفس الانتهاء، وإلا وسيط الكل
     good = [r for r in raw if r[2] > 0.01]
     all_ivs = sorted(r[2] for r in good)
@@ -509,9 +516,9 @@ def maybe_send(first=False):
     st = _state()
     now = pd.Timestamp.now(tz=NY)
     day = str(now.date())
-    if first and SEND_ON_START and (st.get("day") != day or st.get("start_id") != START_ID):
-        st.update(day=day, start_id=START_ID)
-        _save_state(st)                                  # يتسجل قبل الإرسال عشان ما يتكرر
+    if first and SEND_ON_START and (st.get("start_day") != day or st.get("start_id") != START_ID):
+        st.update(start_day=day, start_id=START_ID)     # تقرير التشغيل له مفتاح لحاله:
+        _save_state(st)                                  # ما يلغي التقرير اليومي 8:30
         send_report(SYMBOLS, prefix="🚀 أول تنبيه اليوم\n")
         return
     if now.weekday() >= 5 or not (DAILY_AT_NY <= (now.hour, now.minute) < DAILY_UNTIL_NY):
